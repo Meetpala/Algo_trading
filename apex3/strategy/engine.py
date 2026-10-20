@@ -834,3 +834,116 @@ class StrategyEngine:
                 )
 
         return decisions
+
+
+# ---------------------------------------------------------------------------
+# Cross-Sectional Radar Merger & Conviction Ranker Loop
+# ---------------------------------------------------------------------------
+
+def build_active_radar(cfg: dict) -> list[str]:
+    """
+    Merges Core Watchlist + Extended Radar + Custom User Radar into a deduplicated list.
+    """
+    radar_cfg = cfg.get("radar", {})
+    symbols = list(radar_cfg.get("core_watchlist", []))
+    if radar_cfg.get("enable_extended_radar", True):
+        symbols.extend(radar_cfg.get("extended_radar", []))
+    symbols.extend(radar_cfg.get("custom_user_radar", []))
+
+    # Fallback to watchlist if radar is empty
+    if not symbols:
+        wl = cfg.get("watchlist", {})
+        symbols = list(wl.get("symbols", [])) or list(wl.get("scanner_universe", []))
+
+    # Deduplicate while preserving order
+    seen = set()
+    active_radar = []
+    for sym in symbols:
+        clean_sym = sym.strip().upper()
+        if clean_sym and clean_sym not in seen:
+            seen.add(clean_sym)
+            active_radar.append(clean_sym)
+    return active_radar
+
+
+def select_best_entries_for_bar(
+    benchmark_bar: BenchmarkSnapshot,
+    candidate_bars: dict[str, StockCandidateBar],
+    open_positions: dict[str, dict],
+    realized_daily_pnl_net: float,
+    cfg: dict,
+    kite_client=None,
+) -> list[tuple[TradeSignal, PositionSizeResult]]:
+    """
+    Evaluates all stocks on the active radar at 5-minute bar close, ranks passing
+    candidates by Conviction Score, and returns the #1 trade to execute.
+    """
+    from apex3.strategy.regime import BenchmarkSnapshot, MarketRegime, evaluate_market_regime
+    from apex3.strategy.signal import StockCandidateBar, TradeSignal, evaluate_candidate_signal
+    from apex3.strategy.sizer import PositionSizeResult, calculate_position_size
+
+    acc_cfg = cfg.get("account", {})
+    risk_cfg = cfg.get("risk_management", cfg.get("risk", {}))
+
+    # Check Daily Loss Limit (-₹240 on ₹15,000 capital)
+    starting_cap = float(acc_cfg.get("starting_capital", 15000.0))
+    daily_loss_pct = float(risk_cfg.get("daily_loss_limit_pct", 0.0160))
+    if daily_loss_pct > 0.1:
+        daily_loss_pct /= 100.0
+    max_daily_loss = -1.0 * starting_cap * daily_loss_pct
+    if realized_daily_pnl_net <= max_daily_loss:
+        return []
+
+    max_slots = int(risk_cfg.get("max_concurrent_positions", 2))
+    if len(open_positions) >= max_slots:
+        return []
+
+    # Slot 2 Gate: Only allow a 2nd concurrent position if Slot 1 is already >= +0.50R in profit
+    if len(open_positions) == 1:
+        first_pos = next(iter(open_positions.values()))
+        req_r = float(risk_cfg.get("second_slot_requires_slot1_profit_r", 0.50))
+        if first_pos.get("unrealized_r", 0.0) < req_r:
+            return []
+
+    # Step 1: Evaluate NIFTY 50 Regime
+    regime = evaluate_market_regime(benchmark_bar, cfg)
+    regime_val = regime.value if hasattr(regime, "value") else str(regime)
+    if regime_val == "NEUTRAL":
+        return []
+
+    # Step 2: Scan all symbols in merged radar
+    active_radar = build_active_radar(cfg)
+    passing_signals: list[TradeSignal] = []
+
+    for symbol in active_radar:
+        if symbol in open_positions or symbol not in candidate_bars:
+            continue
+        sig = evaluate_candidate_signal(
+            bar=candidate_bars[symbol],
+            regime=regime,
+            active_positions_count=len(open_positions),
+            cfg=cfg,
+        )
+        if sig is not None:
+            passing_signals.append(sig)
+
+    if not passing_signals:
+        return []
+
+    # Step 3: Sort by highest Conviction Score and take at most max_new_entries_per_bar (1)
+    passing_signals.sort(key=lambda s: s.conviction_score, reverse=True)
+    max_new = int(risk_cfg.get("max_new_entries_per_bar", 1))
+
+    selected_orders = []
+    for sig in passing_signals[:max_new]:
+        size_res = calculate_position_size(
+            entry_price=sig.entry_price,
+            risk_per_share=sig.levels.risk_per_share,
+            target_price=sig.levels.target_price,
+            cfg=cfg,
+            kite_client=kite_client,
+        )
+        if size_res is not None:
+            selected_orders.append((sig, size_res))
+
+    return selected_orders

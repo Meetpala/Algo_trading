@@ -64,14 +64,17 @@ def ceil_to_tick(price: float, tick: float = TICK_SIZE) -> float:
     return round(math.ceil(price / tick - 1e-9) * tick, 2)
 
 
-def round_to_tick(price: float, tick: float = TICK_SIZE, tick_size: Optional[float] = None, round_up: bool = False) -> float:
+def round_to_tick(price: float, tick: float = TICK_SIZE, tick_size: Optional[float] = None, round_up: Optional[bool] = None) -> float:
     """Round price to the nearest instrument tick size."""
     t = tick_size if tick_size is not None else tick
     if t <= 0:
         return price
-    if round_up:
-        return round(math.ceil(price / t - 1e-9) * t, 2)
-    return round(round(price / t) * t, 2)
+    ticks = price / t
+    if round_up is True:
+        return round(math.ceil(ticks - 1e-9) * t, 2)
+    elif round_up is False:
+        return round(math.floor(ticks + 1e-9) * t, 2)
+    return round(round(ticks) * t, 2)
 
 
 @dataclass

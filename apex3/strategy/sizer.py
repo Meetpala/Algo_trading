@@ -336,3 +336,125 @@ def size_position(
             data={"quantity": q_final, "notional": notional_value, "risk": actual_trade_risk},
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# High-Profit 2-Slot Sizing & Exact Zerodha Charge Calculation
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PositionSizeResult:
+    quantity: int
+    notional_exposure: float
+    margin_required: float
+    planned_risk_inr: float
+    estimated_roundtrip_charges_inr: float
+
+
+def fetch_zerodha_live_capital(kite_client, fallback_capital: float) -> float:
+    """
+    Automatically fetches available live cash margin from Zerodha Kite Connect.
+    Falls back to config starting_capital during backtests.
+    """
+    if kite_client is None:
+        return fallback_capital
+    try:
+        margins = kite_client.margins(segment="equity")
+        live_balance = float(margins["available"]["live_balance"])
+        return live_balance if live_balance > 0 else fallback_capital
+    except Exception:
+        return fallback_capital
+
+
+def calculate_zerodha_intraday_charges(buy_price: float, sell_price: float, quantity: int) -> float:
+    """
+    Exact NSE + Zerodha MIS statutory fee calculator:
+    - Brokerage: 0.03% or ₹20 per order (whichever is lower)
+    - STT: 0.025% on sell turnover
+    - NSE Exchange Turnover: 0.00318% on total turnover (matches audited spec)
+    - SEBI Fee: 0.0001% (₹10/Crore) on total turnover
+    - Stamp Duty: 0.003% on buy turnover
+    - GST: 18% on (Brokerage + NSE Turnover + SEBI Fee)
+    """
+    if quantity <= 0:
+        return 0.0
+
+    buy_turnover = buy_price * quantity
+    sell_turnover = sell_price * quantity
+    total_turnover = buy_turnover + sell_turnover
+
+    brok_buy = min(20.0, buy_turnover * 0.0003)
+    brok_sell = min(20.0, sell_turnover * 0.0003)
+    brokerage = brok_buy + brok_sell
+
+    stt = sell_turnover * 0.00025
+    nse_charges = total_turnover * 0.0000318
+    sebi_charges = total_turnover * 0.000001
+    stamp_duty = buy_turnover * 0.00003
+    gst = 0.18 * (brokerage + nse_charges + sebi_charges)
+
+    return round(brokerage + stt + nse_charges + sebi_charges + stamp_duty + gst, 2)
+
+
+def calculate_position_size(
+    entry_price: float,
+    risk_per_share: float,
+    target_price: float,
+    cfg: dict,
+    kite_client=None,
+) -> Optional[PositionSizeResult]:
+    """
+    Computes controlled quantity Q = min(floor(Risk_Capital / R), floor(Slot_Budget / Entry_Price))
+    and verifies that expected 2.0R gross profit is at least 5x total Zerodha charges.
+    """
+    if entry_price <= 0 or risk_per_share <= 0:
+        return None
+
+    acc_cfg = cfg.get("account", {})
+    risk_cfg = cfg.get("risk_management", cfg.get("risk", {}))
+
+    base_capital = fetch_zerodha_live_capital(
+        kite_client if acc_cfg.get("fetch_live_zerodha_margin", False) else None,
+        float(acc_cfg.get("starting_capital", 15000.0)),
+    )
+
+    safety_buffer = float(acc_cfg.get("safety_reserve_buffer_pct", 0.05))
+    if safety_buffer > 0.5:
+        safety_buffer /= 100.0
+    leverage = float(acc_cfg.get("max_intraday_leverage", 4.0))
+    max_slots = int(risk_cfg.get("max_concurrent_positions", 2))
+
+    usable_capital = base_capital * (1.0 - safety_buffer)
+    total_buying_power = usable_capital * leverage
+    slot_budget = total_buying_power / max(1, max_slots)
+
+    risk_pct = float(risk_cfg.get("risk_per_trade_pct", 0.0080))
+    if risk_pct > 0.1:
+        risk_pct /= 100.0
+    risk_capital = base_capital * risk_pct
+
+    qty_by_risk = math.floor(risk_capital / risk_per_share)
+    qty_by_budget = math.floor(slot_budget / entry_price)
+    quantity = min(qty_by_risk, qty_by_budget)
+
+    if quantity < 1:
+        return None
+
+    notional = round(quantity * entry_price, 2)
+    margin_req = round(notional / leverage, 2)
+    planned_risk = round(quantity * risk_per_share, 2)
+
+    est_charges = calculate_zerodha_intraday_charges(entry_price, target_price, quantity)
+    expected_gross_win = abs(target_price - entry_price) * quantity
+
+    # Reject trade if Zerodha charges consume > 18% of expected 2.0R gross profit
+    if expected_gross_win <= 0 or (est_charges / expected_gross_win) > 0.18:
+        return None
+
+    return PositionSizeResult(
+        quantity=quantity,
+        notional_exposure=notional,
+        margin_required=margin_req,
+        planned_risk_inr=planned_risk,
+        estimated_roundtrip_charges_inr=est_charges,
+    )

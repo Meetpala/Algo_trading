@@ -64,7 +64,7 @@ def evaluate_market_regime(
         require_vwap = bool(regime_cfg.get("require_vwap_alignment", True))
         require_rising_adx = bool(regime_cfg.get("require_rising_adx", True))
 
-        ema_slope = target.ema20 - target.prev_ema20
+        snapshot_slope = target.ema20 - target.prev_ema20
         adx_strong = target.adx14 >= min_adx
         adx_rising = (target.adx14 > target.prev_adx14) if require_rising_adx else True
 
@@ -73,12 +73,12 @@ def evaluate_market_regime(
 
         # Bullish Regime Check
         vwap_bull_ok = (target.close > target.session_vwap) if require_vwap else True
-        if target.close > target.ema20 and ema_slope > 0 and vwap_bull_ok:
+        if target.close > target.ema20 and snapshot_slope > 0 and vwap_bull_ok:
             return MarketRegime.BULLISH
 
         # Bearish Regime Check
         vwap_bear_ok = (target.close < target.session_vwap) if require_vwap else True
-        if target.close < target.ema20 and ema_slope < 0 and vwap_bear_ok:
+        if target.close < target.ema20 and snapshot_slope < 0 and vwap_bear_ok:
             return MarketRegime.BEARISH
 
         return MarketRegime.NEUTRAL

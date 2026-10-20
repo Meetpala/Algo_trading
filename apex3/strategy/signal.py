@@ -490,3 +490,151 @@ def evaluate_signal(
         relative_strength=rel_perf,
         circuit_distance_pct=circuit_dist,
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-Sectional Radar & Gate 9 Extensions
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StockCandidateBar:
+    symbol: str
+    timestamp_hhmm: str
+    close: float
+    or_high: float                  # 09:15 - 09:30 Opening Range High
+    or_low: float                   # 09:15 - 09:30 Opening Range Low
+    session_vwap: float
+    stock_return_20: float          # 20-bar % return of stock
+    nifty_return_20: float          # 20-bar % return of NIFTY 50
+    bar_volume: float
+    avg_volume_20: float
+    bid_ask_spread_bps: float
+    upper_circuit: float
+    lower_circuit: float
+    swing_low_5: float
+    swing_high_5: float
+    atr14: float
+    session_high_so_far: float
+    session_low_so_far: float
+    adr14_pct: float                # 14-day Average Daily Range as decimal (e.g., 0.022 = 2.2%)
+
+
+@dataclass
+class TradeSignal:
+    symbol: str
+    side: str                       # "LONG" or "SHORT"
+    entry_price: float
+    levels: "StopTargetLevels"
+    volume_surge_ratio: float
+    relative_strength: float
+    conviction_score: float
+
+
+def evaluate_candidate_signal(
+    bar: StockCandidateBar,
+    regime: MarketRegime,
+    active_positions_count: int,
+    cfg: dict,
+) -> Optional[TradeSignal]:
+    """
+    Evaluates all 9 fail-closed entry gates on a candidate symbol from the radar.
+    Returns a ranked TradeSignal if all gates pass, else None.
+    """
+    from apex3.strategy.trail import compute_initial_stop_and_target
+
+    sched = cfg.get("session_schedule", cfg.get("schedule", {}))
+    gates = cfg.get("signal_gates", cfg.get("signal", {}))
+    risk_cfg = cfg.get("risk_management", cfg.get("risk", {}))
+
+    start_t = sched.get("entry_start_time", sched.get("entry_start", "09:30"))
+    cutoff_t = sched.get("entry_cutoff_time", sched.get("entry_cutoff", "13:00"))
+    # Gate 0: Session Window [09:30, 13:00] IST
+    if not (start_t <= bar.timestamp_hhmm <= cutoff_t):
+        return None
+
+    # Active Position Capacity Check
+    max_slots = int(risk_cfg.get("max_concurrent_positions", 2))
+    if active_positions_count >= max_slots:
+        return None
+
+    # Gate 3: Index Regime Alignment
+    regime_val = regime.value if hasattr(regime, "value") else str(regime)
+    if regime_val == "BULLISH":
+        side = "LONG"
+    elif regime_val == "BEARISH":
+        side = "SHORT"
+    else:
+        return None
+
+    # Gate 1 (Opening Range) & Gate 2 (Session VWAP) & Gate 4 (Relative Strength vs NIFTY)
+    rel_strength = bar.stock_return_20 - bar.nifty_return_20
+    if side == "LONG":
+        if not (bar.close > bar.or_high and bar.close > bar.session_vwap and rel_strength > 0):
+            return None
+    else:
+        if not (bar.close < bar.or_low and bar.close < bar.session_vwap and rel_strength < 0):
+            return None
+
+    # Gate 5: Institutional Volume Surge (>= 2.0x 20-bar average)
+    if bar.avg_volume_20 <= 0:
+        return None
+    vol_ratio = bar.bar_volume / bar.avg_volume_20
+    min_vol = float(gates.get("min_volume_surge_ratio", gates.get("min_relative_volume", 2.0)))
+    if vol_ratio < min_vol:
+        return None
+
+    # Gate 6: Liquidity & Bid-Ask Spread (<= 4 bps)
+    max_sprd = float(gates.get("max_spread_bps", 4.0))
+    if bar.bid_ask_spread_bps > max_sprd:
+        return None
+
+    # Gate 7: Circuit Safety (>= 2.0% away from circuit limit)
+    min_circuit_dist = float(gates.get("min_circuit_distance_pct", 0.020))
+    if min_circuit_dist > 0.5:
+        min_circuit_dist /= 100.0
+    if side == "LONG":
+        if (bar.upper_circuit - bar.close) / bar.close < min_circuit_dist:
+            return None
+    else:
+        if (bar.close - bar.lower_circuit) / bar.close < min_circuit_dist:
+            return None
+
+    # Gate 9A: Minimum Intraday ATR Volatility Check (filters out slow/defensive radar additions)
+    min_atr = float(gates.get("min_atr_pct", 0.0022))
+    if bar.close > 0 and (bar.atr14 / bar.close) < min_atr:
+        return None
+
+    # Gate 9B: Stop-Width Sweet Spot (0.45% <= R% <= 0.85%)
+    levels = compute_initial_stop_and_target(
+        side=side,
+        entry_price=bar.close,
+        swing_low_5=bar.swing_low_5,
+        swing_high_5=bar.swing_high_5,
+        atr14=bar.atr14,
+        cfg=cfg,
+    )
+    min_r_pct = float(gates.get("min_stop_distance_pct", 0.0045))
+    max_r_pct = float(gates.get("max_stop_distance_pct", 0.0085))
+    if not (min_r_pct <= levels.risk_pct <= max_r_pct):
+        return None
+
+    # Gate 9C: ADR Exhaustion Filter (Reject if stock already consumed > 60% of 14-day ADR)
+    max_adr = float(gates.get("max_adr_consumed_pct", 0.60))
+    if bar.adr14_pct > 0 and bar.session_low_so_far > 0:
+        intraday_range_pct = (bar.session_high_so_far - bar.session_low_so_far) / bar.session_low_so_far
+        if (intraday_range_pct / bar.adr14_pct) > max_adr:
+            return None
+
+    # Conviction Score to rank simultaneous triggers across a 25-40 stock radar
+    spread_floor = max(bar.bid_ask_spread_bps, 1.0)
+    conviction_score = (abs(rel_strength) * 100.0 * vol_ratio) / spread_floor
+
+    return TradeSignal(
+        symbol=bar.symbol,
+        side=side,
+        entry_price=bar.close,
+        levels=levels,
+        volume_surge_ratio=round(vol_ratio, 2),
+        relative_strength=round(rel_strength, 5),
+        conviction_score=round(conviction_score, 4),
+    )
