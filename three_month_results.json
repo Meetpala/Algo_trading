@@ -4,14 +4,14 @@
     "winning_trades": 28,
     "losing_trades": 20,
     "win_rate": 58.33,
-    "gross_pnl": 2219.5,
-    "gross_profit": 3343.3,
+    "gross_pnl": 2220.2,
+    "gross_profit": 3344.0,
     "gross_loss": 1123.8,
-    "profit_factor": 2.97,
+    "profit_factor": 2.98,
     "total_charges": 1135.97,
-    "net_pnl": 1083.53,
-    "profit_pct": 7.22,
-    "ending_capital": 16083.54,
+    "net_pnl": 1084.23,
+    "profit_pct": 7.23,
+    "ending_capital": 16084.24,
     "daily_stats": [
       {
         "date": "2026-07-29",
@@ -52,308 +52,308 @@
       {
         "date": "2026-08-06",
         "trades_count": 3,
-        "day_pnl": 375.87,
-        "closing_capital": 15425.74
+        "day_pnl": 376.57000000000005,
+        "closing_capital": 15426.44
       },
       {
         "date": "2026-08-07",
         "trades_count": 1,
         "day_pnl": -98.92,
-        "closing_capital": 15326.82
+        "closing_capital": 15327.52
       },
       {
         "date": "2026-08-10",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15326.82
+        "closing_capital": 15327.52
       },
       {
         "date": "2026-08-11",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15326.82
+        "closing_capital": 15327.52
       },
       {
         "date": "2026-08-12",
         "trades_count": 2,
         "day_pnl": 211.82000000000002,
-        "closing_capital": 15538.64
+        "closing_capital": 15539.34
       },
       {
         "date": "2026-08-13",
         "trades_count": 1,
         "day_pnl": -32.1,
-        "closing_capital": 15506.54
+        "closing_capital": 15507.24
       },
       {
         "date": "2026-08-14",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15506.54
+        "closing_capital": 15507.24
       },
       {
         "date": "2026-08-17",
         "trades_count": 2,
         "day_pnl": 18.939999999999998,
-        "closing_capital": 15525.48
+        "closing_capital": 15526.18
       },
       {
         "date": "2026-08-18",
         "trades_count": 2,
         "day_pnl": -138.52,
-        "closing_capital": 15386.96
+        "closing_capital": 15387.66
       },
       {
         "date": "2026-08-19",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15386.96
+        "closing_capital": 15387.66
       },
       {
         "date": "2026-08-20",
         "trades_count": 1,
         "day_pnl": -36.36,
-        "closing_capital": 15350.6
+        "closing_capital": 15351.3
       },
       {
         "date": "2026-08-21",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15350.6
+        "closing_capital": 15351.3
       },
       {
         "date": "2026-08-24",
         "trades_count": 1,
         "day_pnl": -20.82,
-        "closing_capital": 15329.78
+        "closing_capital": 15330.48
       },
       {
         "date": "2026-08-25",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15329.78
+        "closing_capital": 15330.48
       },
       {
         "date": "2026-08-26",
         "trades_count": 2,
         "day_pnl": 97.65,
-        "closing_capital": 15427.43
+        "closing_capital": 15428.13
       },
       {
         "date": "2026-08-27",
         "trades_count": 1,
         "day_pnl": 40.9,
-        "closing_capital": 15468.33
+        "closing_capital": 15469.03
       },
       {
         "date": "2026-08-28",
         "trades_count": 1,
         "day_pnl": -39.94,
-        "closing_capital": 15428.39
+        "closing_capital": 15429.09
       },
       {
         "date": "2026-08-31",
         "trades_count": 1,
         "day_pnl": 74.76,
-        "closing_capital": 15503.15
+        "closing_capital": 15503.85
       },
       {
         "date": "2026-09-01",
         "trades_count": 3,
         "day_pnl": -523.78,
-        "closing_capital": 14979.38
+        "closing_capital": 14980.08
       },
       {
         "date": "2026-09-02",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14979.38
+        "closing_capital": 14980.08
       },
       {
         "date": "2026-09-03",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14979.38
+        "closing_capital": 14980.08
       },
       {
         "date": "2026-09-04",
         "trades_count": 1,
         "day_pnl": -93.25,
-        "closing_capital": 14886.12
+        "closing_capital": 14886.82
       },
       {
         "date": "2026-09-07",
         "trades_count": 3,
         "day_pnl": -112.58,
-        "closing_capital": 14773.54
+        "closing_capital": 14774.24
       },
       {
         "date": "2026-09-08",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14773.54
+        "closing_capital": 14774.24
       },
       {
         "date": "2026-09-09",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14773.54
+        "closing_capital": 14774.24
       },
       {
         "date": "2026-09-10",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14773.54
+        "closing_capital": 14774.24
       },
       {
         "date": "2026-09-11",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14773.54
+        "closing_capital": 14774.24
       },
       {
         "date": "2026-09-15",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14773.54
+        "closing_capital": 14774.24
       },
       {
         "date": "2026-09-16",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14773.54
+        "closing_capital": 14774.24
       },
       {
         "date": "2026-09-17",
         "trades_count": 1,
         "day_pnl": 120.47,
-        "closing_capital": 14894.01
+        "closing_capital": 14894.71
       },
       {
         "date": "2026-09-18",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14894.01
+        "closing_capital": 14894.71
       },
       {
         "date": "2026-09-21",
         "trades_count": 1,
         "day_pnl": 48.24,
-        "closing_capital": 14942.25
+        "closing_capital": 14942.95
       },
       {
         "date": "2026-09-22",
         "trades_count": 2,
         "day_pnl": 29.189999999999998,
-        "closing_capital": 14971.44
+        "closing_capital": 14972.14
       },
       {
         "date": "2026-09-23",
         "trades_count": 1,
         "day_pnl": -96.39,
-        "closing_capital": 14875.05
+        "closing_capital": 14875.75
       },
       {
         "date": "2026-09-24",
         "trades_count": 1,
         "day_pnl": 110.9,
-        "closing_capital": 14985.95
+        "closing_capital": 14986.65
       },
       {
         "date": "2026-09-25",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14985.95
+        "closing_capital": 14986.65
       },
       {
         "date": "2026-09-28",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 14985.95
+        "closing_capital": 14986.65
       },
       {
         "date": "2026-09-29",
         "trades_count": 1,
         "day_pnl": 89.33,
-        "closing_capital": 15075.28
+        "closing_capital": 15075.98
       },
       {
         "date": "2026-09-30",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15075.28
+        "closing_capital": 15075.98
       },
       {
         "date": "2026-10-01",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15075.28
+        "closing_capital": 15075.98
       },
       {
         "date": "2026-10-05",
         "trades_count": 1,
         "day_pnl": -121.16,
-        "closing_capital": 14954.12
+        "closing_capital": 14954.82
       },
       {
         "date": "2026-10-06",
         "trades_count": 1,
         "day_pnl": 72.15,
-        "closing_capital": 15026.27
+        "closing_capital": 15026.97
       },
       {
         "date": "2026-10-07",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15026.27
+        "closing_capital": 15026.97
       },
       {
         "date": "2026-10-08",
         "trades_count": 1,
         "day_pnl": 95.1,
-        "closing_capital": 15121.37
+        "closing_capital": 15122.07
       },
       {
         "date": "2026-10-09",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15121.37
+        "closing_capital": 15122.07
       },
       {
         "date": "2026-10-12",
         "trades_count": 2,
         "day_pnl": 257.83,
-        "closing_capital": 15379.2
+        "closing_capital": 15379.9
       },
       {
         "date": "2026-10-13",
         "trades_count": 2,
         "day_pnl": 447.42999999999995,
-        "closing_capital": 15826.64
+        "closing_capital": 15827.34
       },
       {
         "date": "2026-10-14",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 15826.64
+        "closing_capital": 15827.34
       },
       {
         "date": "2026-10-15",
         "trades_count": 1,
         "day_pnl": 143.37,
-        "closing_capital": 15970.01
+        "closing_capital": 15970.71
       },
       {
         "date": "2026-10-16",
         "trades_count": 1,
         "day_pnl": 113.53,
-        "closing_capital": 16083.54
+        "closing_capital": 16084.24
       },
       {
         "date": "2026-10-19",
         "trades_count": 0,
         "day_pnl": 0,
-        "closing_capital": 16083.54
+        "closing_capital": 16084.24
       }
     ]
   },
@@ -362,9 +362,9 @@
       "Period": "Month 1 (29 Jul - 21 Aug)",
       "Trades": 19,
       "Win Rate": "57.89%",
-      "Gross (Rs)": 774.1,
+      "Gross (Rs)": 774.8,
       "Charges (Rs)": 423.5,
-      "Net (Rs)": 350.6,
+      "Net (Rs)": 351.3,
       "ROI (%)": "2.34%"
     },
     {
@@ -389,10 +389,10 @@
       "Period": "Full 3 Months Total",
       "Trades": 48,
       "Win Rate": "58.33%",
-      "Gross (Rs)": 2219.5,
+      "Gross (Rs)": 2220.2,
       "Charges (Rs)": 1135.97,
-      "Net (Rs)": 1083.53,
-      "ROI (%)": "7.22%"
+      "Net (Rs)": 1084.23,
+      "ROI (%)": "7.23%"
     }
   ],
   "opt_grid": [
@@ -400,51 +400,51 @@
       "Strategy Variation": "1. Option A (Fixed 2.0R Target + Structural SL)",
       "Trades": 48,
       "Win Rate": "58.33%",
-      "Gross P&L (Rs)": 2219.5,
-      "Profit Factor": 2.97,
+      "Gross P&L (Rs)": 2220.2,
+      "Profit Factor": 2.98,
       "Charges (Rs)": 1135.97,
-      "Net P&L (Rs)": 1083.53,
-      "3-Month Net ROI": "7.22%"
+      "Net P&L (Rs)": 1084.23,
+      "3-Month Net ROI": "7.23%"
     },
     {
       "Strategy Variation": "2. Fixed 1.5R Target + Structural SL",
       "Trades": 51,
       "Win Rate": "56.86%",
-      "Gross P&L (Rs)": 1764.5,
+      "Gross P&L (Rs)": 1765.2,
       "Profit Factor": 2.47,
-      "Charges (Rs)": 1171.33,
-      "Net P&L (Rs)": 593.17,
-      "3-Month Net ROI": "3.95%"
+      "Charges (Rs)": 1171.34,
+      "Net P&L (Rs)": 593.86,
+      "3-Month Net ROI": "3.96%"
     },
     {
       "Strategy Variation": "3. Fixed 2.5R Target + Structural SL",
       "Trades": 46,
       "Win Rate": "52.17%",
-      "Gross P&L (Rs)": 1975.25,
+      "Gross P&L (Rs)": 1975.95,
       "Profit Factor": 2.61,
       "Charges (Rs)": 1091.43,
-      "Net P&L (Rs)": 883.82,
-      "3-Month Net ROI": "5.89%"
+      "Net P&L (Rs)": 884.52,
+      "3-Month Net ROI": "5.9%"
     },
     {
       "Strategy Variation": "4. Fixed 3.0R Target + Structural SL",
       "Trades": 46,
       "Win Rate": "52.17%",
-      "Gross P&L (Rs)": 2090.4,
+      "Gross P&L (Rs)": 2091.1,
       "Profit Factor": 2.68,
       "Charges (Rs)": 1101.21,
-      "Net P&L (Rs)": 989.19,
-      "3-Month Net ROI": "6.59%"
+      "Net P&L (Rs)": 989.89,
+      "3-Month Net ROI": "6.6%"
     },
     {
       "Strategy Variation": "5. Hybrid: 2.5R Target + Trail after 1.5R",
       "Trades": 48,
       "Win Rate": "56.25%",
-      "Gross P&L (Rs)": 1835.1,
+      "Gross P&L (Rs)": 1835.8,
       "Profit Factor": 2.57,
       "Charges (Rs)": 1119.1,
-      "Net P&L (Rs)": 716.0,
-      "3-Month Net ROI": "4.77%"
+      "Net P&L (Rs)": 716.7,
+      "3-Month Net ROI": "4.78%"
     },
     {
       "Strategy Variation": "6. Hybrid: 2.0R Target + Trail after 1.2R",
@@ -668,13 +668,13 @@
       "entry_time": "11:05",
       "entry_price": 1307.0,
       "exit_time": "11:50",
-      "exit_price": 1317.15,
+      "exit_price": 1317.2,
       "exit_reason": "TARGET_HIT_2.0R",
-      "gross_pnl": 142.1,
+      "gross_pnl": 142.8,
       "charges": {
         "buy_turnover": 18298.0,
-        "sell_turnover": 18440.100000000002,
-        "total_turnover": 36738.100000000006,
+        "sell_turnover": 18440.8,
+        "total_turnover": 36738.8,
         "brokerage": 11.02,
         "stt": 4.61,
         "exchange_txn": 1.13,
@@ -683,8 +683,8 @@
         "stamp_duty": 0.55,
         "total_charges": 19.54
       },
-      "net_pnl": 122.56,
-      "r_multiple": 1.99
+      "net_pnl": 123.26,
+      "r_multiple": 2.0
     },
     {
       "date": "2026-08-06",
