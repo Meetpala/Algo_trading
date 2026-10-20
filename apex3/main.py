@@ -74,6 +74,22 @@ def run_app():
         print("===============================\n")
         return
 
+    # Start Autonomous Engine Loop Thread (runs strategy independently of UI)
+    import threading
+
+    def _trading_loop():
+        logger.info("Autonomous Strategy Execution Thread started (Interval: 3.0s).")
+        while True:
+            try:
+                now = datetime.now(IST)
+                engine.evaluate_step(now)
+            except Exception as e:
+                logger.error("Error in autonomous trading loop: %s", e)
+            time.sleep(3.0)
+
+    loop_thread = threading.Thread(target=_trading_loop, daemon=True, name="Apex3TradingLoop")
+    loop_thread.start()
+
     # Create & Run Flask Local Dashboard
     dashboard_app = create_app(engine, config, journal)
     logger.info(
