@@ -58,8 +58,10 @@ def run_fast_backtest(
     trail_enabled: bool = False,
     trail_activation_r: float = 1.0,
     initial_atr_mult: float = 1.5,
+    entry_cutoff_time: time = None,
 ):
     config = load_config()
+    cutoff_time = entry_cutoff_time if entry_cutoff_time is not None else config.schedule.get_time('entry_cutoff')
     nifty_candles = data['NSEI']['candles']
     nifty_df = data['NSEI']['df']
 
@@ -215,7 +217,7 @@ def run_fast_backtest(
                 del open_positions[cs]
 
             # Entry checks
-            if time(9, 30) <= bar_time <= time(14, 15):
+            if time(9, 30) <= bar_time <= cutoff_time:
                 if len(open_positions) >= max_positions:
                     continue
 
