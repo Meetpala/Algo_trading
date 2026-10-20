@@ -1,177 +1,169 @@
-# =============================================================================
-# APEX-3 Strategy Configuration
-# =============================================================================
-# All numeric thresholds are starting values for paper/simulation testing,
-# NOT proven optimal values. Tune only with out-of-sample validation.
-#
-# WARNING: A risk percentage is not a loss guarantee. Gaps, circuits,
-# liquidity, API outages, and execution slippage can exceed planned risk.
-# =============================================================================
+# apex3/config.yaml — Single Source of Truth for APEX-3 High-Profit Configuration
 
 # --- Operating Mode ---
 mode: "paper"  # "paper" or "live" — live requires all safety gates
-paper_starting_capital: 15000.0  # Keep paper sizing aligned with the requested backtest capital.
+paper_starting_capital: 15000.00
 
-# --- Watchlist ---
-# Manual selection of up to 3 NSE cash-equity symbols.
-# Scanner mode is off by default and must be explicitly enabled.
-watchlist:
-  symbols:
-    - RELIANCE  # Current single-symbol paper candidate from the chronological holdout.
-  scanner_enabled: false
-  # Full candidate pool; when enabled, valid signals are ranked by directional
-  # relative strength and relative volume before the position limit is applied.
-  scanner_universe:
-    - RELIANCE
-    - TCS
-    - INFY
-    - HDFCBANK
-    - ICICIBANK
-    - BHARTIARTL
-    - ITC
-    - SBIN
-    - HINDUNILVR
-    - LT
-    - KOTAKBANK
-    - BAJFINANCE
-    - AXISBANK
-    - MARUTI
-    - ASIANPAINT
+account:
+  starting_capital: 15000.00          # Base account equity in INR
+  max_intraday_leverage: 4.0          # Zerodha MIS 4.0x leverage
+  safety_reserve_buffer_pct: 0.05     # 5.0% (₹750) idle cash buffer for RMS safety
+  fetch_live_zerodha_margin: true     # Pulls live available cash from kite.margins("equity")
 
-# --- Position Limits ---
-limits:
-  max_symbols: 3               # Never exceed 3 simultaneous strategy positions
-  max_leverage: 4.0            # Ceiling only; broker-reported margin controls each order
-  min_accepted_leverage: 4.0   # Skip symbol if live checks show less than this
-  safety_reserve_pct: 5.0      # Percentage of equity to keep as safety margin buffer
+risk_management:
+  max_concurrent_positions: 2         # 2 slots max -> ₹28,500 leveraged budget per slot
+  max_new_entries_per_bar: 1          # Only take the #1 ranked stock on any single 5m candle
+  second_slot_requires_slot1_profit_r: 0.50  # Slot 2 only unlocks if Slot 1 is >= +0.5R
+  risk_per_trade_pct: 0.0080          # 0.80% of equity (₹120.00 risk cap per trade)
+  daily_loss_limit_pct: 0.0160        # 1.60% of equity (-₹240.00 hard daily stop = 2 losses)
 
-# --- Risk Parameters ---
-# These are simulation starting points, not guaranteed loss limits.
-risk:
-  risk_per_trade_pct: 0.25     # % of equity capital risked per trade
-  max_combined_open_risk_pct: 0.75  # Sum of stop-distance risk across all positions
-  daily_loss_limit_pct: 1.0    # Stop entries when day P&L (realized+unrealized+costs) hits this loss
-  slippage_allowance_pct: 0.10 # Estimated slippage per side for sizing calculations
+session_schedule:
+  timezone: "Asia/Kolkata"
+  or_start_time: "09:15"              # Opening Range start
+  or_end_time: "09:30"                # Opening Range locked at 09:30 IST
+  entry_start_time: "09:30"           # Active Entry Window opens
+  entry_cutoff_time: "13:00"          # Hard cutoff for new entries
+  late_day_protection_time: "13:45"   # Time-based fee-lock evaluation
+  square_off_time: "14:55"            # Orderly MIS liquidation before Zerodha 15:15 RMS
+  flat_verification_time: "14:58"     # Verify zero open positions and zero pending SL/Target orders
 
-# --- Market Regime (NIFTY 50 benchmark) ---
-# IMPORTANT: Uses NIFTY 50 price/OHLC data only. No index VWAP.
-regime:
+regime_filter:
   benchmark_symbol: "NIFTY 50"
   benchmark_exchange: "NSE"
-  ema_period: 20               # 5-minute EMA period
-  ema_slope_lookback: 3        # Bars to evaluate slope direction
-  min_adx: 22                  # Minimum 5-min ADX for trend confirmation
-  adx_period: 14               # ADX calculation period
+  ema_period: 20
+  ema_slope_lookback: 3
+  adx_period: 14
+  min_adx: 22.0
+  require_vwap_alignment: true        # Blocks post-gap sideways morning traps (Month 2 fix)
+  require_rising_adx: true            # Requires ADX[t] > ADX[t-1]
 
-# --- Signal Parameters ---
-signal:
-  min_relative_volume: 2.0     # Signal bar volume vs 20-bar average (institutional volume filter)
-  volume_avg_period: 20        # Number of prior bars for volume average
-  max_spread_bps: 8            # Maximum bid-ask spread in basis points
-  min_circuit_distance_pct: 2.0  # Minimum distance to circuit limit
-  candle_timeframe_entry: "5min"  # Entry signal timeframe
-  candle_timeframe_trail: "1min"  # Trailing stop swing detection timeframe
-  relative_strength_lookback: 20  # Bars to compare stock vs benchmark
+signal_gates:
+  rs_lookback_bars: 20                # 20-bar Relative Strength vs NIFTY 50
+  volume_avg_bars: 20                 # 20-bar Volume SMA
+  min_volume_surge_ratio: 2.0         # Gate 5: >= 2.0x institutional volume confirmation
+  max_spread_bps: 4.0                 # Gate 6: Tightened from 8 bps to 4 bps for zero-slippage fills
+  min_circuit_distance_pct: 0.020     # Gate 7: >= 2.0% away from upper/lower circuit
+  min_atr_pct: 0.0022                 # Minimum 5m ATR(14) as % of price (filters dead stocks)
+  min_stop_distance_pct: 0.0045       # Gate 9A: Minimum R = 0.45% (ensures 2R >= 0.90% to beat fees)
+  max_stop_distance_pct: 0.0085       # Gate 9B: Maximum R = 0.85% (ensures 2R <= 1.70% is reachable)
+  max_adr_consumed_pct: 0.60          # Gate 9C: Reject if stock already moved > 60% of 14-day ADR
 
-# --- Entry ---
+stops_and_targets:
+  swing_lookback_bars: 5              # 5-bar structural swing low/high anchor
+  atr_period: 14                      # 14-bar 5-minute ATR
+  atr_stop_multiplier: 1.5            # 1.5x ATR structural buffer (proven over 1.0x ATR)
+  target_r_multiple: 2.0              # Fixed 2.0R limit target order
+  trail_enabled: false                # Continuous trailing disabled (prevents choking runners)
+  fee_lock_enabled: true              # One-time step to Entry +/- 0.15% to protect late winners
+  fee_lock_trigger_r: 1.65            # Triggers when unrealized profit hits +1.65R (82.5% of target)
+  late_day_lock_trigger_r: 0.75       # At 13:45 IST, locks Entry +/- 0.15% if trade is >= +0.75R
+  fee_lock_offset_pct: 0.0015         # +0.15% covers 0.1065% Zerodha + statutory charges + 1 tick
+  sl_limit_buffer_pct: 0.25           # Stop-limit buffer below/above trigger
+  max_modifications_per_order: 25     # Kite order modification limit
+  modification_headroom: 3
+
+radar:
+  # Tier 1: Core 15 High-Beta NIFTY 50 Institutional Leaders (Always Active)
+  core_watchlist:
+    - "ICICIBANK"
+    - "SBIN"
+    - "AXISBANK"
+    - "BAJFINANCE"
+    - "KOTAKBANK"
+    - "TATASTEEL"
+    - "HINDALCO"
+    - "JSWSTEEL"
+    - "RELIANCE"
+    - "M&M"
+    - "TATAMOTORS"
+    - "LT"
+    - "ADANIPORTS"
+    - "INFY"
+    - "SUNPHARMA"
+
+  # Tier 2: Extended High-Beta F&O Momentum Radar (Toggle true/false)
+  enable_extended_radar: true
+  extended_radar:
+    - "BEL"
+    - "HAL"
+    - "TRENT"
+    - "DLF"
+    - "CHOLAFIN"
+    - "BANKBARODA"
+    - "PNB"
+    - "VEDL"
+    - "TATAPOWER"
+    - "BAJAJ-AUTO"
+
+  # Tier 3: Your Custom Radar — Add any NSE MIS-eligible stock here at any time.
+  custom_user_radar:
+    - "JIOFIN"
+    - "ZOMATO"
+
+# --- Auxiliary Compatibility Sections ---
 entry:
-  order_type: "LIMIT"          # Entry order type (LIMIT recommended)
-  max_slippage_pct: 0.15       # Maximum entry slippage limit from signal price
-  unfilled_timeout_sec: 30     # Cancel unfilled entry after this timeout
-  max_retries: 1               # Maximum entry retry attempts (after checking order status)
+  order_type: "LIMIT"
+  max_slippage_pct: 0.15
+  unfilled_timeout_sec: 30
+  max_retries: 1
 
-# --- Stop and Target ---
-stops:
-  initial_atr_multiplier: 1.5  # ATR multiple for initial stop placement
-  initial_atr_period: 14       # ATR period for stop calculation
-  sl_limit_buffer_pct: 0.25    # Stop-limit buffer below/above trigger (configurable)
-  target_r: 2.0                # Fixed 2.0R profit target (proven optimal mathematical payoff)
-  use_fixed_target: true       # Option A: Enable fixed 2.0R target
-  trail_enabled: false         # Option A: Disable trailing stop (maintain structural stop)
-
-  trail:
-    activation_r: 1.0          # R-multiple threshold to begin trailing (if trail_enabled is true)
-    profit_lock_rupees: 0.50   # Minimum profit to lock at +1R (per share, after costs)
-    atr_multiplier_normal: 2.5 # ATR trail multiplier during healthy trend
-    atr_multiplier_tight: 1.5  # ATR trail multiplier for exhaustion/late session
-    min_step_ticks: 2          # Minimum improvement in ticks before submitting modification
-    swing_pad_ticks: 2         # Ticks beyond confirmed swing for trail
-    exhaustion_adx_threshold: 18  # ADX below this = trend exhaustion → tighter trail
-    late_session_tighten_time: "13:30"  # IST time to begin tightening trail
-
-  # Kite Connect allows max 25 modifications per order. Track and budget.
-  max_modifications_per_order: 25
-  modification_headroom: 3     # Stop modifying this many mods before the cap
-
-# --- Session Schedule (IST = Asia/Kolkata) ---
-# Times reference the exchange session calendar, not the computer clock.
 schedule:
   market_open: "09:15"
-  opening_range_end: "09:30"   # First 15 minutes — observe only, build opening range
-  entry_start: "09:30"         # Entries allowed from this time
-  entry_cutoff: "13:00"        # High-conviction morning momentum cutoff (avoids late afternoon EOD traps)
-  flatten_start: "14:55"       # Begin orderly MIS exit
-  flat_target: "14:58"         # Target: strategy book fully flat
+  opening_range_end: "09:30"
+  entry_start: "09:30"
+  entry_cutoff: "13:00"
+  flatten_start: "14:55"
+  flat_target: "14:58"
   market_close: "15:30"
-  hard_deadline: "15:00"       # Must be flat or report critical failure
-
-  # Data freshness threshold — quotes older than this are considered stale
+  hard_deadline: "15:00"
   stale_threshold_sec: 2
 
-  # Exchange holidays (YYYY-MM-DD) — update annually from NSE calendar
   holidays_2026:
-    - "2026-01-26"  # Republic Day
-    - "2026-03-10"  # Maha Shivaratri
-    - "2026-03-17"  # Holi
-    - "2026-03-31"  # Id-Ul-Fitr
-    - "2026-04-02"  # Ram Navami
-    - "2026-04-06"  # Mahavir Jayanti
-    - "2026-04-14"  # Dr. Ambedkar Jayanti / Good Friday
-    - "2026-05-01"  # Maharashtra Day
-    - "2026-06-07"  # Bakri Id
-    - "2026-07-07"  # Muharram
-    - "2026-08-15"  # Independence Day
-    - "2026-08-19"  # Janmashtami (tentative)
-    - "2026-09-05"  # Milad un-Nabi (tentative)
-    - "2026-10-02"  # Mahatma Gandhi Jayanti
-    - "2026-10-20"  # Dussehra (tentative)
-    - "2026-11-09"  # Diwali (Laxmi Pujan) (tentative)
-    - "2026-11-10"  # Diwali (Balipratipada) (tentative)
-    - "2026-11-30"  # Guru Nanak Jayanti (tentative)
-    - "2026-12-25"  # Christmas
+    - "2026-01-26"
+    - "2026-03-10"
+    - "2026-03-17"
+    - "2026-03-31"
+    - "2026-04-02"
+    - "2026-04-06"
+    - "2026-04-14"
+    - "2026-05-01"
+    - "2026-06-07"
+    - "2026-07-07"
+    - "2026-08-15"
+    - "2026-08-19"
+    - "2026-09-05"
+    - "2026-10-02"
+    - "2026-10-20"
+    - "2026-11-09"
+    - "2026-11-10"
+    - "2026-11-30"
+    - "2026-12-25"
 
-# --- API Rate Limits (from Kite Connect docs, checked 20 Oct 2026) ---
-# Update these if Kite changes their documented limits.
 rate_limits:
-  orders_per_second: 10        # Per client account
+  orders_per_second: 10
   orders_per_minute: 200
   quotes_per_second: 1
   historical_per_second: 3
-  general_per_second: 10       # Per API key
+  general_per_second: 10
 
-# --- Costs (for P&L and sizing calculations) ---
-# These are estimates. Actual costs come from broker after fills.
 costs:
-  brokerage_per_order: 20.0    # Zerodha flat ₹20 per executed order (or 0.03%, whichever lower)
-  stt_pct: 0.025               # STT on sell-side for intraday (0.025%)
-  exchange_txn_pct: 0.00307    # NSE equity transaction charges (0.00307% of turnover)
-  gst_pct: 18.0                # GST on brokerage + transaction charges
-  sebi_turnover_pct: 0.0001    # SEBI turnover fee
-  stamp_duty_pct: 0.003        # Stamp duty on buy-side (0.003%)
+  brokerage_per_order: 20.0
+  stt_pct: 0.025
+  exchange_txn_pct: 0.00307
+  gst_pct: 18.0
+  sebi_turnover_pct: 0.0001
+  stamp_duty_pct: 0.003
 
-# --- Journal ---
 journal:
-  db_path: "apex3_journal.db"  # SQLite database path (relative to project root)
+  db_path: "apex3_journal.db"
   log_decisions: true
   log_orders: true
   log_fills: true
   log_stop_changes: true
   log_warnings: true
   log_daily_summary: true
-  # NEVER log credentials or access tokens
 
-# --- Dashboard ---
 dashboard:
-  host: "127.0.0.1"           # Localhost only — do not expose externally
+  host: "127.0.0.1"
   port: 5000
   refresh_interval_sec: 2

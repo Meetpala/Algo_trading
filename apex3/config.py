@@ -195,6 +195,7 @@ class AppConfig:
     journal: JournalConfig = field(default_factory=JournalConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
+    raw_dict: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -229,12 +230,12 @@ def _parse_schedule(raw: dict) -> ScheduleConfig:
         if key.startswith("holidays_") and isinstance(value, list):
             holidays.extend(str(v) for v in value)
     return ScheduleConfig(
-        market_open=str(raw.get("market_open", "09:15")),
-        opening_range_end=str(raw.get("opening_range_end", "09:30")),
-        entry_start=str(raw.get("entry_start", "09:30")),
-        entry_cutoff=str(raw.get("entry_cutoff", "14:15")),
-        flatten_start=str(raw.get("flatten_start", "14:55")),
-        flat_target=str(raw.get("flat_target", "14:58")),
+        market_open=str(raw.get("or_start_time", raw.get("market_open", "09:15"))),
+        opening_range_end=str(raw.get("or_end_time", raw.get("opening_range_end", "09:30"))),
+        entry_start=str(raw.get("entry_start_time", raw.get("entry_start", "09:30"))),
+        entry_cutoff=str(raw.get("entry_cutoff_time", raw.get("entry_cutoff", "13:00"))),
+        flatten_start=str(raw.get("square_off_time", raw.get("flatten_start", "14:55"))),
+        flat_target=str(raw.get("flat_verification_time", raw.get("flat_target", "14:58"))),
         market_close=str(raw.get("market_close", "15:30")),
         hard_deadline=str(raw.get("hard_deadline", "15:00")),
         stale_threshold_sec=int(raw.get("stale_threshold_sec", 2)),
@@ -258,19 +259,29 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     with open(config_path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
-    # Parse each section with defaults
+    # Support both new 3-tier schema and baseline schema
+    acc_raw = raw.get("account", {})
+    risk_raw = raw.get("risk_management", raw.get("risk", {}))
+    regime_raw = raw.get("regime_filter", raw.get("regime", {}))
+    signal_raw = raw.get("signal_gates", raw.get("signal", {}))
+    stops_raw = raw.get("stops_and_targets", raw.get("stops", {}))
+    schedule_raw = raw.get("session_schedule", raw.get("schedule", {}))
+    radar_raw = raw.get("radar", {})
     watchlist_raw = raw.get("watchlist", {})
     limits_raw = raw.get("limits", {})
-    risk_raw = raw.get("risk", {})
-    regime_raw = raw.get("regime", {})
-    signal_raw = raw.get("signal", {})
     entry_raw = raw.get("entry", {})
-    stops_raw = raw.get("stops", {})
-    schedule_raw = raw.get("schedule", {})
     rate_limits_raw = raw.get("rate_limits", {})
     costs_raw = raw.get("costs", {})
     journal_raw = raw.get("journal", {})
     dashboard_raw = raw.get("dashboard", {})
+
+    # Build merged watchlist from radar tiers if present
+    merged_symbols = list(radar_raw.get("core_watchlist", []))
+    if radar_raw.get("enable_extended_radar", True):
+        merged_symbols.extend(radar_raw.get("extended_radar", []))
+    merged_symbols.extend(radar_raw.get("custom_user_radar", []))
+    if not merged_symbols:
+        merged_symbols = watchlist_raw.get("symbols", [])
 
     # Build trail config
     trail_raw = stops_raw.get("trail", {})
@@ -285,24 +296,40 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         late_session_tighten_time=str(trail_raw.get("late_session_tighten_time", "13:30")),
     )
 
+    safety_pct = float(acc_raw.get("safety_reserve_buffer_pct", limits_raw.get("safety_reserve_pct", 5.0)))
+    if safety_pct <= 1.0:
+        safety_pct *= 100.0
+
+    risk_per_trade = float(risk_raw.get("risk_per_trade_pct", 0.80))
+    if risk_per_trade <= 0.1:
+        risk_per_trade *= 100.0
+
+    daily_loss = float(risk_raw.get("daily_loss_limit_pct", 1.60))
+    if daily_loss <= 0.1:
+        daily_loss *= 100.0
+
+    circuit_dist = float(signal_raw.get("min_circuit_distance_pct", 2.0))
+    if circuit_dist <= 0.1:
+        circuit_dist *= 100.0
+
     return AppConfig(
         mode=str(raw.get("mode", "paper")),
-        paper_starting_capital=float(raw.get("paper_starting_capital", 15_000.0)),
+        paper_starting_capital=float(acc_raw.get("starting_capital", raw.get("paper_starting_capital", 15_000.0))),
         watchlist=WatchlistConfig(
-            symbols=watchlist_raw.get("symbols", []),
-            scanner_enabled=bool(watchlist_raw.get("scanner_enabled", False)),
-            scanner_universe=watchlist_raw.get("scanner_universe", []),
+            symbols=merged_symbols,
+            scanner_enabled=bool(watchlist_raw.get("scanner_enabled", bool(radar_raw))),
+            scanner_universe=merged_symbols,
         ),
         limits=LimitsConfig(
-            max_symbols=int(limits_raw.get("max_symbols", 3)),
-            max_leverage=float(limits_raw.get("max_leverage", 4.0)),
+            max_symbols=int(risk_raw.get("max_concurrent_positions", limits_raw.get("max_symbols", 2))),
+            max_leverage=float(acc_raw.get("max_intraday_leverage", limits_raw.get("max_leverage", 4.0))),
             min_accepted_leverage=float(limits_raw.get("min_accepted_leverage", 4.0)),
-            safety_reserve_pct=float(limits_raw.get("safety_reserve_pct", 5.0)),
+            safety_reserve_pct=safety_pct,
         ),
         risk=RiskConfig(
-            risk_per_trade_pct=float(risk_raw.get("risk_per_trade_pct", 0.25)),
-            max_combined_open_risk_pct=float(risk_raw.get("max_combined_open_risk_pct", 0.75)),
-            daily_loss_limit_pct=float(risk_raw.get("daily_loss_limit_pct", 1.0)),
+            risk_per_trade_pct=risk_per_trade,
+            max_combined_open_risk_pct=float(risk_raw.get("max_combined_open_risk_pct", 1.60)),
+            daily_loss_limit_pct=daily_loss,
             slippage_allowance_pct=float(risk_raw.get("slippage_allowance_pct", 0.10)),
         ),
         regime=RegimeConfig(
@@ -314,13 +341,13 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             adx_period=int(regime_raw.get("adx_period", 14)),
         ),
         signal=SignalConfig(
-            min_relative_volume=float(signal_raw.get("min_relative_volume", 1.5)),
-            volume_avg_period=int(signal_raw.get("volume_avg_period", 20)),
-            max_spread_bps=float(signal_raw.get("max_spread_bps", 8.0)),
-            min_circuit_distance_pct=float(signal_raw.get("min_circuit_distance_pct", 2.0)),
+            min_relative_volume=float(signal_raw.get("min_volume_surge_ratio", signal_raw.get("min_relative_volume", 2.0))),
+            volume_avg_period=int(signal_raw.get("volume_avg_bars", signal_raw.get("volume_avg_period", 20))),
+            max_spread_bps=float(signal_raw.get("max_spread_bps", 4.0)),
+            min_circuit_distance_pct=circuit_dist,
             candle_timeframe_entry=str(signal_raw.get("candle_timeframe_entry", "5min")),
             candle_timeframe_trail=str(signal_raw.get("candle_timeframe_trail", "1min")),
-            relative_strength_lookback=int(signal_raw.get("relative_strength_lookback", 20)),
+            relative_strength_lookback=int(signal_raw.get("rs_lookback_bars", signal_raw.get("relative_strength_lookback", 20))),
         ),
         entry=EntryConfig(
             order_type=str(entry_raw.get("order_type", "LIMIT")),
@@ -329,10 +356,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             max_retries=int(entry_raw.get("max_retries", 1)),
         ),
         stops=StopsConfig(
-            initial_atr_multiplier=float(stops_raw.get("initial_atr_multiplier", 1.5)),
-            initial_atr_period=int(stops_raw.get("initial_atr_period", 14)),
+            initial_atr_multiplier=float(stops_raw.get("atr_stop_multiplier", stops_raw.get("initial_atr_multiplier", 1.5))),
+            initial_atr_period=int(stops_raw.get("atr_period", stops_raw.get("initial_atr_period", 14))),
             sl_limit_buffer_pct=float(stops_raw.get("sl_limit_buffer_pct", 0.25)),
-            target_r=float(stops_raw.get("target_r", 2.0)),
+            target_r=float(stops_raw.get("target_r_multiple", stops_raw.get("target_r", 2.0))),
             use_fixed_target=bool(stops_raw.get("use_fixed_target", True)),
             trail_enabled=bool(stops_raw.get("trail_enabled", False)),
             trail=trail_config,
@@ -370,4 +397,5 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             refresh_interval_sec=int(dashboard_raw.get("refresh_interval_sec", 2)),
         ),
         secrets=_load_secrets(),
+        raw_dict=raw,
     )

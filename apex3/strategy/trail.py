@@ -53,27 +53,130 @@ class StopEvaluation:
     is_late_session: bool = False
 
 
-def round_to_tick(price: float, tick_size: float = 0.05, round_up: bool = False) -> float:
-    """Round price to the nearest instrument tick size.
+TICK_SIZE = 0.05
 
-    Args:
-        price: Price to round
-        tick_size: Instrument tick size (e.g. 0.05 on NSE)
-        round_up: If True, round away from zero (protective for shorts).
-                  If False, round down (protective for longs).
 
-    Returns:
-        Tick-rounded price.
-    """
-    if tick_size <= 0:
+def floor_to_tick(price: float, tick: float = TICK_SIZE) -> float:
+    return round(math.floor(price / tick + 1e-9) * tick, 2)
+
+
+def ceil_to_tick(price: float, tick: float = TICK_SIZE) -> float:
+    return round(math.ceil(price / tick - 1e-9) * tick, 2)
+
+
+def round_to_tick(price: float, tick: float = TICK_SIZE, tick_size: Optional[float] = None, round_up: bool = False) -> float:
+    """Round price to the nearest instrument tick size."""
+    t = tick_size if tick_size is not None else tick
+    if t <= 0:
         return price
-
-    ticks = price / tick_size
     if round_up:
-        rounded_ticks = math.ceil(ticks)
+        return round(math.ceil(price / t - 1e-9) * t, 2)
+    return round(round(price / t) * t, 2)
+
+
+@dataclass
+class StopTargetLevels:
+    side: str               # "LONG" or "SHORT"
+    entry_price: float
+    initial_stop: float
+    current_stop: float
+    target_price: float
+    risk_per_share: float   # R = |Entry - Initial Stop|
+    risk_pct: float         # R / Entry Price
+    fee_lock_applied: bool = False
+
+
+def compute_initial_stop_and_target(
+    side: str,
+    entry_price: float,
+    swing_low_5: float,
+    swing_high_5: float,
+    atr14: float,
+    cfg: dict,
+) -> StopTargetLevels:
+    """Computes Structural Stop (Swing Low/High +/- 1.5x ATR) and Fixed 2.0R Target."""
+    st_cfg = cfg.get("stops_and_targets", cfg.get("stops", {})) if isinstance(cfg, dict) else {}
+    atr_mult = float(st_cfg.get("atr_stop_multiplier", st_cfg.get("initial_atr_multiplier", 1.5)))
+    target_r = float(st_cfg.get("target_r_multiple", st_cfg.get("target_r", 2.0)))
+
+    side_str = side.value if hasattr(side, "value") else str(side).upper()
+    if side_str in ("LONG", "BUY"):
+        initial_stop = floor_to_tick(swing_low_5 - (atr_mult * atr14))
+        risk_r = round(entry_price - initial_stop, 4)
+        target_price = round_to_tick(entry_price + (target_r * risk_r))
+    elif side_str in ("SHORT", "SELL"):
+        initial_stop = ceil_to_tick(swing_high_5 + (atr_mult * atr14))
+        risk_r = round(initial_stop - entry_price, 4)
+        target_price = round_to_tick(entry_price - (target_r * risk_r))
     else:
-        rounded_ticks = math.floor(ticks)
-    return round(rounded_ticks * tick_size, 2)
+        raise ValueError(f"Unsupported side: {side}")
+
+    risk_pct = (risk_r / entry_price) if entry_price > 0 else 0.0
+
+    return StopTargetLevels(
+        side=side_str,
+        entry_price=entry_price,
+        initial_stop=initial_stop,
+        current_stop=initial_stop,
+        target_price=target_price,
+        risk_per_share=risk_r,
+        risk_pct=risk_pct,
+        fee_lock_applied=False,
+    )
+
+
+def evaluate_fee_protected_stop(
+    levels: StopTargetLevels,
+    current_price: float,
+    current_time_str: str,
+    cfg: dict,
+) -> Optional[float]:
+    """Continuous trailing is disabled (trail_enabled: false) so winners are not choked.
+    However, a single one-time step to Entry +/- 0.15% is triggered if:
+      1. Unrealized profit >= +1.65R (82.5% of the way to 2.0R target), OR
+      2. Current time >= 13:45 IST and unrealized profit >= +0.75R.
+    Returns the new stop price if updated, otherwise None.
+    """
+    st_cfg = cfg.get("stops_and_targets", cfg.get("stops", {})) if isinstance(cfg, dict) else {}
+    if not st_cfg.get("fee_lock_enabled", True) or levels.fee_lock_applied:
+        return None
+
+    if levels.risk_per_share <= 0:
+        return None
+
+    side_str = levels.side.upper()
+    if side_str in ("LONG", "BUY"):
+        unrealized_r = (current_price - levels.entry_price) / levels.risk_per_share
+    else:
+        unrealized_r = (levels.entry_price - current_price) / levels.risk_per_share
+
+    trigger_r = float(st_cfg.get("fee_lock_trigger_r", 1.65))
+    sched_cfg = cfg.get("session_schedule", cfg.get("schedule", {})) if isinstance(cfg, dict) else {}
+    late_time = sched_cfg.get("late_day_protection_time", "13:45")
+    late_trigger_r = float(st_cfg.get("late_day_lock_trigger_r", 0.75))
+    offset_pct = float(st_cfg.get("fee_lock_offset_pct", 0.0015))
+
+    should_lock = (unrealized_r >= trigger_r) or (
+        current_time_str >= late_time and unrealized_r >= late_trigger_r
+    )
+
+    if not should_lock:
+        return None
+
+    if side_str in ("LONG", "BUY"):
+        protected_stop = ceil_to_tick(levels.entry_price * (1.0 + offset_pct))
+        if protected_stop > levels.current_stop and protected_stop < current_price:
+            levels.current_stop = protected_stop
+            levels.fee_lock_applied = True
+            return protected_stop
+    else:
+        protected_stop = floor_to_tick(levels.entry_price * (1.0 - offset_pct))
+        if protected_stop < levels.current_stop and protected_stop > current_price:
+            levels.current_stop = protected_stop
+            levels.fee_lock_applied = True
+            return protected_stop
+
+    return None
 
 
 def calculate_initial_stop(

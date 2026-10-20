@@ -1,19 +1,13 @@
 """APEX-3 Market Regime Filter.
 
-Evaluates broad-market regime using NIFTY 50 OHLC trend data (EMA-20 slope and ADX).
-IMPORTANT: Do NOT calculate a fake NIFTY cash-index VWAP. Individual stocks use
-their own session VWAP; the benchmark index has no traded volume on cash index.
-
-Regime rules:
-- Long market regime: NIFTY 50 close > 5m EMA-20, EMA-20 is rising, and 5m ADX >= 22.
-- Short market regime: NIFTY 50 close < 5m EMA-20, EMA-20 is falling, and 5m ADX >= 22.
-- Stand aside (NEUTRAL): If mixed, low-trend, stale, or missing data.
+Evaluates broad-market regime using NIFTY 50 OHLC trend data (EMA-20 slope, ADX, VWAP alignment).
+Supports both BenchmarkSnapshot (high-speed radar scanning) and Candle series.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, auto
-from typing import Optional
+from enum import Enum
+from typing import Optional, Union
 
 from apex3.config import RegimeConfig
 from apex3.indicators.adx import compute_adx
@@ -21,11 +15,21 @@ from apex3.indicators.ema import compute_ema, ema_slope
 from apex3.models import Candle, GateResult, GateStatus, Quote
 
 
-class MarketRegime(Enum):
+class MarketRegime(str, Enum):
     """Broad-market trend regime."""
-    BULLISH = auto()  # Qualified for long entries
-    BEARISH = auto()  # Qualified for short entries
-    NEUTRAL = auto()  # Stand aside / no entry
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+    NEUTRAL = "NEUTRAL"
+
+
+@dataclass
+class BenchmarkSnapshot:
+    close: float
+    ema20: float
+    prev_ema20: float
+    session_vwap: float
+    adx14: float
+    prev_adx14: float
 
 
 @dataclass(frozen=True)
@@ -42,22 +46,47 @@ class RegimeEvaluation:
 
 
 def evaluate_market_regime(
-    candles_5m: list[Candle],
-    config: RegimeConfig,
+    target: Union[BenchmarkSnapshot, list[Candle]],
+    cfg_or_config: Union[dict, RegimeConfig],
     benchmark_quote: Optional[Quote] = None,
     stale_threshold_sec: float = 2.0,
-) -> RegimeEvaluation:
-    """Evaluate NIFTY 50 market regime using completed 5-minute bars.
+) -> Union[MarketRegime, RegimeEvaluation]:
+    """Evaluate NIFTY 50 5-minute regime.
 
-    Args:
-        candles_5m: Chronological list of completed 5m benchmark candles.
-        config: RegimeConfig containing thresholds (ema_period, min_adx, etc.).
-        benchmark_quote: Optional latest quote snapshot to check freshness.
-        stale_threshold_sec: Max allowed age for quote in seconds.
-
-    Returns:
-        RegimeEvaluation with regime state, gate status, and indicator values.
+    Supports:
+      1. evaluate_market_regime(snapshot: BenchmarkSnapshot, cfg: dict) -> MarketRegime
+      2. evaluate_market_regime(candles_5m: list[Candle], config: RegimeConfig) -> RegimeEvaluation
     """
+    if isinstance(target, BenchmarkSnapshot):
+        cfg = cfg_or_config if isinstance(cfg_or_config, dict) else {}
+        regime_cfg = cfg.get("regime_filter", cfg.get("regime", {}))
+        min_adx = float(regime_cfg.get("min_adx", 22.0))
+        require_vwap = bool(regime_cfg.get("require_vwap_alignment", True))
+        require_rising_adx = bool(regime_cfg.get("require_rising_adx", True))
+
+        ema_slope = target.ema20 - target.prev_ema20
+        adx_strong = target.adx14 >= min_adx
+        adx_rising = (target.adx14 > target.prev_adx14) if require_rising_adx else True
+
+        if not (adx_strong and adx_rising):
+            return MarketRegime.NEUTRAL
+
+        # Bullish Regime Check
+        vwap_bull_ok = (target.close > target.session_vwap) if require_vwap else True
+        if target.close > target.ema20 and ema_slope > 0 and vwap_bull_ok:
+            return MarketRegime.BULLISH
+
+        # Bearish Regime Check
+        vwap_bear_ok = (target.close < target.session_vwap) if require_vwap else True
+        if target.close < target.ema20 and ema_slope < 0 and vwap_bear_ok:
+            return MarketRegime.BEARISH
+
+        return MarketRegime.NEUTRAL
+
+    # Candle series processing
+    candles_5m = target
+    config = cfg_or_config if isinstance(cfg_or_config, RegimeConfig) else RegimeConfig()
+
     # Check quote freshness if provided
     if benchmark_quote is not None:
         if not benchmark_quote.is_fresh:
@@ -71,8 +100,6 @@ def evaluate_market_regime(
                 ),
             )
 
-    # Need enough candles for EMA and ADX calculations
-    # ADX requires 2 * period bars minimum for stabilized calculation
     min_required_bars = max(config.ema_period + config.ema_slope_lookback + 2, config.adx_period * 2 + 5)
     completed_candles = [c for c in candles_5m if c.is_complete]
 
@@ -91,7 +118,6 @@ def evaluate_market_regime(
     highs = [c.high for c in completed_candles]
     lows = [c.low for c in completed_candles]
 
-    # 1. EMA-20
     ema_series = compute_ema(closes, period=config.ema_period)
     if not ema_series or len(ema_series) < config.ema_slope_lookback:
         return RegimeEvaluation(
@@ -106,11 +132,8 @@ def evaluate_market_regime(
 
     latest_close = closes[-1]
     latest_ema = ema_series[-1]
-
-    # 2. EMA slope
     slope = ema_slope(ema_series, lookback=config.ema_slope_lookback)
 
-    # 3. ADX
     adx_dict = compute_adx(highs, lows, closes, period=config.adx_period)
     adx_series = adx_dict.get("adx", [])
     plus_di_series = adx_dict.get("plus_di", [])
@@ -131,13 +154,8 @@ def evaluate_market_regime(
     latest_plus_di = plus_di_series[-1] if plus_di_series else None
     latest_minus_di = minus_di_series[-1] if minus_di_series else None
 
-    # Trend Strength check
     is_trending = latest_adx >= config.min_adx
-
-    # Bullish condition: Close > EMA-20, EMA rising (slope > 0), ADX >= 22
     is_bullish = (latest_close > latest_ema) and (slope > 0) and is_trending
-
-    # Bearish condition: Close < EMA-20, EMA falling (slope < 0), ADX >= 22
     is_bearish = (latest_close < latest_ema) and (slope < 0) and is_trending
 
     details = {
@@ -164,7 +182,8 @@ def evaluate_market_regime(
             plus_di=latest_plus_di,
             minus_di=latest_minus_di,
         )
-    elif is_bearish:
+
+    if is_bearish:
         return RegimeEvaluation(
             regime=MarketRegime.BEARISH,
             gate=GateResult(
@@ -180,28 +199,19 @@ def evaluate_market_regime(
             plus_di=latest_plus_di,
             minus_di=latest_minus_di,
         )
-    else:
-        reasons = []
-        if not is_trending:
-            reasons.append(f"ADX ({latest_adx:.1f}) < {config.min_adx} (no trend)")
-        if slope == 0:
-            reasons.append("EMA-20 is flat")
-        if (latest_close > latest_ema and slope < 0) or (latest_close < latest_ema and slope > 0):
-            reasons.append("Price position contradicts EMA slope")
 
-        reason_str = "Neutral/Mixed regime: " + (", ".join(reasons) if reasons else "No clear direction")
-        return RegimeEvaluation(
-            regime=MarketRegime.NEUTRAL,
-            gate=GateResult(
-                name="MARKET_REGIME",
-                status=GateStatus.FAIL,
-                reason=reason_str,
-                data=details,
-            ),
-            current_close=latest_close,
-            ema_20=latest_ema,
-            ema_slope_val=slope,
-            adx_val=latest_adx,
-            plus_di=latest_plus_di,
-            minus_di=latest_minus_di,
-        )
+    return RegimeEvaluation(
+        regime=MarketRegime.NEUTRAL,
+        gate=GateResult(
+            name="MARKET_REGIME",
+            status=GateStatus.FAIL,
+            reason="Market regime is neutral (mixed signals or weak trend)",
+            data=details,
+        ),
+        current_close=latest_close,
+        ema_20=latest_ema,
+        ema_slope_val=slope,
+        adx_val=latest_adx,
+        plus_di=latest_plus_di,
+        minus_di=latest_minus_di,
+    )
