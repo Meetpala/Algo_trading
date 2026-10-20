@@ -1,0 +1,85 @@
+{
+  "strategy": "APEX-3 opening-range breakout",
+  "conclusion": "The full 15-symbol system has a small positive gross edge that does not cover estimated trading costs. Capital size is secondary. The current paper candidate is RELIANCE only with the same 2R target and stop/risk settings.",
+  "baseline_15_symbol_fixed_2R_three_months": {
+    "sessions": 60,
+    "trades": 223,
+    "trade_win_rate_after_charges_pct": 40.81,
+    "gross_pnl": 854.85,
+    "estimated_charges": 1590.66,
+    "net_pnl": -735.81,
+    "net_return_pct": -4.91,
+    "gross_profit_factor": 1.38,
+    "net_profit_factor": 0.76,
+    "average_gross_per_trade": 3.83,
+    "average_charges_per_trade": 7.13
+  },
+  "exit_reason_contribution_fixed_2R_three_months": {
+    "EOD_FLATTEN_1455": {
+      "trades": 110,
+      "gross_pnl": 990.8,
+      "net_pnl": 296.49
+    },
+    "STRUCTURAL_STOP": {
+      "trades": 77,
+      "gross_pnl": -1966.15,
+      "net_pnl": -2560.33
+    },
+    "TARGET_HIT_2R": {
+      "trades": 36,
+      "gross_pnl": 1830.2,
+      "net_pnl": 1528.03
+    }
+  },
+  "same_40_session_oos_comparison": {
+    "training_period": "2026-07-24 to 2026-08-20 (20 sessions)",
+    "selection_rule": "Choose the symbol with the highest positive after-charge P&L over the training period, measured from the full-universe replay.",
+    "selected_symbol": "RELIANCE",
+    "selected_training_net_pnl": 113.78,
+    "test_period": "2026-08-21 to 2026-10-19 (40 sessions)",
+    "starting_capital": 15000.0,
+    "risk_per_trade_pct": 0.25,
+    "target_r": 2.0,
+    "selected_symbol_result": {
+      "trades": 27,
+      "trade_win_rate_pct": 66.67,
+      "profitable_sessions": "16/40",
+      "gross_pnl": 575.6,
+      "estimated_charges": 265.45,
+      "net_pnl": 310.15,
+      "net_return_pct": 2.07,
+      "ending_capital": 15310.15
+    },
+    "full_15_symbol_result": {
+      "trades": 143,
+      "trade_win_rate_pct": 39.86,
+      "profitable_sessions": "16/40",
+      "gross_pnl": 478.75,
+      "estimated_charges": 996.53,
+      "net_pnl": -517.78,
+      "net_return_pct": -3.45,
+      "ending_capital": 14482.22
+    }
+  },
+  "capital_sensitivity_full_15_symbol_fixed_2R_latest_20_sessions": [
+    {
+      "starting_capital": 15000,
+      "net_pnl": -158.52,
+      "net_return_pct": -1.06,
+      "trades": 88
+    },
+    {
+      "starting_capital": 30000,
+      "net_pnl": -219.42,
+      "net_return_pct": -0.73,
+      "trades": 92
+    },
+    {
+      "starting_capital": 60000,
+      "net_pnl": -588.5,
+      "net_return_pct": -0.98,
+      "trades": 92
+    }
+  ],
+  "limitations": "The selected-symbol result is historical and only covers 40 out-of-sample sessions after a 20-session selection period. Continue paper trading at the same capital and risk before considering live use; the result is not a profit guarantee."
+}

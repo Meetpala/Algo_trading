@@ -87,6 +87,7 @@ Copy `.env.example` to `.env` (never commit `.env`):
 Copy-Item .env.example .env
 ```
 Leave `LIVE_TRADING_ENABLED=false` for Paper Trading mode.
+The current paper setup starts with ₹15,000 and trades the RELIANCE manual symbol only; the 15-symbol scanner remains disabled while it is tested.
 
 ### Step 3: Run Paper Trading Dashboard
 ```powershell
@@ -108,7 +109,7 @@ Open your browser at `http://127.0.0.1:5000` to monitor:
 ```powershell
 .venv\Scripts\python analyze_trailing_sl.py
 ```
-This writes `strategy_oos_report.json` with the 1.5R, 2R, and 50% partial-at-1R/2R-runner results. It uses the full 15-symbol candidate pool, the configured 0.25% risk sizing, and the latest 20 common sessions as the holdout. The report keeps the earlier sessions separate and records the fill, stop-priority, risk-limit, and charge assumptions.
+This writes `strategy_oos_report.json` with the 1.5R, 2R, and 50% partial-at-1R/2R-runner results. It reports the latest available three calendar months and 30 calendar days, each starting with separate ₹15,000 capital, plus a chronological 20-session holdout. It uses the full 15-symbol candidate pool, the configured 0.25% risk sizing, and records the fill, stop-priority, risk-limit, and charge assumptions.
 
 ### Step 6: Run Automated Test Suite
 ```powershell

@@ -57,7 +57,7 @@ def run_app():
         )
     else:
         logger.info("Operating in PAPER TRADING mode. Real orders are impossible.")
-        broker = PaperBroker(initial_margin=100000.0)
+        broker = PaperBroker(starting_margin=config.paper_starting_capital)
 
     # Initialize Strategy Engine
     engine = StrategyEngine(config=config, broker=broker, journal=journal)

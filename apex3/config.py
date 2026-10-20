@@ -181,6 +181,7 @@ class SecretsConfig:
 class AppConfig:
     """Complete application configuration."""
     mode: str = "paper"
+    paper_starting_capital: float = 15_000.0
     watchlist: WatchlistConfig = field(default_factory=WatchlistConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
@@ -286,6 +287,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
 
     return AppConfig(
         mode=str(raw.get("mode", "paper")),
+        paper_starting_capital=float(raw.get("paper_starting_capital", 15_000.0)),
         watchlist=WatchlistConfig(
             symbols=watchlist_raw.get("symbols", []),
             scanner_enabled=bool(watchlist_raw.get("scanner_enabled", False)),

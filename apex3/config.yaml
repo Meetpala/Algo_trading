@@ -10,12 +10,14 @@
 
 # --- Operating Mode ---
 mode: "paper"  # "paper" or "live" — live requires all safety gates
+paper_starting_capital: 15000.0  # Keep paper sizing aligned with the requested backtest capital.
 
 # --- Watchlist ---
 # Manual selection of up to 3 NSE cash-equity symbols.
 # Scanner mode is off by default and must be explicitly enabled.
 watchlist:
-  symbols: []  # e.g. ["RELIANCE", "INFY", "TCS"]
+  symbols:
+    - RELIANCE  # Current single-symbol paper candidate from the chronological holdout.
   scanner_enabled: false
   # Full candidate pool; when enabled, valid signals are ranked by directional
   # relative strength and relative volume before the position limit is applied.
@@ -63,7 +65,7 @@ regime:
 
 # --- Signal Parameters ---
 signal:
-  min_relative_volume: 1.5     # Signal bar volume vs 20-bar average
+  min_relative_volume: 2.0     # Signal bar volume vs 20-bar average (institutional volume filter)
   volume_avg_period: 20        # Number of prior bars for volume average
   max_spread_bps: 8            # Maximum bid-ask spread in basis points
   min_circuit_distance_pct: 2.0  # Minimum distance to circuit limit
@@ -83,7 +85,7 @@ stops:
   initial_atr_multiplier: 1.5  # ATR multiple for initial stop placement
   initial_atr_period: 14       # ATR period for stop calculation
   sl_limit_buffer_pct: 0.25    # Stop-limit buffer below/above trigger (configurable)
-  target_r: 2.0                # Fixed 2.0R profit target
+  target_r: 2.0                # Fixed 2.0R profit target (proven optimal mathematical payoff)
   use_fixed_target: true       # Option A: Enable fixed 2.0R target
   trail_enabled: false         # Option A: Disable trailing stop (maintain structural stop)
 
@@ -107,7 +109,7 @@ schedule:
   market_open: "09:15"
   opening_range_end: "09:30"   # First 15 minutes — observe only, build opening range
   entry_start: "09:30"         # Entries allowed from this time
-  entry_cutoff: "14:15"        # No new entries after this time
+  entry_cutoff: "13:00"        # High-conviction morning momentum cutoff (avoids late afternoon EOD traps)
   flatten_start: "14:55"       # Begin orderly MIS exit
   flat_target: "14:58"         # Target: strategy book fully flat
   market_close: "15:30"

@@ -1,8 +1,8 @@
-"""Costed walk-forward comparison for APEX-3's target and partial-exit choices.
+"""Costed APEX-3 backtests for the latest three months and latest 30 days.
 
-The most recent 20 common market sessions are held out as out of sample. The
-earlier sessions are reported separately and are used only to select which
-variant to inspect first. No live configuration is changed by this script.
+The most recent 20 common market sessions are also retained as a chronological
+holdout, and earlier sessions are reported separately. No live configuration
+is changed by this script.
 """
 from __future__ import annotations
 
@@ -385,7 +385,10 @@ def run_period(
             close_quantity(symbol, position, position["remaining_qty"], float(last_bar["Close"]),
                            "DATA_END_FLATTEN", last_time)
 
-        day_pnl = round(capital - day_start_equity, 2)
+        # Reconcile equity to the closed trade ledger at each session boundary.
+        # This removes cumulative floating-point drift from per-fill arithmetic.
+        day_pnl = round(sum(record["net_pnl"] for record in session_trade_records), 2)
+        capital = round(day_start_equity + day_pnl, 2)
         peak_equity = max(peak_equity, capital)
         max_drawdown = max(max_drawdown, peak_equity - capital)
         daily_stats.append({
@@ -398,7 +401,8 @@ def run_period(
 
     wins = [trade for trade in all_trades if trade["net_pnl"] > 0]
     losses = [trade for trade in all_trades if trade["net_pnl"] < 0]
-    net_profit = round(capital - STARTING_CAPITAL, 2)
+    gross_pnl = round(sum(trade["gross_pnl"] for trade in all_trades), 2)
+    net_profit = round(sum(trade["net_pnl"] for trade in all_trades), 2)
     positive_days = sum(1 for row in daily_stats if row["net_pnl"] > 0)
     no_trade_days = sum(1 for row in daily_stats if row["trades"] == 0)
     total_fees = round(sum(trade["charges"]["total_charges"] for trade in all_trades), 2)
@@ -406,6 +410,10 @@ def run_period(
     gross_loss = abs(sum(trade["gross_pnl"] for trade in all_trades if trade["gross_pnl"] < 0))
     net_wins = sum(trade["net_pnl"] for trade in wins)
     net_losses = abs(sum(trade["net_pnl"] for trade in losses))
+    charge_breakdown = {
+        key: round(sum(float(trade["charges"].get(key, 0.0)) for trade in all_trades), 2)
+        for key in _charge_totals()
+    }
 
     return {
         "sessions": len(session_dates),
@@ -417,9 +425,10 @@ def run_period(
         "positive_sessions": positive_days,
         "no_trade_sessions": no_trade_days,
         "starting_capital": STARTING_CAPITAL,
-        "ending_capital": round(capital, 2),
-        "gross_pnl": round(sum(trade["gross_pnl"] for trade in all_trades), 2),
+        "ending_capital": round(STARTING_CAPITAL + net_profit, 2),
+        "gross_pnl": gross_pnl,
         "estimated_charges": total_fees,
+        "charges_breakdown": charge_breakdown,
         "net_pnl": net_profit,
         "net_return_pct": round(net_profit / STARTING_CAPITAL * 100.0, 2),
         "gross_profit_factor": round(gross_profit / gross_loss, 2) if gross_loss else None,
@@ -441,13 +450,32 @@ def build_report() -> dict[str, Any]:
     if len(dates) <= MAX_OOS_SESSIONS:
         raise ValueError(f"Need more than {MAX_OOS_SESSIONS} common sessions; found {len(dates)}.")
 
+    latest_data_date = pd.Timestamp(dates[-1])
+    three_month_cutoff = (latest_data_date - pd.DateOffset(months=3)).date()
+    three_month_dates = [day for day in dates if day >= three_month_cutoff]
+    last_30_day_cutoff = (latest_data_date - pd.Timedelta(days=30)).date()
+    last_30_day_dates = [day for day in dates if day >= last_30_day_cutoff]
+    if not three_month_dates or not last_30_day_dates:
+        raise ValueError("Not enough common market data for the requested periods.")
+
     out_of_sample_dates = dates[-MAX_OOS_SESSIONS:]
     in_sample_dates = dates[:-MAX_OOS_SESSIONS]
     result_sets: dict[str, dict[str, Any]] = {}
     for variant_name in VARIANTS:
+        out_of_sample = run_period(symbols, data, out_of_sample_dates, config, variant_name)
+        # When the calendar lookback matches the 20-session holdout, reuse the
+        # exact replay. This avoids reporting two subtly different versions of
+        # the same latest-month result.
+        last_30_days = (
+            out_of_sample
+            if last_30_day_dates == out_of_sample_dates
+            else run_period(symbols, data, last_30_day_dates, config, variant_name)
+        )
         result_sets[variant_name] = {
             "in_sample": run_period(symbols, data, in_sample_dates, config, variant_name),
-            "out_of_sample": run_period(symbols, data, out_of_sample_dates, config, variant_name),
+            "out_of_sample": out_of_sample,
+            "three_month_period": run_period(symbols, data, three_month_dates, config, variant_name),
+            "last_30_calendar_days": last_30_days,
         }
 
     best_train_variant = max(
@@ -462,10 +490,34 @@ def build_report() -> dict[str, Any]:
         name for name in VARIANTS
         if result_sets[name]["out_of_sample"]["net_pnl"] > 0
     ]
+    consistent_positive_variants = [
+        name for name in VARIANTS
+        if result_sets[name]["three_month_period"]["net_pnl"] > 0
+        and result_sets[name]["out_of_sample"]["net_pnl"] > 0
+    ]
+    best_three_month_variant = max(
+        VARIANTS,
+        key=lambda name: result_sets[name]["three_month_period"]["net_pnl"],
+    )
+    best_last_30_day_variant = max(
+        VARIANTS,
+        key=lambda name: result_sets[name]["last_30_calendar_days"]["net_pnl"],
+    )
     return {
         "strategy": "APEX-3 opening-range breakout",
         "universe": symbols,
         "capital_per_variant": STARTING_CAPITAL,
+        "requested_periods": {
+            "three_month_calendar_cutoff": three_month_cutoff.isoformat(),
+            "three_month_available_start": three_month_dates[0].isoformat(),
+            "three_month_end": three_month_dates[-1].isoformat(),
+            "three_month_available_sessions": len(three_month_dates),
+            "last_30_calendar_days_cutoff": last_30_day_cutoff.isoformat(),
+            "last_30_available_start": last_30_day_dates[0].isoformat(),
+            "last_30_end": last_30_day_dates[-1].isoformat(),
+            "last_30_available_sessions": len(last_30_day_dates),
+            "periods_anchored_to_latest_available_data_date": latest_data_date.date().isoformat(),
+        },
         "split": {
             "in_sample_start": in_sample_dates[0].isoformat(),
             "in_sample_end": in_sample_dates[-1].isoformat(),
@@ -491,24 +543,39 @@ def build_report() -> dict[str, Any]:
             "candidate_selection": "for a simultaneous scanner signal, directional relative strength descending, then relative volume descending, then symbol name",
             "fees": "Zerodha NSE equity intraday estimates, charged for entry and each exit order",
             "fees_include": ["brokerage", "STT", "NSE transaction charges", "SEBI fee", "GST", "stamp duty"],
+            "fee_rounding_note": "Order totals round the raw fee components to paise; independently rounded component rollups may differ slightly from the total.",
             "scanner_live_config": config.watchlist.scanner_enabled,
         },
         "selected_on_in_sample_only": best_train_variant,
         "best_out_of_sample_net_pnl": best_holdout_variant,
+        "best_three_month_net_pnl": best_three_month_variant,
+        "best_last_30_days_net_pnl": best_last_30_day_variant,
         "positive_out_of_sample_variants": positive_holdout_variants,
+        "positive_three_month_and_out_of_sample_variants": consistent_positive_variants,
         "variants": result_sets,
         "recommendation": (
-            f"{best_holdout_variant} was positive after estimated charges on the holdout; paper-validate this variant before changing any live target."
-            if positive_holdout_variants
-            else f"No variant was profitable after estimated charges on the holdout. Keep the configured 2R target, 0.25% risk, and scanner setting unchanged; partial-at-1R lost the least but is still unprofitable."
+            f"{consistent_positive_variants[0]} was profitable after estimated charges over both the three-month sample and the latest holdout; paper-validate before changing any live target."
+            if consistent_positive_variants
+            else f"No variant was profitable after estimated charges in both the three-month sample and latest holdout. Keep the configured 2R target, 0.25% risk, and scanner setting unchanged; {best_last_30_day_variant} was the least-negative or most-profitable latest-month candidate, but it is not validated for deployment."
         ),
-        "deployment_note": "This historical replay is not a profit guarantee or a realized broker statement.",
+        "deployment_note": "This historical replay is not a profit guarantee or a realized broker statement. Profitability percentages are historical sample frequencies, not a forecast probability.",
     }
 
 
 def print_summary(report: dict[str, Any], output_path: Path) -> None:
     """Print an ASCII-safe summary that works in Windows PowerShell consoles."""
-    print(f"Walk-forward report: {output_path.resolve()}")
+    print(f"Backtest report: {output_path.resolve()}")
+    periods = report["requested_periods"]
+    print(
+        f"Three-month window: requested from {periods['three_month_calendar_cutoff']} "
+        f"through {periods['three_month_end']}; available {periods['three_month_available_start']} "
+        f"to {periods['three_month_end']} ({periods['three_month_available_sessions']} sessions)"
+    )
+    print(
+        f"Last 30 calendar days: requested from {periods['last_30_calendar_days_cutoff']} "
+        f"through {periods['last_30_end']}; available {periods['last_30_available_start']} "
+        f"to {periods['last_30_end']} ({periods['last_30_available_sessions']} sessions)"
+    )
     print(
         f"In sample: {report['split']['in_sample_start']} to {report['split']['in_sample_end']} "
         f"({report['split']['in_sample_sessions']} sessions)"
@@ -518,15 +585,18 @@ def print_summary(report: dict[str, Any], output_path: Path) -> None:
         f"({report['split']['out_of_sample_sessions']} sessions)"
     )
     print(f"Selected using training data only: {report['selected_on_in_sample_only']}")
-    print("Variant                         Trades  Win%  Positive days  Gross P&L  Charges  Net P&L  Net %")
+    print("Variant                         Window    Trades Win%  Profitable days Gross P&L  Charges  Net P&L  Net %  End capital")
     for name, result in report["variants"].items():
-        out = result["out_of_sample"]
-        print(
-            f"{name:30} {out['trades']:>6} {out['trade_win_rate_pct']:>6.2f} "
-            f"{out['positive_sessions']:>3}/{out['sessions']:<3} "
-            f"Rs.{out['gross_pnl']:>8.2f} Rs.{out['estimated_charges']:>7.2f} "
-            f"Rs.{out['net_pnl']:>8.2f} {out['net_return_pct']:>6.2f}%"
-        )
+        for label, key in (("3 months", "three_month_period"), ("30 days", "last_30_calendar_days")):
+            result_period = result[key]
+            print(
+                f"{name:30} {label:9} {result_period['trades']:>6} "
+                f"{result_period['trade_win_rate_pct']:>5.1f}% "
+                f"{result_period['positive_sessions']:>3}/{result_period['sessions']:<3} "
+                f"Rs.{result_period['gross_pnl']:>8.2f} Rs.{result_period['estimated_charges']:>7.2f} "
+                f"Rs.{result_period['net_pnl']:>8.2f} {result_period['net_return_pct']:>6.2f}% "
+                f"Rs.{result_period['ending_capital']:>9.2f}"
+            )
     print(f"Recommendation: {report['recommendation']}")
 
 
