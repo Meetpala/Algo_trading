@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request
 
 from apex3.config import AppConfig
 from apex3.journal.sqlite_journal import Journal
@@ -42,6 +42,44 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
     @app.route("/")
     def index():
         return render_template("dashboard.html", mode=config.mode)
+
+    @app.route("/login/kite")
+    def login_kite():
+        """Redirects operator to Zerodha Kite login page."""
+        api_key = config.secrets.kite_api_key or os.environ.get("KITE_API_KEY", "")
+        if not api_key:
+            return "Error: KITE_API_KEY is not set in .env", 400
+        kite_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
+        return redirect(kite_url)
+
+    @app.route("/auth/callback")
+    def auth_callback():
+        """Captures request_token from Kite redirect, exchanges for daily access_token, and saves to .env."""
+        request_token = request.args.get("request_token")
+        if not request_token:
+            return "Error: No request_token received from Zerodha", 400
+
+        api_key = config.secrets.kite_api_key or os.environ.get("KITE_API_KEY", "")
+        api_secret = config.secrets.kite_api_secret or os.environ.get("KITE_API_SECRET", "")
+
+        try:
+            from kiteconnect import KiteConnect
+            from dotenv import set_key
+            kite = KiteConnect(api_key=api_key)
+            data = kite.generate_session(request_token, api_secret=api_secret)
+            token = data.get("access_token")
+
+            env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+            set_key(env_file, "KITE_ACCESS_TOKEN", token)
+            os.environ["KITE_ACCESS_TOKEN"] = token
+
+            if hasattr(engine.broker, "_kite") and engine.broker._kite:
+                engine.broker._kite.set_access_token(token)
+                engine.broker._access_token = token
+
+            return redirect("/?auth=success")
+        except Exception as e:
+            return f"Authentication Failed: {e}", 500
 
     @app.route("/api/status")
     def api_status():
