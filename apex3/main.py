@@ -38,6 +38,7 @@ def run_app():
     parser.add_argument("--config", type=str, default=None, help="Path to custom config.yaml")
     parser.add_argument("--mode", type=str, default=None, choices=["paper", "live"], help="Operating mode (paper or live)")
     parser.add_argument("--simulate", action="store_true", help="Run a simulated trading day and print report")
+    parser.add_argument("--host", type=str, default=None, help="Dashboard host interface (e.g. 0.0.0.0)")
     parser.add_argument("--port", type=int, default=5000, help="Local operator dashboard port")
     args = parser.parse_args()
 
@@ -95,14 +96,16 @@ def run_app():
 
     # Create & Run Flask Local Dashboard
     dashboard_app = create_app(engine, config, journal)
+    host = args.host or config.dashboard.host
+    port = args.port or config.dashboard.port
     logger.info(
-        "Starting APEX-3 Local Operator Dashboard at http://%s:%d (localhost only)...",
-        config.dashboard.host,
-        args.port or config.dashboard.port,
+        "Starting APEX-3 Operator Dashboard at http://%s:%d...",
+        host,
+        port,
     )
     dashboard_app.run(
-        host=config.dashboard.host,
-        port=args.port or config.dashboard.port,
+        host=host,
+        port=port,
         debug=False,
     )
 
