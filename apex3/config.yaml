@@ -1,7 +1,7 @@
 # apex3/config.yaml — Single Source of Truth for APEX-3 High-Profit Configuration
 
 # --- Operating Mode ---
-mode: "paper"  # "paper" or "live" — live requires all safety gates
+mode: "paper"  # "paper" or "live" — can also be overridden with CLI: --mode live
 paper_starting_capital: 15000.00
 
 account:
