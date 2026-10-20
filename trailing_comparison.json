@@ -1,0 +1,248 @@
+{
+  "comparison": [
+    {
+      "Strategy Variant": "1. With Trailing SL (Current System)",
+      "Trades": 36,
+      "Win Rate": "66.67%",
+      "Gross P&L (Rs)": 747.65,
+      "Profit Factor": 1.76,
+      "Charges (Rs)": 802.04,
+      "Net P&L (Rs)": -54.39,
+      "Net ROI": "-0.36%"
+    },
+    {
+      "Strategy Variant": "2. NO Trailing SL (Fixed SL + Hold to 14:55)",
+      "Trades": 28,
+      "Win Rate": "57.14%",
+      "Gross P&L (Rs)": 1120.5,
+      "Profit Factor": 2.23,
+      "Charges (Rs)": 677.51,
+      "Net P&L (Rs)": 442.99,
+      "Net ROI": "2.95%"
+    },
+    {
+      "Strategy Variant": "3. Fixed Target 1.5R (No Trailing)",
+      "Trades": 34,
+      "Win Rate": "64.71%",
+      "Gross P&L (Rs)": 1324.95,
+      "Profit Factor": 2.36,
+      "Charges (Rs)": 791.93,
+      "Net P&L (Rs)": 533.02,
+      "Net ROI": "3.55%"
+    },
+    {
+      "Strategy Variant": "4. Fixed Target 2.0R (No Trailing)",
+      "Trades": 31,
+      "Win Rate": "64.52%",
+      "Gross P&L (Rs)": 1579.2,
+      "Profit Factor": 2.9,
+      "Charges (Rs)": 709.01,
+      "Net P&L (Rs)": 870.19,
+      "Net ROI": "5.8%"
+    },
+    {
+      "Strategy Variant": "5. Wider Trailing SL (+1.5R Activation)",
+      "Trades": 31,
+      "Win Rate": "67.74%",
+      "Gross P&L (Rs)": 1041.8,
+      "Profit Factor": 2.16,
+      "Charges (Rs)": 721.57,
+      "Net P&L (Rs)": 320.23,
+      "Net ROI": "2.13%"
+    }
+  ],
+  "trail_deep_dive": [
+    {
+      "date": "2026-09-21",
+      "symbol": "TCS",
+      "side": "BUY",
+      "trailing_exit_price": 2130.9,
+      "actual_gross": 48.8,
+      "alt_exit_price": 2139.0,
+      "alt_gross": 113.6,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -64.8,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-09-22",
+      "symbol": "TCS",
+      "side": "SELL",
+      "trailing_exit_price": 2104.75,
+      "actual_gross": 49.95,
+      "alt_exit_price": 2118.1,
+      "alt_gross": -70.2,
+      "alt_reason": "WOULD_HIT_INITIAL_SL (Turned into Loss!)",
+      "diff_rupees": 120.15,
+      "verdict": "TRAILING_SAVED_PROFIT"
+    },
+    {
+      "date": "2026-09-22",
+      "symbol": "RELIANCE",
+      "side": "SELL",
+      "trailing_exit_price": 1241.95,
+      "actual_gross": 33.75,
+      "alt_exit_price": 1247.35,
+      "alt_gross": -47.25,
+      "alt_reason": "WOULD_HIT_INITIAL_SL (Turned into Loss!)",
+      "diff_rupees": 81.0,
+      "verdict": "TRAILING_SAVED_PROFIT"
+    },
+    {
+      "date": "2026-09-23",
+      "symbol": "RELIANCE",
+      "side": "BUY",
+      "trailing_exit_price": 1250.45,
+      "actual_gross": 47.25,
+      "alt_exit_price": 1245.5,
+      "alt_gross": -27.0,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": 74.25,
+      "verdict": "TRAILING_SAVED_PROFIT"
+    },
+    {
+      "date": "2026-09-24",
+      "symbol": "RELIANCE",
+      "side": "SELL",
+      "trailing_exit_price": 1229.6,
+      "actual_gross": 52.5,
+      "alt_exit_price": 1221.2,
+      "alt_gross": 178.5,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -126.0,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-09-24",
+      "symbol": "RELIANCE",
+      "side": "SELL",
+      "trailing_exit_price": 1224.3,
+      "actual_gross": 43.5,
+      "alt_exit_price": 1221.2,
+      "alt_gross": 90.0,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -46.5,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-09-24",
+      "symbol": "INFY",
+      "side": "SELL",
+      "trailing_exit_price": 1007.15,
+      "actual_gross": 60.75,
+      "alt_exit_price": 1009.7,
+      "alt_gross": -8.1,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": 68.85,
+      "verdict": "TRAILING_SAVED_PROFIT"
+    },
+    {
+      "date": "2026-09-28",
+      "symbol": "RELIANCE",
+      "side": "SELL",
+      "trailing_exit_price": 1200.8,
+      "actual_gross": 52.5,
+      "alt_exit_price": 1198.8,
+      "alt_gross": 82.5,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -30.0,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-09-29",
+      "symbol": "INFY",
+      "side": "SELL",
+      "trailing_exit_price": 985.9,
+      "actual_gross": 54.0,
+      "alt_exit_price": 986.4,
+      "alt_gross": 45.0,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": 9.0,
+      "verdict": "TRAILING_SAVED_PROFIT"
+    },
+    {
+      "date": "2026-10-06",
+      "symbol": "RELIANCE",
+      "side": "BUY",
+      "trailing_exit_price": 1213.4,
+      "actual_gross": 51.8,
+      "alt_exit_price": 1215.8,
+      "alt_gross": 85.4,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -33.6,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-10-07",
+      "symbol": "INFY",
+      "side": "SELL",
+      "trailing_exit_price": 992.85,
+      "actual_gross": 26.1,
+      "alt_exit_price": 991.95,
+      "alt_gross": 42.3,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -16.2,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-10-08",
+      "symbol": "RELIANCE",
+      "side": "SELL",
+      "trailing_exit_price": 1181.1,
+      "actual_gross": 52.5,
+      "alt_exit_price": 1177.4,
+      "alt_gross": 108.0,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -55.5,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-10-08",
+      "symbol": "TCS",
+      "side": "SELL",
+      "trailing_exit_price": 2073.95,
+      "actual_gross": 151.6,
+      "alt_exit_price": 2065.6,
+      "alt_gross": 218.4,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -66.8,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-10-12",
+      "symbol": "RELIANCE",
+      "side": "SELL",
+      "trailing_exit_price": 1158.6,
+      "actual_gross": 48.0,
+      "alt_exit_price": 1154.7,
+      "alt_gross": 106.5,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -58.5,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-10-12",
+      "symbol": "INFY",
+      "side": "SELL",
+      "trailing_exit_price": 1013.9,
+      "actual_gross": 123.5,
+      "alt_exit_price": 1011.8,
+      "alt_gross": 178.1,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": -54.6,
+      "verdict": "TRAILING_CUT_RUNNER_EARLY"
+    },
+    {
+      "date": "2026-10-15",
+      "symbol": "RELIANCE",
+      "side": "BUY",
+      "trailing_exit_price": 1210.7,
+      "actual_gross": 52.5,
+      "alt_exit_price": 1206.0,
+      "alt_gross": -18.0,
+      "alt_reason": "WOULD_EXIT_AT_EOD",
+      "diff_rupees": 70.5,
+      "verdict": "TRAILING_SAVED_PROFIT"
+    }
+  ]
+}

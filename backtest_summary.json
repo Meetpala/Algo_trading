@@ -1,0 +1,630 @@
+{
+  "primary_allocated": {
+    "name": "Primary Watchlist (Allocated 15k Capital)",
+    "total_trades": 36,
+    "winning_trades": 24,
+    "losing_trades": 12,
+    "break_even_trades": 0,
+    "profit_probability_pct": 66.67,
+    "gross_profit_rupees": 1731.8,
+    "gross_loss_rupees": 984.15,
+    "gross_pnl_rupees": 747.65,
+    "charges_breakdown": {
+      "brokerage": 448.96,
+      "stt": 187.14,
+      "exchange_txn": 51.61,
+      "sebi": 1.49,
+      "gst": 90.36,
+      "stamp_duty": 22.43,
+      "total_charges": 802.04
+    },
+    "net_pnl_rupees": -54.39,
+    "profit_percentage": -0.36,
+    "starting_capital": 15000.0,
+    "ending_capital": 14945.61,
+    "profit_factor": 1.76,
+    "average_win_rupees": 51.38,
+    "average_loss_rupees": -107.3,
+    "risk_reward_ratio": 0.48,
+    "max_drawdown_rupees": 814.22,
+    "max_drawdown_pct": 5.4,
+    "exit_reasons": {
+      "TRAILING_STOP_HIT": 16,
+      "EOD_FLATTEN_1455": 11,
+      "STRUCTURAL_STOP_HIT": 9
+    },
+    "daily_stats": [
+      {
+        "date": "2026-09-21",
+        "trades_count": 2,
+        "day_pnl": 44.22,
+        "closing_capital": 15044.22
+      },
+      {
+        "date": "2026-09-22",
+        "trades_count": 4,
+        "day_pnl": -108.31,
+        "closing_capital": 14935.91
+      },
+      {
+        "date": "2026-09-23",
+        "trades_count": 4,
+        "day_pnl": -216.08999999999997,
+        "closing_capital": 14719.82
+      },
+      {
+        "date": "2026-09-24",
+        "trades_count": 4,
+        "day_pnl": -89.77000000000001,
+        "closing_capital": 14630.05
+      },
+      {
+        "date": "2026-09-25",
+        "trades_count": 1,
+        "day_pnl": 8.81,
+        "closing_capital": 14638.86
+      },
+      {
+        "date": "2026-09-28",
+        "trades_count": 1,
+        "day_pnl": 33.16,
+        "closing_capital": 14672.02
+      },
+      {
+        "date": "2026-09-29",
+        "trades_count": 1,
+        "day_pnl": 34.95,
+        "closing_capital": 14706.97
+      },
+      {
+        "date": "2026-09-30",
+        "trades_count": 0,
+        "day_pnl": 0,
+        "closing_capital": 14706.97
+      },
+      {
+        "date": "2026-10-01",
+        "trades_count": 2,
+        "day_pnl": -294.97,
+        "closing_capital": 14412.0
+      },
+      {
+        "date": "2026-10-05",
+        "trades_count": 1,
+        "day_pnl": -114.58,
+        "closing_capital": 14297.42
+      },
+      {
+        "date": "2026-10-06",
+        "trades_count": 2,
+        "day_pnl": -37.800000000000004,
+        "closing_capital": 14259.62
+      },
+      {
+        "date": "2026-10-07",
+        "trades_count": 1,
+        "day_pnl": 6.93,
+        "closing_capital": 14266.55
+      },
+      {
+        "date": "2026-10-08",
+        "trades_count": 2,
+        "day_pnl": 167.2,
+        "closing_capital": 14433.75
+      },
+      {
+        "date": "2026-10-09",
+        "trades_count": 1,
+        "day_pnl": -83.4,
+        "closing_capital": 14350.35
+      },
+      {
+        "date": "2026-10-12",
+        "trades_count": 3,
+        "day_pnl": 149.42000000000002,
+        "closing_capital": 14499.77
+      },
+      {
+        "date": "2026-10-13",
+        "trades_count": 2,
+        "day_pnl": 433.45,
+        "closing_capital": 14933.22
+      },
+      {
+        "date": "2026-10-14",
+        "trades_count": 0,
+        "day_pnl": 0,
+        "closing_capital": 14933.22
+      },
+      {
+        "date": "2026-10-15",
+        "trades_count": 2,
+        "day_pnl": -40.459999999999994,
+        "closing_capital": 14892.76
+      },
+      {
+        "date": "2026-10-16",
+        "trades_count": 1,
+        "day_pnl": 99.19,
+        "closing_capital": 14991.95
+      },
+      {
+        "date": "2026-10-19",
+        "trades_count": 2,
+        "day_pnl": -46.34,
+        "closing_capital": 14945.61
+      }
+    ]
+  },
+  "primary_strict_config": {
+    "name": "Primary Watchlist (Strict 0.25% Risk)",
+    "total_trades": 39,
+    "winning_trades": 25,
+    "losing_trades": 14,
+    "break_even_trades": 0,
+    "profit_probability_pct": 64.1,
+    "gross_profit_rupees": 601.15,
+    "gross_loss_rupees": 327.9,
+    "gross_pnl_rupees": 273.25,
+    "charges_breakdown": {
+      "brokerage": 168.44,
+      "stt": 70.19,
+      "exchange_txn": 19.42,
+      "sebi": 0.52,
+      "gst": 33.9,
+      "stamp_duty": 8.43,
+      "total_charges": 300.95
+    },
+    "net_pnl_rupees": -27.7,
+    "profit_percentage": -0.18,
+    "starting_capital": 15000.0,
+    "ending_capital": 14972.3,
+    "profit_factor": 1.83,
+    "average_win_rupees": 16.37,
+    "average_loss_rupees": -31.21,
+    "risk_reward_ratio": 0.52,
+    "max_drawdown_rupees": 221.29,
+    "max_drawdown_pct": 1.47,
+    "exit_reasons": {
+      "TRAILING_STOP_HIT": 18,
+      "EOD_FLATTEN_1455": 10,
+      "STRUCTURAL_STOP_HIT": 11
+    },
+    "daily_stats": [
+      {
+        "date": "2026-09-21",
+        "trades_count": 2,
+        "day_pnl": 19.88,
+        "closing_capital": 15019.88
+      },
+      {
+        "date": "2026-09-22",
+        "trades_count": 4,
+        "day_pnl": -50.89999999999999,
+        "closing_capital": 14968.98
+      },
+      {
+        "date": "2026-09-23",
+        "trades_count": 4,
+        "day_pnl": -48.66,
+        "closing_capital": 14920.32
+      },
+      {
+        "date": "2026-09-24",
+        "trades_count": 5,
+        "day_pnl": -12.260000000000003,
+        "closing_capital": 14908.06
+      },
+      {
+        "date": "2026-09-25",
+        "trades_count": 1,
+        "day_pnl": 2.35,
+        "closing_capital": 14910.41
+      },
+      {
+        "date": "2026-09-28",
+        "trades_count": 1,
+        "day_pnl": 22.15,
+        "closing_capital": 14932.56
+      },
+      {
+        "date": "2026-09-29",
+        "trades_count": 1,
+        "day_pnl": 17.92,
+        "closing_capital": 14950.48
+      },
+      {
+        "date": "2026-09-30",
+        "trades_count": 0,
+        "day_pnl": 0,
+        "closing_capital": 14950.48
+      },
+      {
+        "date": "2026-10-01",
+        "trades_count": 2,
+        "day_pnl": -70.83,
+        "closing_capital": 14879.65
+      },
+      {
+        "date": "2026-10-05",
+        "trades_count": 1,
+        "day_pnl": -26.96,
+        "closing_capital": 14852.69
+      },
+      {
+        "date": "2026-10-06",
+        "trades_count": 3,
+        "day_pnl": -38.68000000000001,
+        "closing_capital": 14814.01
+      },
+      {
+        "date": "2026-10-07",
+        "trades_count": 1,
+        "day_pnl": 3.85,
+        "closing_capital": 14817.86
+      },
+      {
+        "date": "2026-10-08",
+        "trades_count": 3,
+        "day_pnl": 86.63,
+        "closing_capital": 14904.49
+      },
+      {
+        "date": "2026-10-09",
+        "trades_count": 1,
+        "day_pnl": -10.43,
+        "closing_capital": 14894.06
+      },
+      {
+        "date": "2026-10-12",
+        "trades_count": 3,
+        "day_pnl": 61.38,
+        "closing_capital": 14955.44
+      },
+      {
+        "date": "2026-10-13",
+        "trades_count": 2,
+        "day_pnl": 33.730000000000004,
+        "closing_capital": 14989.17
+      },
+      {
+        "date": "2026-10-14",
+        "trades_count": 0,
+        "day_pnl": 0,
+        "closing_capital": 14989.17
+      },
+      {
+        "date": "2026-10-15",
+        "trades_count": 2,
+        "day_pnl": -22.790000000000003,
+        "closing_capital": 14966.38
+      },
+      {
+        "date": "2026-10-16",
+        "trades_count": 1,
+        "day_pnl": 14.17,
+        "closing_capital": 14980.55
+      },
+      {
+        "date": "2026-10-19",
+        "trades_count": 2,
+        "day_pnl": -8.25,
+        "closing_capital": 14972.3
+      }
+    ]
+  },
+  "primary_1pct_risk": {
+    "name": "Primary Watchlist (1.0% Risk per Trade)",
+    "total_trades": 36,
+    "winning_trades": 24,
+    "losing_trades": 12,
+    "break_even_trades": 0,
+    "profit_probability_pct": 66.67,
+    "gross_profit_rupees": 1441.25,
+    "gross_loss_rupees": 868.5,
+    "gross_pnl_rupees": 572.75,
+    "charges_breakdown": {
+      "brokerage": 414.37,
+      "stt": 172.75,
+      "exchange_txn": 47.65,
+      "sebi": 1.42,
+      "gst": 83.38,
+      "stamp_duty": 20.69,
+      "total_charges": 740.26
+    },
+    "net_pnl_rupees": -167.51,
+    "profit_percentage": -1.12,
+    "starting_capital": 15000.0,
+    "ending_capital": 14832.49,
+    "profit_factor": 1.66,
+    "average_win_rupees": 40.43,
+    "average_loss_rupees": -94.81,
+    "risk_reward_ratio": 0.43,
+    "max_drawdown_rupees": 694.42,
+    "max_drawdown_pct": 4.61,
+    "exit_reasons": {
+      "TRAILING_STOP_HIT": 16,
+      "EOD_FLATTEN_1455": 11,
+      "STRUCTURAL_STOP_HIT": 9
+    },
+    "daily_stats": [
+      {
+        "date": "2026-09-21",
+        "trades_count": 2,
+        "day_pnl": 44.22,
+        "closing_capital": 15044.22
+      },
+      {
+        "date": "2026-09-22",
+        "trades_count": 4,
+        "day_pnl": -108.31,
+        "closing_capital": 14935.91
+      },
+      {
+        "date": "2026-09-23",
+        "trades_count": 4,
+        "day_pnl": -178.25,
+        "closing_capital": 14757.66
+      },
+      {
+        "date": "2026-09-24",
+        "trades_count": 4,
+        "day_pnl": -56.839999999999996,
+        "closing_capital": 14700.82
+      },
+      {
+        "date": "2026-09-25",
+        "trades_count": 1,
+        "day_pnl": 8.81,
+        "closing_capital": 14709.63
+      },
+      {
+        "date": "2026-09-28",
+        "trades_count": 1,
+        "day_pnl": 33.16,
+        "closing_capital": 14742.79
+      },
+      {
+        "date": "2026-09-29",
+        "trades_count": 1,
+        "day_pnl": 34.95,
+        "closing_capital": 14777.74
+      },
+      {
+        "date": "2026-09-30",
+        "trades_count": 0,
+        "day_pnl": 0,
+        "closing_capital": 14777.74
+      },
+      {
+        "date": "2026-10-01",
+        "trades_count": 2,
+        "day_pnl": -253.72,
+        "closing_capital": 14524.02
+      },
+      {
+        "date": "2026-10-05",
+        "trades_count": 1,
+        "day_pnl": -101.1,
+        "closing_capital": 14422.92
+      },
+      {
+        "date": "2026-10-06",
+        "trades_count": 2,
+        "day_pnl": -43.49999999999999,
+        "closing_capital": 14379.42
+      },
+      {
+        "date": "2026-10-07",
+        "trades_count": 1,
+        "day_pnl": 6.93,
+        "closing_capital": 14386.35
+      },
+      {
+        "date": "2026-10-08",
+        "trades_count": 2,
+        "day_pnl": 167.2,
+        "closing_capital": 14553.55
+      },
+      {
+        "date": "2026-10-09",
+        "trades_count": 1,
+        "day_pnl": -62.55,
+        "closing_capital": 14491.0
+      },
+      {
+        "date": "2026-10-12",
+        "trades_count": 3,
+        "day_pnl": 138.44,
+        "closing_capital": 14629.44
+      },
+      {
+        "date": "2026-10-13",
+        "trades_count": 2,
+        "day_pnl": 196.19,
+        "closing_capital": 14825.63
+      },
+      {
+        "date": "2026-10-14",
+        "trades_count": 0,
+        "day_pnl": 0,
+        "closing_capital": 14825.63
+      },
+      {
+        "date": "2026-10-15",
+        "trades_count": 2,
+        "day_pnl": -40.459999999999994,
+        "closing_capital": 14785.17
+      },
+      {
+        "date": "2026-10-16",
+        "trades_count": 1,
+        "day_pnl": 85.02,
+        "closing_capital": 14870.19
+      },
+      {
+        "date": "2026-10-19",
+        "trades_count": 2,
+        "day_pnl": -37.7,
+        "closing_capital": 14832.49
+      }
+    ]
+  },
+  "scanner_allocated": {
+    "name": "Scanner Universe (15 Stocks, Allocated)",
+    "total_trades": 120,
+    "winning_trades": 70,
+    "losing_trades": 50,
+    "break_even_trades": 0,
+    "profit_probability_pct": 58.33,
+    "gross_profit_rupees": 10349.2,
+    "gross_loss_rupees": 5788.75,
+    "gross_pnl_rupees": 4560.45,
+    "charges_breakdown": {
+      "brokerage": 2694.01,
+      "stt": 1123.08,
+      "exchange_txn": 309.81,
+      "sebi": 8.91,
+      "gst": 542.31,
+      "stamp_duty": 134.64,
+      "total_charges": 4812.83
+    },
+    "net_pnl_rupees": -252.37,
+    "profit_percentage": -1.68,
+    "starting_capital": 15000.0,
+    "ending_capital": 14747.63,
+    "profit_factor": 1.79,
+    "average_win_rupees": 105.62,
+    "average_loss_rupees": -152.91,
+    "risk_reward_ratio": 0.69,
+    "max_drawdown_rupees": 2114.33,
+    "max_drawdown_pct": 14.1,
+    "exit_reasons": {
+      "STRUCTURAL_STOP_HIT": 31,
+      "TRAILING_STOP_HIT": 54,
+      "EOD_FLATTEN_1455": 35
+    },
+    "daily_stats": [
+      {
+        "date": "2026-09-21",
+        "trades_count": 6,
+        "day_pnl": -681.95,
+        "closing_capital": 14318.05
+      },
+      {
+        "date": "2026-09-22",
+        "trades_count": 11,
+        "day_pnl": -259.74999999999994,
+        "closing_capital": 14058.3
+      },
+      {
+        "date": "2026-09-23",
+        "trades_count": 4,
+        "day_pnl": -47.01999999999999,
+        "closing_capital": 14011.29
+      },
+      {
+        "date": "2026-09-24",
+        "trades_count": 8,
+        "day_pnl": -187.71999999999997,
+        "closing_capital": 13823.56
+      },
+      {
+        "date": "2026-09-25",
+        "trades_count": 6,
+        "day_pnl": -75.57999999999998,
+        "closing_capital": 13747.98
+      },
+      {
+        "date": "2026-09-28",
+        "trades_count": 5,
+        "day_pnl": 143.92000000000002,
+        "closing_capital": 13891.9
+      },
+      {
+        "date": "2026-09-29",
+        "trades_count": 4,
+        "day_pnl": -546.83,
+        "closing_capital": 13345.07
+      },
+      {
+        "date": "2026-09-30",
+        "trades_count": 4,
+        "day_pnl": -370.57,
+        "closing_capital": 12974.5
+      },
+      {
+        "date": "2026-10-01",
+        "trades_count": 7,
+        "day_pnl": 703.7399999999999,
+        "closing_capital": 13678.24
+      },
+      {
+        "date": "2026-10-05",
+        "trades_count": 6,
+        "day_pnl": -211.02,
+        "closing_capital": 13467.22
+      },
+      {
+        "date": "2026-10-06",
+        "trades_count": 7,
+        "day_pnl": 280.54,
+        "closing_capital": 13747.76
+      },
+      {
+        "date": "2026-10-07",
+        "trades_count": 5,
+        "day_pnl": -407.77,
+        "closing_capital": 13339.99
+      },
+      {
+        "date": "2026-10-08",
+        "trades_count": 7,
+        "day_pnl": 250.98999999999995,
+        "closing_capital": 13590.98
+      },
+      {
+        "date": "2026-10-09",
+        "trades_count": 7,
+        "day_pnl": 47.96000000000009,
+        "closing_capital": 13638.93
+      },
+      {
+        "date": "2026-10-12",
+        "trades_count": 6,
+        "day_pnl": 565.56,
+        "closing_capital": 14204.5
+      },
+      {
+        "date": "2026-10-13",
+        "trades_count": 4,
+        "day_pnl": 878.94,
+        "closing_capital": 15083.44
+      },
+      {
+        "date": "2026-10-14",
+        "trades_count": 7,
+        "day_pnl": -677.06,
+        "closing_capital": 14406.38
+      },
+      {
+        "date": "2026-10-15",
+        "trades_count": 7,
+        "day_pnl": 57.62000000000001,
+        "closing_capital": 14464.01
+      },
+      {
+        "date": "2026-10-16",
+        "trades_count": 4,
+        "day_pnl": 320.20000000000005,
+        "closing_capital": 14784.21
+      },
+      {
+        "date": "2026-10-19",
+        "trades_count": 5,
+        "day_pnl": -36.58000000000003,
+        "closing_capital": 14747.63
+      }
+    ]
+  }
+}

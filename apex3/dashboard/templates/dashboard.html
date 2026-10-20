@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APEX-3 Operator Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="navbar">
+        <div class="brand">
+            <span class="logo">⚡ APEX-3</span>
+            <span class="subtitle">Zerodha Intraday Execution System</span>
+        </div>
+        <div class="header-badges">
+            <span id="badge-mode" class="badge badge-paper">MODE: PAPER</span>
+            <span id="badge-clock" class="badge badge-neutral">--:--:-- IST</span>
+            <span id="badge-session" class="badge badge-info">SESSION: --</span>
+        </div>
+        <div class="header-actions">
+            <button id="btn-pause" class="btn btn-warning" onclick="togglePause()">Pause Strategy</button>
+            <button id="btn-flatten" class="btn btn-danger" onclick="emergencyFlatten()">⚠️ Emergency Flatten</button>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- Top Status Row -->
+        <section class="grid-3">
+            <div class="card">
+                <h3>🏛️ Market Regime (NIFTY 50)</h3>
+                <div class="metric-row">
+                    <span class="label">Status:</span>
+                    <strong id="regime-status" class="value">--</strong>
+                </div>
+                <div class="metric-row">
+                    <span class="label">5m ADX:</span>
+                    <span id="regime-adx" class="value">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="label">EMA-20 Slope:</span>
+                    <span id="regime-slope" class="value">--</span>
+                </div>
+                <p id="regime-desc" class="text-muted text-sm mt-2">Checking benchmark OHLC trend...</p>
+            </div>
+
+            <div class="card">
+                <h3>💰 Account Margins (Kite Connect)</h3>
+                <div class="metric-row">
+                    <span class="label">Available Margin:</span>
+                    <strong id="margin-avail" class="value text-success">₹0.00</strong>
+                </div>
+                <div class="metric-row">
+                    <span class="label">Utilised Margin:</span>
+                    <span id="margin-used" class="value">₹0.00</span>
+                </div>
+                <div class="metric-row">
+                    <span class="label">Net Equity:</span>
+                    <span id="margin-net" class="value">₹0.00</span>
+                </div>
+                <p class="text-muted text-sm mt-2">4x leverage is a ceiling; broker order-margin is authoritative.</p>
+            </div>
+
+            <div class="card">
+                <h3>🎯 Active Watchlist (Max 3)</h3>
+                <div id="watchlist-display" class="tag-container mb-2">
+                    <span class="tag">Loading...</span>
+                </div>
+                <div class="input-group">
+                    <input type="text" id="input-symbols" placeholder="e.g. RELIANCE, INFY, TCS" />
+                    <button class="btn btn-primary btn-sm" onclick="saveWatchlist()">Update</button>
+                </div>
+                <p class="text-muted text-sm mt-1">Manual top-3 selection by default.</p>
+            </div>
+        </section>
+
+        <!-- Current Pipeline Decisions & Gates -->
+        <section class="card mt-3">
+            <h3>🔍 Current Engine Evaluation & Gates</h3>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Decision</th>
+                            <th>Reason / Gates</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="decisions-tbody">
+                        <tr><td colspan="4" class="text-center">Evaluating strategy pipeline...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Active Positions & Protective Stops -->
+        <section class="card mt-3">
+            <h3>🛡️ Open Strategy MIS Positions & Protective Stops</h3>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Quantity</th>
+                            <th>Avg Fill</th>
+                            <th>Protective Stop</th>
+                            <th>Favorable Price</th>
+                            <th>Progress (R)</th>
+                            <th>Trail Status</th>
+                            <th>Mods (Max 25)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-tbody">
+                        <tr><td colspan="9" class="text-center">No open positions (Book is Flat)</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Event Journal -->
+        <section class="card mt-3">
+            <h3>📜 Live Audit & Decision Journal</h3>
+            <div id="events-log" class="log-stream">
+                <div class="log-entry">Waiting for strategy cycle...</div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                
+                // Clock & Badges
+                document.getElementById('badge-clock').textContent = data.timestamp_ist;
+                document.getElementById('badge-mode').textContent = 'MODE: ' + data.mode;
+                document.getElementById('badge-session').textContent = 'SESSION: ' + data.session.state;
+                
+                // Pause button state
+                const btnPause = document.getElementById('btn-pause');
+                if (data.is_paused) {
+                    btnPause.textContent = '▶️ Resume Strategy';
+                    btnPause.className = 'btn btn-success';
+                } else {
+                    btnPause.textContent = '⏸️ Pause Strategy';
+                    btnPause.className = 'btn btn-warning';
+                }
+
+                // Regime
+                const rState = document.getElementById('regime-status');
+                rState.textContent = data.regime.state;
+                rState.className = 'value ' + (data.regime.state === 'BULLISH' ? 'text-success' : (data.regime.state === 'BEARISH' ? 'text-danger' : 'text-warning'));
+                document.getElementById('regime-adx').textContent = data.regime.adx ? data.regime.adx.toFixed(1) : '--';
+                document.getElementById('regime-slope').textContent = data.regime.ema_slope > 0 ? 'Rising ↗' : (data.regime.ema_slope < 0 ? 'Falling ↘' : 'Flat →');
+                document.getElementById('regime-desc').textContent = data.regime.reason || '';
+
+                // Margins
+                document.getElementById('margin-avail').textContent = '₹' + data.margins.available.toLocaleString('en-IN', {minimumFractionDigits: 2});
+                document.getElementById('margin-used').textContent = '₹' + data.margins.used.toLocaleString('en-IN', {minimumFractionDigits: 2});
+                document.getElementById('margin-net').textContent = '₹' + data.margins.net.toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+                // Watchlist
+                const wlDiv = document.getElementById('watchlist-display');
+                if (data.watchlist && data.watchlist.length > 0) {
+                    wlDiv.innerHTML = data.watchlist.map(s => `<span class="tag">${s}</span>`).join(' ');
+                } else {
+                    wlDiv.innerHTML = '<span class="text-muted">No symbols configured</span>';
+                }
+
+                // Decisions
+                const dTbody = document.getElementById('decisions-tbody');
+                if (data.decisions && data.decisions.length > 0) {
+                    dTbody.innerHTML = data.decisions.map(d => `
+                        <tr>
+                            <td><strong>${d.symbol}</strong></td>
+                            <td><span class="badge ${d.decision === 'WAIT' ? 'badge-neutral' : (d.decision === 'EXIT' ? 'badge-danger' : 'badge-success')}">${d.decision}</span></td>
+                            <td class="text-sm">${d.reason}</td>
+                            <td><code>${d.action}</code></td>
+                        </tr>
+                    `).join('');
+                } else {
+                    dTbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No active evaluation</td></tr>';
+                }
+
+                // Positions
+                const pTbody = document.getElementById('positions-tbody');
+                if (data.open_positions && data.open_positions.length > 0) {
+                    pTbody.innerHTML = data.open_positions.map(p => `
+                        <tr>
+                            <td><strong>${p.symbol}</strong></td>
+                            <td><span class="badge ${p.side === 'BUY' ? 'badge-success' : 'badge-danger'}">${p.side}</span></td>
+                            <td>${p.quantity}</td>
+                            <td>₹${p.average_entry.toFixed(2)}</td>
+                            <td><strong class="text-warning">₹${p.current_stop.toFixed(2)}</strong></td>
+                            <td>₹${p.best_favorable_price.toFixed(2)}</td>
+                            <td><strong>+${p.r_multiple}R</strong></td>
+                            <td>${p.trail_activated ? '<span class="text-success">Active 🎯</span>' : '<span class="text-muted">Waiting +1R</span>'}</td>
+                            <td>${p.modification_count}/25</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    pTbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">No open positions (Book is Flat)</td></tr>';
+                }
+
+                // Recent Events
+                const eDiv = document.getElementById('events-log');
+                if (data.recent_events && data.recent_events.length > 0) {
+                    eDiv.innerHTML = data.recent_events.map(e => `
+                        <div class="log-entry">
+                            <span class="text-muted">[${e.timestamp_ist.split('T')[1].split('.')[0]}]</span>
+                            <strong>${e.event_type}</strong> ${e.symbol ? `(${e.symbol})` : ''} - ${e.explanation}
+                        </div>
+                    `).join('');
+                }
+            } catch (err) {
+                console.error("Fetch status failed", err);
+            }
+        }
+
+        async function togglePause() {
+            await fetch('/api/pause', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})});
+            fetchStatus();
+        }
+
+        async function emergencyFlatten() {
+            if (confirm("CONFIRM EMERGENCY FLATTEN: This will cancel all strategy orders and market exit all strategy MIS positions immediately.")) {
+                const res = await fetch('/api/emergency_flatten', {method: 'POST'});
+                const data = await res.json();
+                alert(data.message);
+                fetchStatus();
+            }
+        }
+
+        async function saveWatchlist() {
+            const val = document.getElementById('input-symbols').value;
+            const symbols = val.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+            if (symbols.length === 0) return alert("Please enter at least 1 symbol");
+            if (symbols.length > 3) return alert("APEX-3 allows maximum 3 symbols in active watchlist");
+            
+            await fetch('/api/watchlist', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({symbols: symbols})
+            });
+            document.getElementById('input-symbols').value = '';
+            fetchStatus();
+        }
+
+        setInterval(fetchStatus, 2000);
+        fetchStatus();
+    </script>
+</body>
+</html>
