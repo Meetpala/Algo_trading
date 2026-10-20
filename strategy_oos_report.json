@@ -53,6 +53,8 @@
     "scanner_live_config": false
   },
   "selected_on_in_sample_only": "fixed_2R",
+  "best_out_of_sample_net_pnl": "partial_1R_runner_2R",
+  "positive_out_of_sample_variants": [],
   "variants": {
     "fixed_1_5R": {
       "in_sample": {
@@ -18571,8 +18573,6 @@
       }
     }
   },
-  "deployment_note": "This historical replay is not a profit guarantee or a realized broker statement.",
-  "best_out_of_sample_net_pnl": "partial_1R_runner_2R",
-  "positive_out_of_sample_variants": [],
-  "recommendation": "No variant was profitable after estimated charges on the holdout. Keep the configured 2R target, 0.25% risk, and scanner setting unchanged; partial-at-1R lost the least but is still unprofitable."
+  "recommendation": "No variant was profitable after estimated charges on the holdout. Keep the configured 2R target, 0.25% risk, and scanner setting unchanged; partial-at-1R lost the least but is still unprofitable.",
+  "deployment_note": "This historical replay is not a profit guarantee or a realized broker statement."
 }
