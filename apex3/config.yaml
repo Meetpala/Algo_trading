@@ -21,9 +21,9 @@ session_schedule:
   timezone: "Asia/Kolkata"
   or_start_time: "09:15"              # Opening Range start
   or_end_time: "09:30"                # Opening Range locked at 09:30 IST
-  entry_start_time: "09:30"           # Active Entry Window opens
-  entry_cutoff_time: "13:00"          # Hard cutoff for new entries
-  late_day_protection_time: "13:45"   # Time-based fee-lock evaluation
+  entry_start_time: "09:35"           # Morning Stability Window: requires first post-OR 5m bar to complete
+  entry_cutoff_time: "12:30"          # Hard cutoff for new entries (leaves >= 2h 25m to reach target)
+  late_day_protection_time: "14:15"   # Time-based fee-lock evaluation (raised from 13:45 to prevent choking)
   square_off_time: "14:55"            # Orderly MIS liquidation before Zerodha 15:15 RMS
   flat_verification_time: "14:58"     # Verify zero open positions and zero pending SL/Target orders
 
@@ -31,6 +31,8 @@ regime_filter:
   benchmark_symbol: "NIFTY 50"
   benchmark_exchange: "NSE"
   ema_period: 20
+  ema_fast_period: 20
+  ema_slow_period: 50                 # Dual-EMA macro trend filter against chop
   ema_slope_lookback: 3
   adx_period: 14
   min_adx: 22.0
@@ -44,9 +46,11 @@ signal_gates:
   max_spread_bps: 4.0                 # Gate 6: Tightened from 8 bps to 4 bps for zero-slippage fills
   min_circuit_distance_pct: 0.020     # Gate 7: >= 2.0% away from upper/lower circuit
   min_atr_pct: 0.0022                 # Minimum 5m ATR(14) as % of price (filters dead stocks)
-  min_stop_distance_pct: 0.0045       # Gate 9A: Minimum R = 0.45% (ensures 2R >= 0.90% to beat fees)
-  max_stop_distance_pct: 0.0085       # Gate 9B: Maximum R = 0.85% (ensures 2R <= 1.70% is reachable)
+  min_stop_distance_pct: 0.0055       # Gate 9A: Minimum R = 0.55% (eliminates fee compression on micro-stops)
+  max_stop_distance_pct: 0.0090       # Gate 9B: Maximum R = 0.90%
   max_adr_consumed_pct: 0.60          # Gate 9C: Reject if stock already moved > 60% of 14-day ADR
+  min_breakout_cushion_atr: 0.15      # Breakout close must clear OR by >= 0.15 * ATR(14)
+  min_clv_ratio: 0.70                 # Close Location Value >= 0.70 (closes in top/bottom 30% of bar)
 
 stops_and_targets:
   swing_lookback_bars: 5              # 5-bar structural swing low/high anchor
@@ -56,7 +60,7 @@ stops_and_targets:
   trail_enabled: false                # Continuous trailing disabled (prevents choking runners)
   fee_lock_enabled: true              # One-time step to Entry +/- 0.15% to protect late winners
   fee_lock_trigger_r: 1.65            # Triggers when unrealized profit hits +1.65R (82.5% of target)
-  late_day_lock_trigger_r: 0.75       # At 13:45 IST, locks Entry +/- 0.15% if trade is >= +0.75R
+  late_day_lock_trigger_r: 1.15       # At 14:15 IST, locks Entry +/- 0.15% if trade is >= +1.15R
   fee_lock_offset_pct: 0.0015         # +0.15% covers 0.1065% Zerodha + statutory charges + 1 tick
   sl_limit_buffer_pct: 0.25           # Stop-limit buffer below/above trigger
   max_modifications_per_order: 25     # Kite order modification limit
@@ -96,8 +100,8 @@ entry:
 schedule:
   market_open: "09:15"
   opening_range_end: "09:30"
-  entry_start: "09:30"
-  entry_cutoff: "13:00"
+  entry_start: "09:35"
+  entry_cutoff: "12:30"
   flatten_start: "14:55"
   flat_target: "14:58"
   market_close: "15:30"

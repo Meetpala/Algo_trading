@@ -30,6 +30,7 @@ class BenchmarkSnapshot:
     session_vwap: float
     adx14: float
     prev_adx14: float
+    ema50: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class RegimeEvaluation:
     gate: GateResult
     current_close: Optional[float] = None
     ema_20: Optional[float] = None
+    ema_50: Optional[float] = None
     ema_slope_val: Optional[float] = None
     adx_val: Optional[float] = None
     plus_di: Optional[float] = None
@@ -71,14 +73,16 @@ def evaluate_market_regime(
         if not (adx_strong and adx_rising):
             return MarketRegime.NEUTRAL
 
-        # Bullish Regime Check
-        vwap_bull_ok = (target.close > target.session_vwap) if require_vwap else True
-        if target.close > target.ema20 and snapshot_slope > 0 and vwap_bull_ok:
+        # Bullish Regime Check: Close > EMA20 > EMA50, EMA20 Slope > 0, VWAP aligned
+        vwap_bull_ok = (target.close > target.session_vwap) if (require_vwap and target.session_vwap > 0) else True
+        ema50_bull_ok = (target.ema20 > target.ema50) if target.ema50 > 0 else True
+        if target.close > target.ema20 and ema50_bull_ok and snapshot_slope > 0 and vwap_bull_ok:
             return MarketRegime.BULLISH
 
-        # Bearish Regime Check
-        vwap_bear_ok = (target.close < target.session_vwap) if require_vwap else True
-        if target.close < target.ema20 and snapshot_slope < 0 and vwap_bear_ok:
+        # Bearish Regime Check: Close < EMA20 < EMA50, EMA20 Slope < 0, VWAP aligned
+        vwap_bear_ok = (target.close < target.session_vwap) if (require_vwap and target.session_vwap > 0) else True
+        ema50_bear_ok = (target.ema20 < target.ema50) if target.ema50 > 0 else True
+        if target.close < target.ema20 and ema50_bear_ok and snapshot_slope < 0 and vwap_bear_ok:
             return MarketRegime.BEARISH
 
         return MarketRegime.NEUTRAL
@@ -134,6 +138,18 @@ def evaluate_market_regime(
     latest_ema = ema_series[-1]
     slope = ema_slope(ema_series, lookback=config.ema_slope_lookback)
 
+    # Compute EMA50 if configured and sufficient candles are available
+    slow_period = getattr(config, "ema_slow_period", 50)
+    latest_ema50: Optional[float] = None
+    dual_ema_bull = True
+    dual_ema_bear = True
+    if len(closes) >= slow_period:
+        ema_slow_series = compute_ema(closes, period=slow_period)
+        if ema_slow_series:
+            latest_ema50 = ema_slow_series[-1]
+            dual_ema_bull = (latest_ema > latest_ema50)
+            dual_ema_bear = (latest_ema < latest_ema50)
+
     adx_dict = compute_adx(highs, lows, closes, period=config.adx_period)
     adx_series = adx_dict.get("adx", [])
     plus_di_series = adx_dict.get("plus_di", [])
@@ -151,32 +167,42 @@ def evaluate_market_regime(
         )
 
     latest_adx = adx_series[-1]
+    prev_adx = adx_series[-2] if len(adx_series) >= 2 else latest_adx
     latest_plus_di = plus_di_series[-1] if plus_di_series else None
     latest_minus_di = minus_di_series[-1] if minus_di_series else None
 
-    is_trending = latest_adx >= config.min_adx
-    is_bullish = (latest_close > latest_ema) and (slope > 0) and is_trending
-    is_bearish = (latest_close < latest_ema) and (slope < 0) and is_trending
+    if getattr(config, "require_rising_adx", True):
+        adx_rising = (latest_adx > prev_adx) if latest_adx < 50.0 else (latest_adx >= prev_adx)
+    else:
+        adx_rising = True
+    is_trending = (latest_adx >= config.min_adx) and adx_rising
+
+    is_bullish = (latest_close > latest_ema) and dual_ema_bull and (slope > 0) and is_trending
+    is_bearish = (latest_close < latest_ema) and dual_ema_bear and (slope < 0) and is_trending
 
     details = {
         "close": latest_close,
         "ema": round(latest_ema, 2),
+        "ema50": round(latest_ema50, 2) if latest_ema50 is not None else None,
         "slope": slope,
         "adx": round(latest_adx, 2),
+        "prev_adx": round(prev_adx, 2),
         "min_adx": config.min_adx,
     }
 
     if is_bullish:
+        ema50_str = f" > EMA-50 ({latest_ema50:.2f})" if latest_ema50 is not None else ""
         return RegimeEvaluation(
             regime=MarketRegime.BULLISH,
             gate=GateResult(
                 name="MARKET_REGIME",
                 status=GateStatus.PASS,
-                reason=f"Bullish regime: Close ({latest_close}) > EMA-20 ({latest_ema:.2f}), rising slope, ADX ({latest_adx:.1f}) >= {config.min_adx}",
+                reason=f"Bullish regime: Close ({latest_close}) > EMA-20 ({latest_ema:.2f}){ema50_str}, rising slope, ADX ({latest_adx:.1f}) >= {config.min_adx}",
                 data=details,
             ),
             current_close=latest_close,
             ema_20=latest_ema,
+            ema_50=latest_ema50,
             ema_slope_val=slope,
             adx_val=latest_adx,
             plus_di=latest_plus_di,
@@ -184,16 +210,18 @@ def evaluate_market_regime(
         )
 
     if is_bearish:
+        ema50_str = f" < EMA-50 ({latest_ema50:.2f})" if latest_ema50 is not None else ""
         return RegimeEvaluation(
             regime=MarketRegime.BEARISH,
             gate=GateResult(
                 name="MARKET_REGIME",
                 status=GateStatus.PASS,
-                reason=f"Bearish regime: Close ({latest_close}) < EMA-20 ({latest_ema:.2f}), falling slope, ADX ({latest_adx:.1f}) >= {config.min_adx}",
+                reason=f"Bearish regime: Close ({latest_close}) < EMA-20 ({latest_ema:.2f}){ema50_str}, falling slope, ADX ({latest_adx:.1f}) >= {config.min_adx}",
                 data=details,
             ),
             current_close=latest_close,
             ema_20=latest_ema,
+            ema_50=latest_ema50,
             ema_slope_val=slope,
             adx_val=latest_adx,
             plus_di=latest_plus_di,
@@ -210,6 +238,7 @@ def evaluate_market_regime(
         ),
         current_close=latest_close,
         ema_20=latest_ema,
+        ema_50=latest_ema50,
         ema_slope_val=slope,
         adx_val=latest_adx,
         plus_di=latest_plus_di,

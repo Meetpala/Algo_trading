@@ -105,11 +105,11 @@ def fee_lock_stop_for_bar(
     if side == Side.BUY:
         favorable_r = (high - entry_price) / risk_per_share
         close_r = (close - entry_price) / risk_per_share
-        late_trigger = bar_close_time >= time(13, 45) and close_r >= 0.75
+        late_trigger = bar_close_time >= time(14, 15) and close_r >= 1.15
         late_intrabar_trigger = (
             bar_start_time is not None
-            and bar_start_time >= time(13, 45)
-            and favorable_r >= 0.75
+            and bar_start_time >= time(14, 15)
+            and favorable_r >= 1.15
         )
         candidate = math.ceil(
             entry_price * 1.0015 / tick_size - 1e-10
@@ -118,11 +118,11 @@ def fee_lock_stop_for_bar(
     else:
         favorable_r = (entry_price - low) / risk_per_share
         close_r = (entry_price - close) / risk_per_share
-        late_trigger = bar_close_time >= time(13, 45) and close_r >= 0.75
+        late_trigger = bar_close_time >= time(14, 15) and close_r >= 1.15
         late_intrabar_trigger = (
             bar_start_time is not None
-            and bar_start_time >= time(13, 45)
-            and favorable_r >= 0.75
+            and bar_start_time >= time(14, 15)
+            and favorable_r >= 1.15
         )
         candidate = math.floor(
             entry_price * 0.9985 / tick_size + 1e-10
@@ -292,11 +292,10 @@ def size_backtest_quantity(
     side: Side,
     slot_budget: float,
     risk_cap: float,
-    target_r: float,
+    target_r: float = 2.0,
     costs,
     spread_bps: float = 4.0,
     tick_size: float = 0.05,
-    max_fee_ratio_pct: float = 18.0,
 ) -> int:
     """Size a position so stop loss plus fees stays inside the rupee risk cap."""
     if entry_price <= 0 or slot_budget <= 0 or risk_cap <= 0:
@@ -315,31 +314,14 @@ def size_backtest_quantity(
     if quantity <= 0:
         return 0
 
-    target_price = calculate_target_price(
-        side=side,
-        entry_price=entry_price,
-        initial_stop=stop_price,
-        target_r=target_r,
-        tick_size=tick_size,
-    )
-    target_fill = apply_adverse_spread(target_price, exit_side, spread_bps, tick_size)
-
     while quantity > 0:
         stop_buy = entry_price if side == Side.BUY else stop_fill
         stop_sell = stop_fill if side == Side.BUY else entry_price
         stop_charges = calculate_charges(stop_buy, stop_sell, quantity, costs)["total_charges"]
         net_stop_risk = (risk_per_share * quantity) + stop_charges
-        if net_stop_risk > risk_cap:
-            quantity -= 1
-            continue
-
-        target_buy = entry_price if side == Side.BUY else target_fill
-        target_sell = target_fill if side == Side.BUY else entry_price
-        target_charges = calculate_charges(target_buy, target_sell, quantity, costs)["total_charges"]
-        expected_gross_profit = abs(target_fill - entry_price) * quantity
-        if friction_ratio_pct(expected_gross_profit, target_charges) > max_fee_ratio_pct:
-            return 0
-        return quantity
+        if net_stop_risk <= risk_cap:
+            return quantity
+        quantity -= 1
 
     return 0
 
@@ -485,7 +467,7 @@ def run_fast_backtest(
         )
         prior_close = daily['close'].shift(1)
         daily_ranges = (daily['high'] - daily['low']) / prior_close
-        adr_values = daily_ranges.rolling(14).mean().shift(1)
+        adr_values = daily_ranges.rolling(14, min_periods=1).mean().shift(1)
         adr_by_symbol[sym] = {
             date: (float(value) if pd.notna(value) else 0.0)
             for date, value in adr_values.items()
@@ -604,9 +586,8 @@ def run_fast_backtest(
                         pending['signal_price'], s_bar.open, config.entry.max_slippage_pct
                     ):
                         side = pending['side']
-                        entry_price = apply_adverse_spread(
-                            s_bar.open, side, execution_spread_bps
-                        )
+                        # 1 tick (Rs. 0.05) adverse half-spread slippage on next_bar.open
+                        entry_price = round(s_bar.open + 0.05 if side == Side.BUY else s_bar.open - 0.05, 2)
                         levels = compute_initial_stop_and_target(
                             side=side,
                             entry_price=entry_price,
@@ -619,7 +600,7 @@ def run_fast_backtest(
                             side=side,
                             entry_price=entry_price,
                             initial_stop=levels.initial_stop,
-                            target_r=2.0,
+                            target_r=target_r,
                             tick_size=0.05,
                         )
                         stop_pct = levels.risk_pct
@@ -636,7 +617,7 @@ def run_fast_backtest(
                         gate9_pass = (
                             adr14 > 0
                             and atr_pct >= 0.0022
-                            and 0.0045 <= stop_pct <= 0.0085
+                            and 0.0055 <= stop_pct <= 0.0090
                             and adr_consumed <= 0.60
                         )
                         if gate9_pass:
@@ -646,7 +627,7 @@ def run_fast_backtest(
                                 side=side,
                                 slot_budget=slot_budget,
                                 risk_cap=risk_cap,
-                                target_r=2.0,
+                                target_r=target_r,
                                 costs=config.costs,
                                 spread_bps=execution_spread_bps,
                             )
@@ -836,7 +817,7 @@ def run_fast_backtest(
                 and is_before_entry_cutoff(
                     nifty_candles[next_n_idx].timestamp.time(), cutoff_time
                 )
-                and bar_close_dt.time() >= time(9, 30)
+                and bar_close_dt.time() >= time(9, 35)
             ):
                 if len(open_positions) == 1:
                     first_p = next(iter(open_positions.values()))
@@ -934,6 +915,8 @@ def run_fast_backtest(
                         session_high_so_far=session_high,
                         session_low_so_far=session_low,
                         adr14_pct=adr14,
+                        bar_high=s_bar.high,
+                        bar_low=s_bar.low,
                     )
                     signal = evaluate_candidate_signal(
                         bar=candidate_bar,
@@ -988,6 +971,9 @@ def run_fast_backtest(
     win_rate = (len(wins) / len(trades) * 100.0) if trades else 0.0
     profit_factor = (gross_win / gross_loss) if gross_loss > 0 else 999.0
 
+    friction_ratio_win = friction_ratio_pct(gross_win, tot_charges)
+    friction_ratio_ng = round((tot_charges / gross_pnl) * 100.0, 2) if gross_pnl > 0 else float('inf')
+
     return {
         'total_trades': len(trades),
         'winning_trades': len(wins),
@@ -1001,7 +987,9 @@ def run_fast_backtest(
         'charge_breakdown': charge_breakdown,
         'net_pnl': round(net_pnl, 2),
         'profit_pct': round((net_pnl / starting_capital) * 100.0, 2),
-        'friction_ratio_pct': friction_ratio_pct(gross_win, tot_charges),
+        'friction_ratio_pct': friction_ratio_win,
+        'friction_ratio_winning_profit_pct': friction_ratio_win,
+        'friction_ratio_net_gross_pct': friction_ratio_ng,
         'ending_capital': round(current_capital, 2),
         'trades': trades,
         'daily_stats': daily_stats,
@@ -1045,7 +1033,8 @@ if __name__ == '__main__':
     ))
     print(f"Net Realized P&L: Rs. {res_3m['net_pnl']:+,.2f} ({res_3m['profit_pct']:+.2f}%)")
     friction_ratio = res_3m['friction_ratio_pct']
-    print(f"Statutory Friction Ratio: {friction_ratio:.2f}% of positive gross profit (limit: < 26.0%)")
+    print(f"Statutory Friction / Gross Winning Profit: {friction_ratio:.2f}% (limit: < 26.0%)")
+    print(f"Statutory Friction / Net Gross P&L: {res_3m['friction_ratio_net_gross_pct']:.2f}%")
     print("=================================================================\n")
 
     df_all_trades = pd.DataFrame(res_3m['trades'])

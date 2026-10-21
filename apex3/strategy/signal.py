@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from apex3.config import SignalConfig
+from apex3.indicators.atr import compute_atr
 from apex3.indicators.vwap import compute_session_vwap
 from apex3.models import (
     Candle,
@@ -272,15 +273,27 @@ def evaluate_signal(
         )
     )
 
-    # 4. Opening Range Breakout Gate
+    # 4. Opening Range Breakout Gate (with Breakout Cushion & CLV Conviction)
+    cushion_mult = getattr(config, "min_breakout_cushion_atr", 0.15)
+    min_clv = getattr(config, "min_clv_ratio", 0.70)
+
+    closes = [c.close for c in completed_candles]
+    highs = [c.high for c in completed_candles]
+    lows = [c.low for c in completed_candles]
+    atr_series = compute_atr(highs, lows, closes, period=14)
+    atr14 = atr_series[-1] if atr_series else max(latest_bar.high - latest_bar.low, 0.50)
+    cushion = cushion_mult * atr14
+    bar_range = max(latest_bar.high - latest_bar.low, 0.05)
+
     if target_side == Side.BUY:
-        if signal_price <= opening_range.high:
+        required_long = opening_range.high + cushion
+        if signal_price < required_long:
             gates.append(
                 GateResult(
                     name="OR_BREAKOUT",
                     status=GateStatus.FAIL,
-                    reason=f"Close ({signal_price:.2f}) <= OR High ({opening_range.high:.2f})",
-                    data={"close": signal_price, "or_high": opening_range.high},
+                    reason=f"Close ({signal_price:.2f}) < OR High + Cushion ({required_long:.2f}, cushion={cushion:.2f})",
+                    data={"close": signal_price, "or_high": opening_range.high, "cushion": cushion},
                 )
             )
             return SignalEvaluation(
@@ -288,16 +301,34 @@ def evaluate_signal(
                 decision=Decision.WAIT,
                 gates=gates,
                 reason_codes=["NO_OR_HIGH_BREAKOUT"],
-                explanation=f"Price {signal_price:.2f} has not closed above OR high {opening_range.high:.2f}",
+                explanation=f"Price {signal_price:.2f} has not cleared OR high + cushion {required_long:.2f}",
             )
-    else:  # Side.SELL
-        if signal_price >= opening_range.low:
+        clv = (latest_bar.close - latest_bar.low) / bar_range
+        if clv < min_clv:
             gates.append(
                 GateResult(
                     name="OR_BREAKOUT",
                     status=GateStatus.FAIL,
-                    reason=f"Close ({signal_price:.2f}) >= OR Low ({opening_range.low:.2f})",
-                    data={"close": signal_price, "or_low": opening_range.low},
+                    reason=f"CLV ({clv:.2f}) < required {min_clv:.2f} (weak close in bar range)",
+                    data={"clv": clv, "min_clv": min_clv},
+                )
+            )
+            return SignalEvaluation(
+                symbol=symbol,
+                decision=Decision.WAIT,
+                gates=gates,
+                reason_codes=["WEAK_CANDLE_CLOSE_LOCATION"],
+                explanation=f"Candle CLV {clv:.2f} below minimum conviction {min_clv:.2f}",
+            )
+    else:  # Side.SELL
+        required_short = opening_range.low - cushion
+        if signal_price > required_short:
+            gates.append(
+                GateResult(
+                    name="OR_BREAKOUT",
+                    status=GateStatus.FAIL,
+                    reason=f"Close ({signal_price:.2f}) > OR Low - Cushion ({required_short:.2f}, cushion={cushion:.2f})",
+                    data={"close": signal_price, "or_low": opening_range.low, "cushion": cushion},
                 )
             )
             return SignalEvaluation(
@@ -305,9 +336,26 @@ def evaluate_signal(
                 decision=Decision.WAIT,
                 gates=gates,
                 reason_codes=["NO_OR_LOW_BREAKOUT"],
-                explanation=f"Price {signal_price:.2f} has not closed below OR low {opening_range.low:.2f}",
+                explanation=f"Price {signal_price:.2f} has not broken below OR low - cushion {required_short:.2f}",
             )
-    gates.append(GateResult(name="OR_BREAKOUT", status=GateStatus.PASS, reason="Confirmed OR breakout on completed bar"))
+        clv = (latest_bar.high - latest_bar.close) / bar_range
+        if clv < min_clv:
+            gates.append(
+                GateResult(
+                    name="OR_BREAKOUT",
+                    status=GateStatus.FAIL,
+                    reason=f"CLV ({clv:.2f}) < required {min_clv:.2f} (weak close in bar range)",
+                    data={"clv": clv, "min_clv": min_clv},
+                )
+            )
+            return SignalEvaluation(
+                symbol=symbol,
+                decision=Decision.WAIT,
+                gates=gates,
+                reason_codes=["WEAK_CANDLE_CLOSE_LOCATION"],
+                explanation=f"Candle CLV {clv:.2f} below minimum conviction {min_clv:.2f}",
+            )
+    gates.append(GateResult(name="OR_BREAKOUT", status=GateStatus.PASS, reason="Confirmed OR breakout with cushion & CLV conviction on completed bar"))
 
     # 5. Session VWAP Alignment Gate
     session_highs = [c.high for c in completed_candles]
@@ -517,6 +565,8 @@ class StockCandidateBar:
     session_high_so_far: float
     session_low_so_far: float
     adr14_pct: float                # 14-day Average Daily Range as decimal (e.g., 0.022 = 2.2%)
+    bar_high: float = 0.0
+    bar_low: float = 0.0
 
 
 @dataclass
@@ -546,9 +596,9 @@ def evaluate_candidate_signal(
     gates = cfg.get("signal_gates", cfg.get("signal", {}))
     risk_cfg = cfg.get("risk_management", cfg.get("risk", {}))
 
-    start_t = sched.get("entry_start_time", sched.get("entry_start", "09:30"))
-    cutoff_t = sched.get("entry_cutoff_time", sched.get("entry_cutoff", "13:00"))
-    # Gate 0: Session Window [09:30, 13:00] IST
+    start_t = sched.get("entry_start_time", sched.get("entry_start", "09:35"))
+    cutoff_t = sched.get("entry_cutoff_time", sched.get("entry_cutoff", "12:30"))
+    # Gate 0: Session Window [09:35, 12:30] IST
     if not (start_t <= bar.timestamp_hhmm <= cutoff_t):
         return None
 
@@ -566,13 +616,21 @@ def evaluate_candidate_signal(
     else:
         return None
 
-    # Gate 1 (Opening Range) & Gate 2 (Session VWAP) & Gate 4 (Relative Strength vs NIFTY)
+    # Gate 1 (Opening Range Breakout with Cushion & CLV) & Gate 2 (Session VWAP) & Gate 4 (Relative Strength vs NIFTY)
+    cushion_mult = float(gates.get("min_breakout_cushion_atr", 0.15))
+    min_clv = float(gates.get("min_clv_ratio", 0.70))
+    cushion = cushion_mult * bar.atr14
+
     rel_strength = bar.stock_return_20 - bar.nifty_return_20
     if side == "LONG":
-        if not (bar.close > bar.or_high and bar.close > bar.session_vwap and rel_strength > 0):
+        bar_range = max(bar.bar_high - bar.bar_low, 0.05) if (bar.bar_high > 0 and bar.bar_low > 0) else 1.0
+        clv = (bar.close - bar.bar_low) / bar_range if (bar.bar_high > 0 and bar.bar_low > 0) else 1.0
+        if not (bar.close >= (bar.or_high + cushion) and clv >= min_clv and bar.close > bar.session_vwap and rel_strength > 0):
             return None
     else:
-        if not (bar.close < bar.or_low and bar.close < bar.session_vwap and rel_strength < 0):
+        bar_range = max(bar.bar_high - bar.bar_low, 0.05) if (bar.bar_high > 0 and bar.bar_low > 0) else 1.0
+        clv = (bar.bar_high - bar.close) / bar_range if (bar.bar_high > 0 and bar.bar_low > 0) else 1.0
+        if not (bar.close <= (bar.or_low - cushion) and clv >= min_clv and bar.close < bar.session_vwap and rel_strength < 0):
             return None
 
     # Gate 5: Institutional Volume Surge (>= 2.0x 20-bar average)
@@ -604,7 +662,7 @@ def evaluate_candidate_signal(
     if bar.close > 0 and (bar.atr14 / bar.close) < min_atr:
         return None
 
-    # Gate 9B: Stop-Width Sweet Spot (0.45% <= R% <= 0.85%)
+    # Gate 9B: Stop-Width Sweet Spot (0.55% <= R% <= 0.90%)
     levels = compute_initial_stop_and_target(
         side=side,
         entry_price=bar.close,
@@ -613,8 +671,8 @@ def evaluate_candidate_signal(
         atr14=bar.atr14,
         cfg=cfg,
     )
-    min_r_pct = float(gates.get("min_stop_distance_pct", 0.0045))
-    max_r_pct = float(gates.get("max_stop_distance_pct", 0.0085))
+    min_r_pct = float(gates.get("min_stop_distance_pct", 0.0055))
+    max_r_pct = float(gates.get("max_stop_distance_pct", 0.0090))
     if not (min_r_pct <= levels.risk_pct <= max_r_pct):
         return None
 

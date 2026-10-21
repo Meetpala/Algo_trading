@@ -54,9 +54,13 @@ class RegimeConfig:
     benchmark_symbol: str = "NIFTY 50"
     benchmark_exchange: str = "NSE"
     ema_period: int = 20
+    ema_fast_period: int = 20
+    ema_slow_period: int = 50
     ema_slope_lookback: int = 3
     min_adx: float = 22.0
     adx_period: int = 14
+    require_vwap_alignment: bool = True
+    require_rising_adx: bool = True
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,10 @@ class SignalConfig:
     candle_timeframe_entry: str = "5min"
     candle_timeframe_trail: str = "1min"
     relative_strength_lookback: int = 20
+    min_stop_distance_pct: float = 0.0055
+    max_stop_distance_pct: float = 0.0090
+    min_breakout_cushion_atr: float = 0.15
+    min_clv_ratio: float = 0.70
 
 
 @dataclass(frozen=True)
@@ -94,13 +102,15 @@ class TrailConfig:
 class StopsConfig:
     initial_atr_multiplier: float = 1.5
     initial_atr_period: int = 14
+    swing_lookback_bars: int = 5
     sl_limit_buffer_pct: float = 0.25
     target_r: float = 2.0
     use_fixed_target: bool = True
     trail_enabled: bool = False
     fee_lock_enabled: bool = True
     fee_lock_trigger_r: float = 1.65
-    late_day_lock_trigger_r: float = 0.75
+    late_day_lock_trigger_r: float = 1.15
+    late_day_protection_time: str = "14:15"
     fee_lock_offset_pct: float = 0.0015
     trail: TrailConfig = field(default_factory=TrailConfig)
     max_modifications_per_order: int = 25
@@ -351,9 +361,13 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             benchmark_symbol=str(regime_raw.get("benchmark_symbol", "NIFTY 50")),
             benchmark_exchange=str(regime_raw.get("benchmark_exchange", "NSE")),
             ema_period=int(regime_raw.get("ema_period", 20)),
+            ema_fast_period=int(regime_raw.get("ema_fast_period", 20)),
+            ema_slow_period=int(regime_raw.get("ema_slow_period", 50)),
             ema_slope_lookback=int(regime_raw.get("ema_slope_lookback", 3)),
             min_adx=float(regime_raw.get("min_adx", 22.0)),
             adx_period=int(regime_raw.get("adx_period", 14)),
+            require_vwap_alignment=bool(regime_raw.get("require_vwap_alignment", True)),
+            require_rising_adx=bool(regime_raw.get("require_rising_adx", True)),
         ),
         signal=SignalConfig(
             min_relative_volume=float(signal_raw.get("min_volume_surge_ratio", signal_raw.get("min_relative_volume", 2.0))),
@@ -363,6 +377,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             candle_timeframe_entry=str(signal_raw.get("candle_timeframe_entry", "5min")),
             candle_timeframe_trail=str(signal_raw.get("candle_timeframe_trail", "1min")),
             relative_strength_lookback=int(signal_raw.get("rs_lookback_bars", signal_raw.get("relative_strength_lookback", 20))),
+            min_stop_distance_pct=float(signal_raw.get("min_stop_distance_pct", 0.0055)),
+            max_stop_distance_pct=float(signal_raw.get("max_stop_distance_pct", 0.0090)),
+            min_breakout_cushion_atr=float(signal_raw.get("min_breakout_cushion_atr", 0.15)),
+            min_clv_ratio=float(signal_raw.get("min_clv_ratio", 0.70)),
         ),
         entry=EntryConfig(
             order_type=str(entry_raw.get("order_type", "LIMIT")),
@@ -373,13 +391,15 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         stops=StopsConfig(
             initial_atr_multiplier=float(stops_raw.get("atr_stop_multiplier", stops_raw.get("initial_atr_multiplier", 1.5))),
             initial_atr_period=int(stops_raw.get("atr_period", stops_raw.get("initial_atr_period", 14))),
+            swing_lookback_bars=int(stops_raw.get("swing_lookback_bars", 5)),
             sl_limit_buffer_pct=float(stops_raw.get("sl_limit_buffer_pct", 0.25)),
             target_r=float(stops_raw.get("target_r_multiple", stops_raw.get("target_r", 2.0))),
             use_fixed_target=bool(stops_raw.get("use_fixed_target", True)),
             trail_enabled=bool(stops_raw.get("trail_enabled", False)),
             fee_lock_enabled=bool(stops_raw.get("fee_lock_enabled", True)),
             fee_lock_trigger_r=float(stops_raw.get("fee_lock_trigger_r", 1.65)),
-            late_day_lock_trigger_r=float(stops_raw.get("late_day_lock_trigger_r", 0.75)),
+            late_day_lock_trigger_r=float(stops_raw.get("late_day_lock_trigger_r", 1.15)),
+            late_day_protection_time=str(schedule_raw.get("late_day_protection_time", stops_raw.get("late_day_protection_time", "14:15"))),
             fee_lock_offset_pct=float(stops_raw.get("fee_lock_offset_pct", 0.0015)),
             trail=trail_config,
             max_modifications_per_order=int(stops_raw.get("max_modifications_per_order", 25)),

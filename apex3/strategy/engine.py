@@ -410,9 +410,9 @@ class StrategyEngine:
                         st_cfg = self.config.raw_dict.get("stops_and_targets", {})
                     fee_lock_enabled = st_cfg.get("fee_lock_enabled", getattr(self.config.stops, "fee_lock_enabled", True))
                     trigger_r = float(st_cfg.get("fee_lock_trigger_r", getattr(self.config.stops, "fee_lock_trigger_r", 1.65)))
-                    sched_cfg = self.config.raw_dict.get("schedule", {}) if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) else {}
-                    late_time = sched_cfg.get("late_day_protection_time", "13:45")
-                    late_trigger_r = float(st_cfg.get("late_day_lock_trigger_r", getattr(self.config.stops, "late_day_lock_trigger_r", 0.75)))
+                    sched_cfg = self.config.raw_dict.get("session_schedule", self.config.raw_dict.get("schedule", {})) if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) else {}
+                    late_time = sched_cfg.get("late_day_protection_time", getattr(self.config.stops, "late_day_protection_time", "14:15"))
+                    late_trigger_r = float(st_cfg.get("late_day_lock_trigger_r", getattr(self.config.stops, "late_day_lock_trigger_r", 1.15)))
                     offset_pct = float(st_cfg.get("fee_lock_offset_pct", getattr(self.config.stops, "fee_lock_offset_pct", 0.0015)))
 
                     now_time_str = now.strftime("%H:%M")
@@ -751,12 +751,16 @@ class StrategyEngine:
             )
             atr_val = atr_series[-1] if atr_series else (entry_price * 0.01)
 
-            # Structural initial stop
+            # Structural initial stop (true 5-bar structural swing anchor)
+            lookback_bars = getattr(self.config.stops, "swing_lookback_bars", 5)
+            lookback_candles = stock_candles[-lookback_bars:] if len(stock_candles) >= lookback_bars else stock_candles
+            swing_low_5 = min(c.low for c in lookback_candles) if lookback_candles else stock_candles[-1].low
+            swing_high_5 = max(c.high for c in lookback_candles) if lookback_candles else stock_candles[-1].high
             initial_stop = calculate_initial_stop(
                 side=side,
                 entry_price=entry_price,
-                signal_low=stock_candles[-1].low,
-                signal_high=stock_candles[-1].high,
+                signal_low=swing_low_5,
+                signal_high=swing_high_5,
                 atr_value=atr_val,
                 config=self.config.stops,
                 tick_size=inst.tick_size,

@@ -137,7 +137,7 @@ def evaluate_fee_protected_stop(
     """Continuous trailing is disabled (trail_enabled: false) so winners are not choked.
     However, a single one-time step to Entry +/- 0.15% is triggered if:
       1. Unrealized profit >= +1.65R (82.5% of the way to 2.0R target), OR
-      2. Current time >= 13:45 IST and unrealized profit >= +0.75R.
+      2. Current time >= 14:15 IST and unrealized profit >= +1.15R.
     Returns the new stop price if updated, otherwise None.
     """
     st_cfg = cfg.get("stops_and_targets", cfg.get("stops", {})) if isinstance(cfg, dict) else {}
@@ -155,8 +155,8 @@ def evaluate_fee_protected_stop(
 
     trigger_r = float(st_cfg.get("fee_lock_trigger_r", 1.65))
     sched_cfg = cfg.get("session_schedule", cfg.get("schedule", {})) if isinstance(cfg, dict) else {}
-    late_time = sched_cfg.get("late_day_protection_time", "13:45")
-    late_trigger_r = float(st_cfg.get("late_day_lock_trigger_r", 0.75))
+    late_time = sched_cfg.get("late_day_protection_time", "14:15")
+    late_trigger_r = float(st_cfg.get("late_day_lock_trigger_r", 1.15))
     offset_pct = float(st_cfg.get("fee_lock_offset_pct", 0.0015))
 
     should_lock = (unrealized_r >= trigger_r) or (

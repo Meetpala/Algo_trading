@@ -203,14 +203,14 @@ def test_late_session_fee_lock_arms_from_completed_close():
         "resolve_position_bar_exit",
         Side.BUY,
         open_price=100.60,
-        high=101.00,
+        high=101.30,
         low=100.50,
-        close=100.80,
+        close=101.20,
         stop_price=99.00,
         target_price=102.00,
         entry_price=100.00,
         risk_per_share=1.00,
-        bar_close_time=time(13, 45),
+        bar_close_time=time(14, 15),
     )
 
     assert exit_event is None
@@ -218,20 +218,20 @@ def test_late_session_fee_lock_arms_from_completed_close():
     assert is_applied is True
 
 
-def test_late_session_fee_lock_observes_intrabar_profit_after_1345():
+def test_late_session_fee_lock_observes_intrabar_profit_after_1415():
     exit_event, next_stop, is_applied = _call_backtest_contract(
         "resolve_position_bar_exit",
         Side.BUY,
         open_price=100.20,
-        high=100.90,
+        high=101.20,
         low=100.20,
         close=100.30,
         stop_price=99.00,
         target_price=102.00,
         entry_price=100.00,
         risk_per_share=1.00,
-        bar_close_time=time(13, 50),
-        bar_start_time=time(13, 45),
+        bar_close_time=time(14, 20),
+        bar_start_time=time(14, 15),
     )
 
     assert exit_event is None
