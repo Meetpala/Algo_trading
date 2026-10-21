@@ -1,5 +1,9 @@
 # APEX-3: Zerodha Intraday Trading System (NSE Cash Equity)
 
+> [!IMPORTANT]
+> **Complete Master Blueprint & 3-Month Performance Statement**:  
+> For the comprehensive strategy specification, technical hurdles overcome, and 3-month backtest results across the 22-stock universe, 10 elite trend leaders, and baseline core stocks, see **[APEX3_TRADING_MASTER.md](file:///c:/Users/itsme/OneDrive/Desktop/Algo%20Trading/APEX3_TRADING_MASTER.md)**.
+
 > [!WARNING]
 > **NO GUARANTEE OF PROFIT OR FILL**: Intraday equity trading with leverage and stop orders carries substantial financial risk. Stop-loss limit (SL) orders can fail to fill during rapid price movements, circuit limits, or exchange outages. Broker square-off timings can vary and are a backstop only. This system makes **no claim or guarantee of profitable edge, fill execution, or exit pricing**.
 
