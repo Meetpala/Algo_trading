@@ -43,7 +43,7 @@ for session_date in three_m_dates:
     for step, n_idx in enumerate(sess_indices):
         c_bar = nifty_candles[n_idx]
         current_dt = c_bar.timestamp
-        bar_close_dt = current_dt + pd.Timedelta(minutes=5)
+        bar_close_dt = current_dt + timedelta(minutes=5)
         if not (time(9, 35) <= bar_close_dt.time() <= time(12, 30)):
             continue
         bench_slice = nifty_candles[max(0, n_idx - 100): n_idx + 1]
