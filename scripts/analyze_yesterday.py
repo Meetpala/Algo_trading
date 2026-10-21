@@ -16,6 +16,8 @@ import numpy as np
 from datetime import datetime, time, date
 from zoneinfo import ZoneInfo
 
+from apex3.config import CostsConfig
+from backtest_engine import calculate_charges
 from apex3.strategy.regime import BenchmarkSnapshot, MarketRegime, evaluate_market_regime
 from apex3.strategy.trail import (
     compute_initial_stop_and_target,
@@ -23,19 +25,16 @@ from apex3.strategy.trail import (
     floor_to_tick,
     ceil_to_tick,
 )
-from apex3.strategy.sizer import (
-    calculate_position_size,
-    calculate_zerodha_intraday_charges,
-)
 
 IST = ZoneInfo("Asia/Kolkata")
 
-# Universe of candidates
+# Universe of candidates (Exact Elite 20 Universe + Benchmark)
 SYMBOLS = [
-    "^NSEI", "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
-    "BHARTIARTL.NS", "SBIN.NS", "LT.NS", "KOTAKBANK.NS", "AXISBANK.NS", "ITC.NS",
-    "BAJFINANCE.NS", "MARUTI.NS", "HINDUNILVR.NS", "ASIANPAINT.NS", "TATASTEEL.NS",
-    "JIOFIN.NS", "TATAPOWER.NS"
+    "^NSEI",
+    "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS",
+    "KOTAKBANK.NS", "BAJFINANCE.NS", "INFY.NS", "TCS.NS", "MARUTI.NS",
+    "M&M.NS", "TATAMOTORS.NS", "TATASTEEL.NS", "HINDALCO.NS", "JSWSTEEL.NS",
+    "LT.NS", "BHARTIARTL.NS", "BEL.NS", "HAL.NS", "SUNPHARMA.NS", "ITC.NS", "TRENT.NS"
 ]
 
 def fetch_data():
@@ -188,7 +187,7 @@ def simulate_day(target_date_str="2026-10-21"):
                         pos['current_stop'] = ceil_to_tick(pos['entry_price'] * 1.0015)
                     else:
                         pos['current_stop'] = floor_to_tick(pos['entry_price'] * 0.9985)
-                    print(f"  [{current_time.strftime('%H:%M')}] {sym} FEE-LOCK ACTIVATED at +{current_r:.2f}R ➔ SL moved to Rs. {pos['current_stop']:.2f}")
+                    print(f"  [{current_time.strftime('%H:%M')}] {sym} FEE-LOCK ACTIVATED at +{current_r:.2f}R -> SL moved to Rs. {pos['current_stop']:.2f}")
 
             # Check Target Exit (Fixed 2.0R)
             is_closed = False
@@ -222,12 +221,14 @@ def simulate_day(target_date_str="2026-10-21"):
 
             if is_closed:
                 qty = pos['quantity']
+                costs = CostsConfig()
                 if pos['side'] == "BUY":
                     gross_pnl = (exit_price - pos['entry_price']) * qty
+                    charges = calculate_charges(pos['entry_price'], exit_price, qty, costs)
                 else:
                     gross_pnl = (pos['entry_price'] - exit_price) * qty
+                    charges = calculate_charges(exit_price, pos['entry_price'], qty, costs)
 
-                charges = calculate_zerodha_intraday_charges(pos['entry_price'], exit_price, qty)
                 net_pnl = gross_pnl - charges['total_charges']
 
                 completed_trades.append({
@@ -246,7 +247,7 @@ def simulate_day(target_date_str="2026-10-21"):
                     'stt': round(charges['stt'], 2),
                     'exchange_txn': round(charges['exchange_txn'], 2),
                     'gst': round(charges['gst'], 2),
-                    'sebi_charges': round(charges['sebi_charges'], 2),
+                    'sebi_charges': round(charges['sebi'], 2),
                     'stamp_duty': round(charges['stamp_duty'], 2),
                     'total_charges': round(charges['total_charges'], 2),
                     'net_pnl': round(net_pnl, 2),
@@ -268,7 +269,7 @@ def simulate_day(target_date_str="2026-10-21"):
             elif nifty_close < nifty_or_low:
                 regime = MarketRegime.BEARISH
             else:
-                regime = MarketRegime.SIDEWAYS
+                regime = MarketRegime.NEUTRAL
 
             candidates = []
 
@@ -297,11 +298,11 @@ def simulate_day(target_date_str="2026-10-21"):
 
                 # Check breakout signal
                 signal_side = None
-                if close_p > stock_or_high and regime in (MarketRegime.BULLISH, MarketRegime.SIDEWAYS):
+                if close_p > stock_or_high and regime in (MarketRegime.BULLISH, MarketRegime.NEUTRAL):
                     # Long Breakout
                     if close_p > vwap and adx >= 22.0:
                         signal_side = "BUY"
-                elif close_p < stock_or_low and regime in (MarketRegime.BEARISH, MarketRegime.SIDEWAYS):
+                elif close_p < stock_or_low and regime in (MarketRegime.BEARISH, MarketRegime.NEUTRAL):
                     # Short Breakout
                     if close_p < vwap and adx >= 22.0:
                         signal_side = "SELL"
