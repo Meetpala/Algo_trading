@@ -657,12 +657,7 @@ def evaluate_candidate_signal(
         if (bar.close - bar.lower_circuit) / bar.close < min_circuit_dist:
             return None
 
-    # Gate 9A: Minimum Intraday ATR Volatility Check (filters out slow/defensive radar additions)
-    min_atr = float(gates.get("min_atr_pct", 0.0022))
-    if bar.close > 0 and (bar.atr14 / bar.close) < min_atr:
-        return None
-
-    # Gate 9B: Stop-Width Sweet Spot (0.55% <= R% <= 0.90%)
+    # Gate 9: Stop-Width Sweet Spot (0.55% <= R% <= 0.90%)
     levels = compute_initial_stop_and_target(
         side=side,
         entry_price=bar.close,
@@ -675,13 +670,6 @@ def evaluate_candidate_signal(
     max_r_pct = float(gates.get("max_stop_distance_pct", 0.0090))
     if not (min_r_pct <= levels.risk_pct <= max_r_pct):
         return None
-
-    # Gate 9C: ADR Exhaustion Filter (Reject if stock already consumed > 60% of 14-day ADR)
-    max_adr = float(gates.get("max_adr_consumed_pct", 0.60))
-    if bar.adr14_pct > 0 and bar.session_low_so_far > 0:
-        intraday_range_pct = (bar.session_high_so_far - bar.session_low_so_far) / bar.session_low_so_far
-        if (intraday_range_pct / bar.adr14_pct) > max_adr:
-            return None
 
     # Conviction Score to rank simultaneous triggers across a 25-40 stock radar
     spread_floor = max(bar.bid_ask_spread_bps, 1.0)

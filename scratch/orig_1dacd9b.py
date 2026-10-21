@@ -7,6 +7,8 @@ Evaluates:
 - Monthly breakdown: Month 1, Month 2, Month 3 (Last 30 Days)
 - Strict Quantitative Invariants: Max 2 slots, Slot 2 lock (+0.5R), 1 entry per bar, exact statutory friction
 """
+import sys
+sys.path.insert(0, '.')
 import os
 import math
 import json

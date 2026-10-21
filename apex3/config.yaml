@@ -45,10 +45,8 @@ signal_gates:
   min_volume_surge_ratio: 2.0         # Gate 5: >= 2.0x institutional volume confirmation
   max_spread_bps: 4.0                 # Gate 6: Tightened from 8 bps to 4 bps for zero-slippage fills
   min_circuit_distance_pct: 0.020     # Gate 7: >= 2.0% away from upper/lower circuit
-  min_atr_pct: 0.0022                 # Minimum 5m ATR(14) as % of price (filters dead stocks)
-  min_stop_distance_pct: 0.0055       # Gate 9A: Minimum R = 0.55% (eliminates fee compression on micro-stops)
-  max_stop_distance_pct: 0.0090       # Gate 9B: Maximum R = 0.90%
-  max_adr_consumed_pct: 0.60          # Gate 9C: Reject if stock already moved > 60% of 14-day ADR
+  min_stop_distance_pct: 0.0055       # Stop-width floor: Minimum R = 0.55% (eliminates fee compression)
+  max_stop_distance_pct: 0.0090       # Stop-width ceiling: Maximum R = 0.90%
   min_breakout_cushion_atr: 0.15      # Breakout close must clear OR by >= 0.15 * ATR(14)
   min_clv_ratio: 0.70                 # Close Location Value >= 0.70 (closes in top/bottom 30% of bar)
 
