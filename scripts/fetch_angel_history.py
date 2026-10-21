@@ -132,7 +132,7 @@ def save_candles_to_csv(symbol: str, candles: list):
     rows = []
     for c in candles:
         rows.append({
-            "Datetime": c.timestamp.strftime("%Y-%m-%d %H:%M:%S%z"),
+            "Datetime": f"{c.timestamp.strftime('%Y-%m-%d %H:%M:%S')}+05:30",
             "Open": c.open,
             "High": c.high,
             "Low": c.low,
@@ -147,7 +147,7 @@ def save_candles_to_csv(symbol: str, candles: list):
 
 def main():
     provider = check_and_authenticate()
-    symbols_to_fetch = [("NSEI", "26000")] + [(s, DEFAULT_ANGEL_TOKENS[s]) for s in ELITE_10]
+    symbols_to_fetch = [("NSEI", "99926000")] + [(s, DEFAULT_ANGEL_TOKENS[s]) for s in ELITE_10]
 
     print(f"Downloading 6-month 5m candles for {len(symbols_to_fetch)} instruments...")
     for sym, token in symbols_to_fetch:

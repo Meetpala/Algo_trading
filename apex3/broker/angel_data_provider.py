@@ -32,8 +32,10 @@ DEFAULT_ANGEL_TOKENS: dict[str, str] = {
     "KOTAKBANK": "1922",
     "SUNPHARMA": "3351",
     # Benchmark & High Liquidity Proxies
-    "NIFTY 50": "26000",
-    "NIFTY": "26000",
+    "NIFTY 50": "99926000",
+    "NIFTY": "99926000",
+    "NSEI": "99926000",
+    "^NSEI": "99926000",
     "INFY": "1594",
     "HDFCBANK": "1333",
     "ICICIBANK": "4963",
