@@ -65,37 +65,34 @@ stops_and_targets:
 radar:
   # Tier 1: Core 15 High-Beta NIFTY 50 Institutional Leaders (Always Active)
   core_watchlist:
+    - "RELIANCE"
+    - "HDFCBANK"
     - "ICICIBANK"
     - "SBIN"
     - "AXISBANK"
-    - "BAJFINANCE"
     - "KOTAKBANK"
+    - "BAJFINANCE"
+    - "INFY"
+    - "TCS"
+    - "MARUTI"
+    - "M&M"
+    - "TATAMOTORS"
     - "TATASTEEL"
     - "HINDALCO"
     - "JSWSTEEL"
-    - "RELIANCE"
-    - "M&M"
-    - "TATAMOTORS"
     - "LT"
-    - "ADANIPORTS"
-    - "INFY"
     - "SUNPHARMA"
 
-  # Tier 2: Extended High-Beta F&O Momentum Radar (Toggle true/false)
+  # Tier 2: Top Momentum Leaders to complete the Elite 20 Universe (Auto-scanned)
   enable_extended_radar: true
   extended_radar:
     - "BEL"
     - "HAL"
     - "TRENT"
-    - "DLF"
-    - "CHOLAFIN"
-    - "BANKBARODA"
-    - "PNB"
-    - "VEDL"
-    - "TATAPOWER"
-    - "BAJAJ-AUTO"
+    - "BHARTIARTL"
+    - "ITC"
 
-  # Tier 3: Your Custom Radar — Add any NSE MIS-eligible stock here at any time.
+  # Tier 3: Optional Custom List (No daily manual input required)
   custom_user_radar:
     - "JIOFIN"
     - "ZOMATO"
