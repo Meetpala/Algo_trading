@@ -98,6 +98,10 @@ class StopsConfig:
     target_r: float = 2.0
     use_fixed_target: bool = True
     trail_enabled: bool = False
+    fee_lock_enabled: bool = True
+    fee_lock_trigger_r: float = 1.65
+    late_day_lock_trigger_r: float = 0.75
+    fee_lock_offset_pct: float = 0.0015
     trail: TrailConfig = field(default_factory=TrailConfig)
     max_modifications_per_order: int = 25
     modification_headroom: int = 3
@@ -141,7 +145,7 @@ class RateLimitsConfig:
 class CostsConfig:
     brokerage_per_order: float = 20.0
     stt_pct: float = 0.025
-    exchange_txn_pct: float = 0.00307
+    exchange_txn_pct: float = 0.00318
     gst_pct: float = 18.0
     sebi_turnover_pct: float = 0.0001
     stamp_duty_pct: float = 0.003
@@ -373,6 +377,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             target_r=float(stops_raw.get("target_r_multiple", stops_raw.get("target_r", 2.0))),
             use_fixed_target=bool(stops_raw.get("use_fixed_target", True)),
             trail_enabled=bool(stops_raw.get("trail_enabled", False)),
+            fee_lock_enabled=bool(stops_raw.get("fee_lock_enabled", True)),
+            fee_lock_trigger_r=float(stops_raw.get("fee_lock_trigger_r", 1.65)),
+            late_day_lock_trigger_r=float(stops_raw.get("late_day_lock_trigger_r", 0.75)),
+            fee_lock_offset_pct=float(stops_raw.get("fee_lock_offset_pct", 0.0015)),
             trail=trail_config,
             max_modifications_per_order=int(stops_raw.get("max_modifications_per_order", 25)),
             modification_headroom=int(stops_raw.get("modification_headroom", 3)),
@@ -388,7 +396,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         costs=CostsConfig(
             brokerage_per_order=float(costs_raw.get("brokerage_per_order", 20.0)),
             stt_pct=float(costs_raw.get("stt_pct", 0.025)),
-            exchange_txn_pct=float(costs_raw.get("exchange_txn_pct", 0.00307)),
+            exchange_txn_pct=float(costs_raw.get("exchange_txn_pct", 0.00318)),
             gst_pct=float(costs_raw.get("gst_pct", 18.0)),
             sebi_turnover_pct=float(costs_raw.get("sebi_turnover_pct", 0.0001)),
             stamp_duty_pct=float(costs_raw.get("stamp_duty_pct", 0.003)),

@@ -58,11 +58,39 @@ from apex3.strategy.trail import (
     calculate_initial_stop,
     calculate_stop_limit_prices,
     calculate_target_price,
+    ceil_to_tick,
     evaluate_trailing_stop,
+    floor_to_tick,
 )
 
 IST = ZoneInfo("Asia/Kolkata")
 logger = logging.getLogger("apex3.engine")
+
+
+def build_active_radar(cfg: dict) -> list[str]:
+    """
+    Merges Core Watchlist + Extended Radar + Custom User Radar into a deduplicated list.
+    """
+    radar_cfg = cfg.get("radar", {})
+    symbols = list(radar_cfg.get("core_watchlist", []))
+    if radar_cfg.get("enable_extended_radar", True):
+        symbols.extend(radar_cfg.get("extended_radar", []))
+    symbols.extend(radar_cfg.get("custom_user_radar", []))
+
+    # Fallback to watchlist if radar is empty
+    if not symbols:
+        wl = cfg.get("watchlist", {})
+        symbols = list(wl.get("symbols", [])) or list(wl.get("scanner_universe", []))
+
+    # Deduplicate while preserving order
+    seen = set()
+    active_radar = []
+    for sym in symbols:
+        clean_sym = sym.strip().upper()
+        if clean_sym and clean_sym not in seen:
+            seen.add(clean_sym)
+            active_radar.append(clean_sym)
+    return active_radar
 
 
 class StrategyEngine:
@@ -95,6 +123,10 @@ class StrategyEngine:
 
     def get_active_watchlist(self) -> list[str]:
         """Return manual symbols or the full scanner candidate universe."""
+        if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) and "radar" in self.config.raw_dict:
+            radar_symbols = build_active_radar(self.config.raw_dict)
+            if radar_symbols:
+                return radar_symbols
         if not self.config.watchlist.scanner_enabled:
             # Manual mode: user selected symbols
             return self.config.watchlist.symbols[: self.config.limits.max_symbols]
@@ -371,19 +403,75 @@ class StrategyEngine:
                         fav_excursion = pos.average_entry - pos.best_favorable_price
 
                     open_r = fav_excursion / pos.r_value if pos.r_value > 0 else 0.0
+
+                    # One-Time Fee-Protected Breakeven Step
+                    st_cfg = {}
+                    if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
+                        st_cfg = self.config.raw_dict.get("stops_and_targets", {})
+                    fee_lock_enabled = st_cfg.get("fee_lock_enabled", getattr(self.config.stops, "fee_lock_enabled", True))
+                    trigger_r = float(st_cfg.get("fee_lock_trigger_r", getattr(self.config.stops, "fee_lock_trigger_r", 1.65)))
+                    sched_cfg = self.config.raw_dict.get("schedule", {}) if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) else {}
+                    late_time = sched_cfg.get("late_day_protection_time", "13:45")
+                    late_trigger_r = float(st_cfg.get("late_day_lock_trigger_r", getattr(self.config.stops, "late_day_lock_trigger_r", 0.75)))
+                    offset_pct = float(st_cfg.get("fee_lock_offset_pct", getattr(self.config.stops, "fee_lock_offset_pct", 0.0015)))
+
+                    now_time_str = now.strftime("%H:%M")
+                    should_lock = fee_lock_enabled and (not getattr(pos, "fee_lock_applied", False)) and (
+                        open_r >= trigger_r or (now_time_str >= late_time and open_r >= late_trigger_r)
+                    )
+
+                    broker_action = "NONE"
+                    reason_code = "HOLDING_FOR_TARGET"
+                    explanation = f"Holding with structural SL ({pos.current_stop_price:.2f}) towards 2.0R target ({pos.target_price:.2f})"
+
+                    if should_lock:
+                        tick = inst_info.tick_size if inst_info and inst_info.tick_size > 0 else 0.05
+                        if pos.side == Side.BUY:
+                            protected_stop = ceil_to_tick(pos.average_entry * (1.0 + offset_pct), tick)
+                            valid_move = protected_stop > pos.current_stop_price and protected_stop <= current_price
+                        else:
+                            protected_stop = floor_to_tick(pos.average_entry * (1.0 - offset_pct), tick)
+                            valid_move = protected_stop < pos.current_stop_price and protected_stop >= current_price
+
+                        if valid_move:
+                            prev_stop = pos.current_stop_price
+                            trigger, limit = calculate_stop_limit_prices(pos.side, protected_stop, self.config.stops, tick)
+                            if pos.protective_order_id:
+                                self.broker.modify_order(
+                                    order_id=pos.protective_order_id,
+                                    price=limit,
+                                    trigger_price=trigger,
+                                )
+                            pos.current_stop_price = protected_stop
+                            pos.fee_lock_applied = True
+                            pos.stop_modification_count += 1
+                            broker_action = f"MODIFIED_STOP_FEE_LOCK_{protected_stop}"
+                            reason_code = "FEE_PROTECTED_BREAKEVEN_STEP"
+                            explanation = f"Moved stop to fee-protected breakeven ({protected_stop:.2f}) at {open_r:.2f}R"
+                            self.journal.log_stop_change(
+                                symbol=pos.symbol,
+                                side=pos.side.value,
+                                previous_stop=prev_stop,
+                                new_stop=protected_stop,
+                                reason="FEE_PROTECTED_BREAKEVEN_STEP",
+                                r_multiple=round(open_r, 2),
+                                best_favorable_price=pos.best_favorable_price,
+                                modification_number=pos.stop_modification_count,
+                            )
+
                     decisions.append(
                         StrategyDecision(
                             decision=Decision.MANAGE,
                             symbol=pos.symbol,
                             side=pos.side,
                             timestamp_ist=now,
-                            reason_codes=["HOLDING_FOR_TARGET"],
-                            explanation=f"Holding with structural SL ({pos.current_stop_price:.2f}) towards 2.0R target ({pos.target_price:.2f})",
+                            reason_codes=[reason_code],
+                            explanation=explanation,
                             open_r=round(open_r, 2),
                             best_favorable_price=pos.best_favorable_price,
                             current_stop=pos.current_stop_price,
                             proposed_stop=pos.current_stop_price,
-                            broker_action="NONE",
+                            broker_action=broker_action,
                         )
                     )
             except Exception as e:
@@ -504,6 +592,30 @@ class StrategyEngine:
                 )
             return decisions
 
+        # Slot-2 Lock Gate: Only allow a 2nd position if Slot 1 is already in profit >= +0.50R
+        active_positions = [p for p in open_managed if p.quantity > 0]
+        if len(active_positions) == 1:
+            first_pos = active_positions[0]
+            mark = self.broker.get_quote(first_pos.symbol)
+            curr_px = mark.last_price if (mark and mark.is_fresh and mark.last_price > 0) else first_pos.average_entry
+            r_val = first_pos.r_value if first_pos.r_value > 0 else abs(first_pos.average_entry - first_pos.initial_stop_price)
+            unrealized_r = 0.0
+            if r_val > 0:
+                unrealized_r = (curr_px - first_pos.average_entry) / r_val if first_pos.side == Side.BUY else (first_pos.average_entry - curr_px) / r_val
+
+            risk_raw = self.config.raw_dict.get("risk_management", {}) if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) else {}
+            req_r = float(risk_raw.get("second_slot_requires_slot1_profit_r", 0.50))
+            if unrealized_r < req_r:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        timestamp_ist=now,
+                        reason_codes=["SECOND_SLOT_LOCKED_UNTIL_0.5R"],
+                        explanation=f"Slot 2 locked: Active position in {first_pos.symbol} has unrealized R of {unrealized_r:.2f}R (requires >= {req_r:.2f}R)",
+                    )
+                )
+                return decisions
+
         # -------------------------------------------------------------
         # STEP 6: Opening Range Period Check (09:15 - 09:30)
         # -------------------------------------------------------------
@@ -588,7 +700,7 @@ class StrategyEngine:
                 config=self.config.signal,
                 is_entry_window=True,
             )
-            evaluated_signals[sym] = (sig, inst, stock_candles)
+            evaluated_signals[sym] = (sig, inst, stock_candles, quote)
             if sig.decision in (Decision.PROPOSED_LONG, Decision.PROPOSED_SHORT):
                 qualified_candidates.append(sym)
 
@@ -606,18 +718,19 @@ class StrategyEngine:
                 )
             return decisions
 
-        if self.config.watchlist.scanner_enabled:
-            # Rank by directional relative strength first, then relative volume.
-            # Both values are already required by the strategy's signal gates.
-            qualified_candidates.sort(
-                key=lambda symbol: (
-                    evaluated_signals[symbol][0].relative_strength
-                    * (1 if evaluated_signals[symbol][0].side == Side.BUY else -1),
-                    evaluated_signals[symbol][0].relative_volume,
-                    symbol,
-                ),
-                reverse=True,
-            )
+        # Rank qualified candidates by Conviction Score: (|RS| * 100 * relative_volume) / max(spread_bps, 1.0)
+        def compute_conviction(sym_name: str) -> float:
+            sig_item, _, _, quote_item = evaluated_signals[sym_name]
+            mid = (quote_item.bid + quote_item.ask) / 2.0 if (quote_item and quote_item.bid and quote_item.ask) else 0.0
+            spread_bps = ((quote_item.ask - quote_item.bid) / mid) * 10000.0 if mid > 0 else 1.0
+            spread_floor = max(spread_bps, 1.0)
+            return (abs(sig_item.relative_strength) * 100.0 * sig_item.relative_volume) / spread_floor
+
+        qualified_candidates.sort(key=compute_conviction, reverse=True)
+        max_new = 1
+        if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
+            max_new = int(self.config.raw_dict.get("risk_management", {}).get("max_new_entries_per_bar", 1))
+        qualified_candidates = qualified_candidates[:max_new]
 
         # Sizing and Risk for qualified candidates
         num_qualified = len(qualified_candidates)
@@ -625,7 +738,7 @@ class StrategyEngine:
         for sym in qualified_candidates:
             if len(risk_positions) >= self.config.limits.max_symbols:
                 break
-            sig, inst, stock_candles = evaluated_signals[sym]
+            sig, inst, stock_candles, _ = evaluated_signals[sym]
             entry_price = sig.signal_price
             side = sig.side
 
@@ -840,30 +953,7 @@ class StrategyEngine:
 # Cross-Sectional Radar Merger & Conviction Ranker Loop
 # ---------------------------------------------------------------------------
 
-def build_active_radar(cfg: dict) -> list[str]:
-    """
-    Merges Core Watchlist + Extended Radar + Custom User Radar into a deduplicated list.
-    """
-    radar_cfg = cfg.get("radar", {})
-    symbols = list(radar_cfg.get("core_watchlist", []))
-    if radar_cfg.get("enable_extended_radar", True):
-        symbols.extend(radar_cfg.get("extended_radar", []))
-    symbols.extend(radar_cfg.get("custom_user_radar", []))
 
-    # Fallback to watchlist if radar is empty
-    if not symbols:
-        wl = cfg.get("watchlist", {})
-        symbols = list(wl.get("symbols", [])) or list(wl.get("scanner_universe", []))
-
-    # Deduplicate while preserving order
-    seen = set()
-    active_radar = []
-    for sym in symbols:
-        clean_sym = sym.strip().upper()
-        if clean_sym and clean_sym not in seen:
-            seen.add(clean_sym)
-            active_radar.append(clean_sym)
-    return active_radar
 
 
 def select_best_entries_for_bar(

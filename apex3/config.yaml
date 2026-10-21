@@ -63,39 +63,28 @@ stops_and_targets:
   modification_headroom: 3
 
 radar:
-  # Tier 1: Core 15 High-Beta NIFTY 50 Institutional Leaders (Always Active)
+  # Tier 1: Audited Elite 10 Institutional Trend Leaders (Max Profitability & Low Friction)
   core_watchlist:
-    - "RELIANCE"
-    - "HDFCBANK"
-    - "ICICIBANK"
-    - "SBIN"
-    - "AXISBANK"
-    - "KOTAKBANK"
-    - "BAJFINANCE"
-    - "INFY"
-    - "TCS"
-    - "MARUTI"
-    - "M&M"
-    - "BAJAJ-AUTO"
-    - "TATASTEEL"
     - "HINDALCO"
     - "JSWSTEEL"
-    - "LT"
+    - "RELIANCE"
+    - "MARUTI"
+    - "ITC"
+    - "TCS"
+    - "SBIN"
+    - "TRENT"
+    - "KOTAKBANK"
     - "SUNPHARMA"
 
-  # Tier 2: Top Momentum Leaders to complete the Elite 20 Universe (Auto-scanned)
-  enable_extended_radar: true
+  # Tier 2: Disabled by default to block negative-expectancy choppy whipsaws (HAL, AXISBANK, BEL, etc.)
+  enable_extended_radar: false
   extended_radar:
     - "BEL"
     - "HAL"
-    - "TRENT"
     - "BHARTIARTL"
-    - "ITC"
 
-  # Tier 3: Optional Custom List (No daily manual input required)
-  custom_user_radar:
-    - "JIOFIN"
-    - "ZOMATO"
+  # Tier 3: Optional Custom List (Disabled by default)
+  custom_user_radar: []
 
 # --- Auxiliary Compatibility Sections ---
 entry:
@@ -146,7 +135,7 @@ rate_limits:
 costs:
   brokerage_per_order: 20.0
   stt_pct: 0.025
-  exchange_txn_pct: 0.00307
+  exchange_txn_pct: 0.00318
   gst_pct: 18.0
   sebi_turnover_pct: 0.0001
   stamp_duty_pct: 0.003

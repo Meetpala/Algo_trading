@@ -20,23 +20,29 @@ IST = ZoneInfo("Asia/Kolkata")
 
 # Static token mapping for top liquid NIFTY candidates (cached for sub-millisecond lookup)
 DEFAULT_ANGEL_TOKENS: dict[str, str] = {
+    # Audited Elite 10 Institutional Watchlist
+    "HINDALCO": "1363",
+    "JSWSTEEL": "11723",
     "RELIANCE": "2885",
+    "MARUTI": "10999",
+    "ITC": "1660",
     "TCS": "11536",
+    "SBIN": "3045",
+    "TRENT": "1964",
+    "KOTAKBANK": "1922",
+    "SUNPHARMA": "3351",
+    # Benchmark & High Liquidity Proxies
+    "NIFTY 50": "26000",
+    "NIFTY": "26000",
     "INFY": "1594",
     "HDFCBANK": "1333",
     "ICICIBANK": "4963",
     "BHARTIARTL": "10604",
-    "SBIN": "3045",
     "LT": "11483",
-    "KOTAKBANK": "1922",
     "AXISBANK": "5900",
-    "ITC": "1660",
     "BAJFINANCE": "317",
-    "MARUTI": "10999",
     "HINDUNILVR": "1394",
     "ASIANPAINT": "236",
-    "NIFTY 50": "99926000",
-    "NIFTY": "99926000",
 }
 
 

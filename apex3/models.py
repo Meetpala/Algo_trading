@@ -151,6 +151,7 @@ class PositionState:
     r_value: float = 0.0               # abs(entry - initial_stop)
     current_r_multiple: float = 0.0    # Current favorable excursion in R
     trail_activated: bool = False
+    fee_lock_applied: bool = False
     target_price: float = 0.0          # Take-profit price (e.g. 2.0R target)
     target_order_id: str = ""
     # Strategy metadata

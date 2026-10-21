@@ -55,6 +55,7 @@ class ManagedPosition:
     best_favorable_price: float = 0.0
     r_value: float = 0.0
     trail_activated: bool = False
+    fee_lock_applied: bool = False
     stop_modification_count: int = 0
     strategy_tag: str = ""
     unrealized_pnl: float = 0.0
@@ -87,6 +88,7 @@ class ManagedPosition:
                 else 0.0
             ),
             trail_activated=self.trail_activated,
+            fee_lock_applied=self.fee_lock_applied,
             strategy_tag=self.strategy_tag,
         )
 

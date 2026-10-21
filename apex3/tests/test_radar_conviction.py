@@ -24,8 +24,16 @@ def cfg():
     return load_config().raw_dict
 
 
-def test_build_active_radar_merges_all_three_tiers(cfg):
-    radar = build_active_radar(cfg)
+def test_build_active_radar_merges_all_three_tiers():
+    mock_cfg = {
+        "radar": {
+            "core_watchlist": ["RELIANCE", "ICICIBANK", "INFY"],
+            "enable_extended_radar": True,
+            "extended_radar": ["BEL", "HAL", "TRENT"],
+            "custom_user_radar": ["JIOFIN", "ZOMATO"],
+        }
+    }
+    radar = build_active_radar(mock_cfg)
     # Check Core Tier 1
     assert "RELIANCE" in radar
     assert "ICICIBANK" in radar
@@ -257,6 +265,8 @@ def test_select_best_entries_for_bar_ranks_and_picks_top1(cfg):
         adr14_pct=0.025,
     )
 
+    test_cfg = dict(cfg)
+    test_cfg["radar"] = {"core_watchlist": ["RELIANCE", "INFY"], "enable_extended_radar": False, "custom_user_radar": []}
     candidate_bars = {"RELIANCE": bar1, "INFY": bar2}
     open_positions = {}
     orders = select_best_entries_for_bar(
@@ -264,7 +274,7 @@ def test_select_best_entries_for_bar_ranks_and_picks_top1(cfg):
         candidate_bars=candidate_bars,
         open_positions=open_positions,
         realized_daily_pnl_net=0.0,
-        cfg=cfg,
+        cfg=test_cfg,
     )
 
     # Should select exactly 1 trade (max_new_entries_per_bar: 1)
@@ -272,3 +282,116 @@ def test_select_best_entries_for_bar_ranks_and_picks_top1(cfg):
     best_sig, best_sizing = orders[0]
     # INFY has higher RS (0.02 vs 0.01), higher vol (3.5 vs 2.25), and tighter spread -> INFY wins!
     assert best_sig.symbol == "INFY"
+
+
+def test_strategy_engine_watchlist_resolution(tmp_path):
+    from apex3.broker.paper import PaperBroker
+    from apex3.journal.sqlite_journal import Journal
+    from apex3.strategy.engine import StrategyEngine
+
+    cfg = load_config()
+    journal = Journal(db_path=str(tmp_path / "test_wl.db"))
+    broker = PaperBroker(initial_margin=100000.0)
+    engine = StrategyEngine(config=cfg, broker=broker, journal=journal)
+
+    watchlist = engine.get_active_watchlist()
+    assert "HINDALCO" in watchlist
+    assert "JSWSTEEL" in watchlist
+    assert "RELIANCE" in watchlist
+    assert "SUNPHARMA" in watchlist
+    assert len(watchlist) == 10
+
+
+def test_strategy_engine_slot2_lock(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from apex3.broker.paper import PaperBroker
+    from apex3.journal.sqlite_journal import Journal
+    from apex3.models import Decision, Quote, Side
+    from apex3.reconciliation.state_machine import PositionPhase
+    from apex3.strategy.engine import StrategyEngine
+
+    IST = ZoneInfo("Asia/Kolkata")
+    cfg = load_config()
+    journal = Journal(db_path=str(tmp_path / "test_engine_lock.db"))
+    broker = PaperBroker(initial_margin=100000.0)
+    engine = StrategyEngine(config=cfg, broker=broker, journal=journal)
+
+    # 1. Active position with unrealized_r < 0.50 (entry=1000, stop=990, r=10, last_price=1002 -> 0.2R)
+    pos = engine.state_machine.get_or_create_position("RELIANCE")
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.side = Side.BUY
+    pos.quantity = 10
+    pos.average_entry = 1000.0
+    pos.initial_stop_price = 990.0
+    pos.current_stop_price = 990.0
+    pos.target_price = 1020.0
+    pos.r_value = 10.0
+    pos.strategy_tag = "APEX3_TEST"
+
+    broker._fixture_quotes["RELIANCE"] = Quote(
+        symbol="RELIANCE",
+        exchange="NSE",
+        last_price=1002.0,
+        bid=1001.95,
+        ask=1002.05,
+        volume=1000,
+        timestamp=datetime(2026, 10, 21, 10, 0, tzinfo=IST),
+        is_fresh=True,
+    )
+
+    t = datetime(2026, 10, 21, 10, 0, tzinfo=IST)
+    decisions = engine.evaluate_step(t)
+    wait_dec = next((d for d in decisions if "SECOND_SLOT_LOCKED_UNTIL_0.5R" in d.reason_codes), None)
+    assert wait_dec is not None
+    assert wait_dec.decision == Decision.WAIT
+
+
+def test_strategy_engine_fee_protected_breakeven(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from apex3.broker.paper import PaperBroker
+    from apex3.journal.sqlite_journal import Journal
+    from apex3.models import Decision, Quote, Side
+    from apex3.reconciliation.state_machine import PositionPhase
+    from apex3.strategy.engine import StrategyEngine
+
+    IST = ZoneInfo("Asia/Kolkata")
+    cfg = load_config()
+    journal = Journal(db_path=str(tmp_path / "test_fee_lock.db"))
+    broker = PaperBroker(initial_margin=100000.0)
+    engine = StrategyEngine(config=cfg, broker=broker, journal=journal)
+
+    # Open position: entry=1000, stop=990, r=10. Price=1017 (open_r = 1.70R >= 1.65R)
+    pos = engine.state_machine.get_or_create_position("RELIANCE")
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.side = Side.BUY
+    pos.quantity = 10
+    pos.average_entry = 1000.0
+    pos.initial_stop_price = 990.0
+    pos.current_stop_price = 990.0
+    pos.target_price = 1020.0
+    pos.r_value = 10.0
+    pos.strategy_tag = "APEX3_TEST"
+    pos.fee_lock_applied = False
+
+    broker._fixture_quotes["RELIANCE"] = Quote(
+        symbol="RELIANCE",
+        exchange="NSE",
+        last_price=1017.0,
+        bid=1016.95,
+        ask=1017.05,
+        volume=1000,
+        timestamp=datetime(2026, 10, 21, 11, 0, tzinfo=IST),
+        is_fresh=True,
+    )
+
+    t = datetime(2026, 10, 21, 11, 0, tzinfo=IST)
+    decisions = engine.evaluate_step(t)
+    manage_dec = next((d for d in decisions if d.symbol == "RELIANCE"), None)
+    assert manage_dec is not None
+    assert manage_dec.decision == Decision.MANAGE
+    assert "FEE_PROTECTED_BREAKEVEN_STEP" in manage_dec.reason_codes
+    assert pos.fee_lock_applied is True
+    # 1000.0 * 1.0015 = 1001.50
+    assert pos.current_stop_price == 1001.50
