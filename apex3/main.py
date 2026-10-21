@@ -54,11 +54,24 @@ def run_app():
     if config.mode == "live":
         from apex3.broker.kite_adapter import KiteAdapter
         logger.warning("LIVE TRADING MODE CONFIGURED — Checking safety gates...")
-        broker = KiteAdapter(
+        kite_broker = KiteAdapter(
             api_key=config.secrets.kite_api_key,
             access_token=config.secrets.kite_access_token,
             live_enabled=config.secrets.live_trading_enabled,
         )
+        if config.secrets.angel_api_key:
+            from apex3.broker.angel_data_provider import AngelDataProvider
+            from apex3.broker.hybrid_adapter import HybridBrokerAdapter
+            logger.info("Configuring HYBRID MODE: Angel One SmartAPI (Data) + Zerodha (Orders)")
+            angel_data = AngelDataProvider(
+                api_key=config.secrets.angel_api_key,
+                client_code=config.secrets.angel_client_code,
+                pin=config.secrets.angel_pin,
+                totp_secret=config.secrets.angel_totp_secret,
+            )
+            broker = HybridBrokerAdapter(data_provider=angel_data, execution_broker=kite_broker)
+        else:
+            broker = kite_broker
     else:
         logger.info("Operating in PAPER TRADING mode. Real orders are impossible.")
         broker = PaperBroker(starting_margin=config.paper_starting_capital)

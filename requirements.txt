@@ -9,9 +9,12 @@ tzdata>=2024.1  # Required on Windows for zoneinfo IANA timezone database
 # Web dashboard (localhost only)
 Flask>=3.0
 
-# Zerodha Kite Connect SDK (optional — only needed for live mode)
-# Uncomment when ready to connect to Kite API:
-# kiteconnect>=5.0
+# Zerodha Kite Connect SDK (orders & account)
+kiteconnect>=5.0
+
+# Angel One SmartAPI SDK (100% free live market data feed & automated TOTP)
+smartapi-python>=1.5.0
+pyotp>=2.8.0
 
 # Testing
 pytest>=7.0

@@ -175,6 +175,10 @@ class SecretsConfig:
     kite_api_key: str = ""
     kite_api_secret: str = ""
     kite_access_token: str = ""
+    angel_api_key: str = ""
+    angel_client_code: str = ""
+    angel_pin: str = ""
+    angel_totp_secret: str = ""
     live_trading_enabled: bool = False
     static_ip_configured: bool = False
     sebi_compliance_acknowledged: bool = False
@@ -214,6 +218,10 @@ def _load_secrets() -> SecretsConfig:
         kite_api_key=os.environ.get("KITE_API_KEY", ""),
         kite_api_secret=os.environ.get("KITE_API_SECRET", ""),
         kite_access_token=os.environ.get("KITE_ACCESS_TOKEN", ""),
+        angel_api_key=os.environ.get("ANGEL_API_KEY", ""),
+        angel_client_code=os.environ.get("ANGEL_CLIENT_CODE", ""),
+        angel_pin=os.environ.get("ANGEL_PIN", ""),
+        angel_totp_secret=os.environ.get("ANGEL_TOTP_SECRET", ""),
         live_trading_enabled=os.environ.get(
             "LIVE_TRADING_ENABLED", "false"
         ).lower() == "true",
