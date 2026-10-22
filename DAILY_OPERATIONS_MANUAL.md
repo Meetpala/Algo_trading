@@ -75,17 +75,22 @@ Print or bookmark this daily schedule:
 ## 4. Exact Step-by-Step Daily Routine
 
 ### Step 1: Morning 1-Click Login (08:30 – 09:10 AM IST)
-Because Zerodha Kite Connect access tokens expire every morning at 06:00 AM IST, you must authorize your daily session once:
+Zerodha Kite Connect access tokens expire daily between 07:00 AM and 07:30 AM IST during Zerodha's backend maintenance reset. Therefore, you must authorize your daily session once every morning after 07:30 AM:
 
-1. Open your phone or laptop browser and tap your Cloudflare Dashboard link:
+1. Open your phone or laptop browser and tap your permanent Cloud Dashboard login link:
    ```
-   https://companion-significantly-fortune-packets.trycloudflare.com/login/kite
+   http://34.14.147.10:5000/login/kite
    ```
 2. Log in with your **Zerodha User ID**, **Password**, and approve the **Mobile 2FA App TOTP**.
-3. Zerodha redirects back through your secure tunnel to `/auth/callback`.
+3. Zerodha redirects back directly to `http://34.14.147.10:5000/auth/callback`.
 4. The cloud engine automatically exchanges the token, saves it into `.env`, and updates the running strategy engine in memory.
-5. Your dashboard displays: **`Mode: LIVE | Session: VALID`**.
+5. Your dashboard at `http://34.14.147.10:5000` displays: **`Mode: LIVE | Session: VALID`**.
    *That's it! Your daily human input is finished.*
+
+> **Permanent Setup Note (Set & Forget)**:  
+> In your **Zerodha Developer Console** (https://developers.kite.trade), ensure your App's **Redirect URL** is set to:  
+> `http://34.14.147.10:5000/auth/callback`  
+> Because `34.14.147.10` is your cloud VM's permanent IP, this URL never changes and you will never need to edit the Zerodha console again.
 
 *(Fallback CLI method if accessing directly via SSH)*:
 ```bash
