@@ -428,7 +428,10 @@ class Journal:
         return [dict(row) for row in rows]
 
     def get_orders(
-        self, session_date: Optional[str] = None, symbol: Optional[str] = None
+        self,
+        session_date: Optional[str] = None,
+        symbol: Optional[str] = None,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Query orders by date and/or symbol."""
         conn = self._get_conn()
@@ -440,7 +443,8 @@ class Journal:
         if symbol:
             query += " AND symbol = ?"
             params.append(symbol)
-        query += " ORDER BY id DESC"
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
         rows = conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 

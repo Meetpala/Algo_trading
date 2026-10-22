@@ -150,8 +150,14 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 )
 
         # Orders & Fills
-        orders = engine.journal.get_orders(limit=15) if hasattr(engine.journal, "get_orders") else []
-        events = engine.journal.get_events(limit=15)
+        try:
+            orders = engine.journal.get_orders(limit=15) if hasattr(engine.journal, "get_orders") else []
+        except Exception:
+            orders = []
+        try:
+            events = engine.journal.get_events(limit=15) if hasattr(engine.journal, "get_events") else []
+        except Exception:
+            events = []
 
         # Evaluate current pipeline step for reasons
         decisions = engine.evaluate_step(now)
