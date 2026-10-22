@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  apex3-engine:
+    build: .
+    image: apex3:latest
+    container_name: apex3-trading-engine
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - TZ=Asia/Kolkata
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    volumes:
+      # Persist SQLite journal database across container updates
+      - ./apex3_journal.db:/app/apex3_journal.db
+      - ./logs:/app/logs
+      # Mount .env so updated daily tokens persist across container restarts
+      - ./.env:/app/.env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
