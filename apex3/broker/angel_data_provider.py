@@ -116,7 +116,7 @@ class AngelDataProvider:
         if self._smart_api:
             try:
                 trading_symbol = f"{clean}-EQ" if exchange == "NSE" and clean != "NIFTY" else clean
-                res = self._smart_api.getLtpData(
+                res = self._smart_api.ltpData(
                     exchange=exchange,
                     tradingsymbol=trading_symbol,
                     symboltoken=token,
