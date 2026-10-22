@@ -72,6 +72,15 @@ def run_app():
             broker = HybridBrokerAdapter(data_provider=angel_data, execution_broker=kite_broker)
         else:
             broker = kite_broker
+
+        # Pre-flight session check
+        if broker.is_session_valid():
+            logger.info("SUCCESS: Zerodha Kite live session is ACTIVE and authenticated.")
+        else:
+            logger.warning(
+                "ATTENTION: Zerodha Kite access token is expired or unauthenticated for today. "
+                "Run 'python scripts/login_zerodha.py' or log in via dashboard at /login/kite before 09:15 IST."
+            )
     else:
         logger.info("Operating in PAPER TRADING mode. Real orders are impossible.")
         broker = PaperBroker(starting_margin=config.paper_starting_capital)

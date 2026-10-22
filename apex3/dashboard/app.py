@@ -73,9 +73,10 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             set_key(env_file, "KITE_ACCESS_TOKEN", token)
             os.environ["KITE_ACCESS_TOKEN"] = token
 
-            if hasattr(engine.broker, "_kite") and engine.broker._kite:
-                engine.broker._kite.set_access_token(token)
-                engine.broker._access_token = token
+            kite_inst = getattr(engine.broker, "execution_broker", engine.broker)
+            if hasattr(kite_inst, "_kite") and kite_inst._kite:
+                kite_inst._kite.set_access_token(token)
+                kite_inst._access_token = token
 
             return redirect("/?auth=success")
         except Exception as e:
@@ -88,7 +89,17 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         session_info = engine.scheduler.get_state_display(now)
 
         # Broker margin
-        margin_info = engine.broker.get_margins()
+        try:
+            margin_info = engine.broker.get_margins()
+        except Exception:
+            from apex3.models import MarginInfo
+            margin_info = MarginInfo(
+                equity_available=0.0,
+                equity_used=0.0,
+                collateral=0.0,
+                net_value=0.0,
+                timestamp=now,
+            )
 
         # Market regime
         bench_candles = engine.broker.get_historical(config.regime.benchmark_symbol, "5minute", None, None)

@@ -41,7 +41,7 @@ class HybridBrokerAdapter(BrokerInterface):
         self.data_provider = data_provider
         self.execution_broker = execution_broker
         logger.info(
-            "Initialized APEX-3 HYBRID BROKER ADAPTER: [Data: Angel One SmartAPI (Free)] ➔ [Execution: Zerodha Personal (Free)]"
+            "Initialized APEX-3 HYBRID BROKER ADAPTER: [Data: Angel One SmartAPI (Free)] -> [Execution: Zerodha Personal (Free)]"
         )
 
     # ── Market Data (Delegated to Angel One SmartAPI) ────────────────
