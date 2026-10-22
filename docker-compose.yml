@@ -14,6 +14,9 @@ services:
     env_file:
       - .env
     volumes:
+      # Mount application code so git pulls are immediately live without rebuilding
+      - ./apex3:/app/apex3
+      - ./scripts:/app/scripts
       # Persist SQLite journal database across container updates
       - ./apex3_journal.db:/app/apex3_journal.db
       - ./logs:/app/logs
