@@ -83,7 +83,25 @@ def main():
             sys.exit(1)
 
         # Save to .env
-        set_key(env_path, "KITE_ACCESS_TOKEN", access_token)
+        try:
+            set_key(env_path, "KITE_ACCESS_TOKEN", access_token)
+        except OSError:
+            lines = []
+            if os.path.exists(env_path):
+                with open(env_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+            found = False
+            new_lines = []
+            for line in lines:
+                if line.strip().startswith("KITE_ACCESS_TOKEN="):
+                    new_lines.append(f"KITE_ACCESS_TOKEN={access_token}\n")
+                    found = True
+                else:
+                    new_lines.append(line)
+            if not found:
+                new_lines.append(f"KITE_ACCESS_TOKEN={access_token}\n")
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
 
         print("\n" + "=" * 65)
         print(f" SUCCESS! Authenticated as {user_name} ({user_id})")

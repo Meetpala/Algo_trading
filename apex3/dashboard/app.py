@@ -70,7 +70,27 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             token = data.get("access_token")
 
             env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
-            set_key(env_file, "KITE_ACCESS_TOKEN", token)
+            try:
+                set_key(env_file, "KITE_ACCESS_TOKEN", token)
+            except OSError:
+                # Docker single-file bind mounts reject atomic renames (Errno 16 Device or resource busy)
+                lines = []
+                if os.path.exists(env_file):
+                    with open(env_file, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                found = False
+                new_lines = []
+                for line in lines:
+                    if line.strip().startswith("KITE_ACCESS_TOKEN="):
+                        new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
+                        found = True
+                    else:
+                        new_lines.append(line)
+                if not found:
+                    new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
+                with open(env_file, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+
             os.environ["KITE_ACCESS_TOKEN"] = token
 
             kite_inst = getattr(engine.broker, "execution_broker", engine.broker)
