@@ -157,8 +157,8 @@ class AngelDataProvider:
         self,
         symbol: str,
         interval: str,
-        from_dt: datetime,
-        to_dt: datetime,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
         exchange: str = "NSE",
     ) -> list[Candle]:
         """Fetch historical candles from Angel One."""
