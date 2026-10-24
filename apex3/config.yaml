@@ -17,13 +17,14 @@ risk_management:
   second_slot_requires_slot1_profit_r: 0.0   # 0.0 = Slot 2 trades independently whenever margin allows (no profit lock)
   risk_per_trade_pct: 0.0080          # 0.80% of equity (₹120.00 risk cap per trade)
   daily_loss_limit_pct: 0.0160        # 1.60% of equity (-₹240.00 hard daily stop = 2 losses)
+  slippage_allowance_pct: 0.0         # 0.0% slippage deduction (prevents shrinking share quantity)
 
 session_schedule:
   timezone: "Asia/Kolkata"
   or_start_time: "09:15"              # Opening Range start
   or_end_time: "09:30"                # Opening Range locked at 09:30 IST
   entry_start_time: "09:35"           # Morning Stability Window: requires first post-OR 5m bar to complete
-  entry_cutoff_time: "12:00"          # Hard cutoff for new entries (leaves >= 2h 55m to reach target)
+  entry_cutoff_time: "12:30"          # Hard cutoff for new entries (leaves >= 2h 25m to reach target)
   late_day_protection_time: "14:15"   # Time-based fee-lock evaluation (raised from 13:45 to prevent choking)
   square_off_time: "14:55"            # Orderly MIS liquidation before Zerodha 15:15 RMS
   flat_verification_time: "14:58"     # Verify zero open positions and zero pending SL/Target orders
@@ -75,12 +76,16 @@ radar:
   probation_min_clv_ratio: 0.75       # Stricter CLV for non-core stocks (>= 0.75 vs 0.70)
   # Tier 1: Audited Institutional Trend Leaders (Max Profitability & Low Friction)
   core_watchlist:
-    - "HINDALCO"
-    - "JSWSTEEL"
-    - "RELIANCE"
-    - "MARUTI"
-    - "TCS"
     - "TRENT"
+    - "JSWSTEEL"
+    - "HINDALCO"
+    - "SUNPHARMA"
+    - "RELIANCE"
+    - "TCS"
+    - "KOTAKBANK"
+    - "MARUTI"
+    - "ITC"
+    - "SBIN"
 
   # Tier 2: Top audited net-positive stocks discovered from 31-stock screening
   enable_extended_radar: true

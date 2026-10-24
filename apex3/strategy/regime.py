@@ -180,7 +180,14 @@ def evaluate_market_regime(
     is_bullish = (latest_close > latest_ema) and dual_ema_bull and (slope > 0) and is_trending
     is_bearish = (latest_close < latest_ema) and dual_ema_bear and (slope < 0) and is_trending
 
-    # Session VWAP alignment
+    # Directional Indicator check (+DI vs -DI)
+    if latest_plus_di is not None and latest_minus_di is not None:
+        if is_bullish and latest_plus_di <= latest_minus_di:
+            is_bullish = False
+        if is_bearish and latest_minus_di <= latest_plus_di:
+            is_bearish = False
+
+    # Session VWAP / TWAP alignment
     if getattr(config, "require_vwap_alignment", True) and len(completed_candles) >= 3:
         target_date = completed_candles[-1].timestamp.date()
         today_candles = [c for c in completed_candles if c.timestamp.date() == target_date]
@@ -194,11 +201,15 @@ def evaluate_market_regime(
                     [c.close for c in today_candles],
                     [c.volume for c in today_candles],
                 )
-                if vwap_val > 0:
-                    if is_bullish and latest_close <= vwap_val:
-                        is_bullish = False
-                    if is_bearish and latest_close >= vwap_val:
-                        is_bearish = False
+            else:
+                # Zero-volume index spot candles: compute Typical-Price Session TWAP
+                vwap_val = sum((c.high + c.low + c.close) / 3.0 for c in today_candles) / len(today_candles)
+
+            if vwap_val > 0:
+                if is_bullish and latest_close <= vwap_val:
+                    is_bullish = False
+                if is_bearish and latest_close >= vwap_val:
+                    is_bearish = False
 
     details = {
         "close": latest_close,

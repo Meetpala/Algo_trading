@@ -148,6 +148,7 @@ def evaluate_signal(
     quote: Optional[Quote],
     config: SignalConfig,
     is_entry_window: bool = True,
+    is_core_symbol: bool = True,
 ) -> SignalEvaluation:
     """Evaluate a single stock for entry signal across all 8 gates.
 
@@ -293,7 +294,7 @@ def evaluate_signal(
 
     # 4. Opening Range Breakout Gate (with Breakout Cushion & CLV Conviction)
     cushion_mult = getattr(config, "min_breakout_cushion_atr", 0.15)
-    min_clv = getattr(config, "min_clv_ratio", 0.70)
+    min_clv = getattr(config, "min_clv_ratio", 0.70) if is_core_symbol else float(getattr(config, "probation_min_clv_ratio", 0.75))
 
     closes = [c.close for c in completed_candles]
     highs = [c.high for c in completed_candles]
@@ -349,7 +350,21 @@ def evaluate_signal(
     today_candles = [c for c in completed_candles if c.timestamp.date() == current_date]
     session_high = max(c.high for c in today_candles) if today_candles else latest_bar.high
     session_low = min(c.low for c in today_candles) if today_candles else latest_bar.low
+
     adr14_pct = getattr(config, "adr14_pct", 0.02)
+    prior_dates = sorted(list(set(c.timestamp.date() for c in completed_candles if c.timestamp.date() < current_date)))
+    if len(prior_dates) >= 2:
+        daily_ranges = []
+        for d in prior_dates[-14:]:
+            day_c = [c for c in completed_candles if c.timestamp.date() == d]
+            if day_c:
+                d_high = max(c.high for c in day_c)
+                d_low = min(c.low for c in day_c)
+                if d_low > 0:
+                    daily_ranges.append((d_high - d_low) / d_low)
+        if daily_ranges:
+            adr14_pct = sum(daily_ranges) / len(daily_ranges)
+
     max_adr_mult = float(getattr(config, "max_adr_consumed_pct", 0.60))
     min_adr_base = float(getattr(config, "min_adr_baseline", 0.025))
     effective_adr = max(min_adr_base, adr14_pct)
@@ -500,13 +515,14 @@ def evaluate_signal(
     current_volume = latest_bar.volume
     relative_vol = current_volume / avg_volume if avg_volume > 0 else 1.0
 
-    if relative_vol < config.min_relative_volume:
+    min_vol = getattr(config, "min_relative_volume", 2.0) if is_core_symbol else float(getattr(config, "probation_volume_surge_ratio", 2.5))
+    if relative_vol < min_vol:
         gates.append(
             GateResult(
                 name="VOLUME_CONFIRMATION",
                 status=GateStatus.FAIL,
-                reason=f"Volume multiple {relative_vol:.2f}x < required {config.min_relative_volume}x",
-                data={"relative_volume": relative_vol, "min_required": config.min_relative_volume},
+                reason=f"Volume multiple {relative_vol:.2f}x < required {min_vol:.2f}x",
+                data={"relative_volume": relative_vol, "min_required": min_vol},
             )
         )
         return SignalEvaluation(
@@ -514,13 +530,13 @@ def evaluate_signal(
             decision=Decision.WAIT,
             gates=gates,
             reason_codes=["INSUFFICIENT_VOLUME"],
-            explanation=f"Volume {relative_vol:.2f}x below required threshold {config.min_relative_volume}x",
+            explanation=f"Volume {relative_vol:.2f}x below required threshold {min_vol:.2f}x",
         )
     gates.append(
         GateResult(
             name="VOLUME_CONFIRMATION",
             status=GateStatus.PASS,
-            reason=f"Volume confirmed ({relative_vol:.2f}x >= {config.min_relative_volume}x)",
+            reason=f"Volume confirmed ({relative_vol:.2f}x >= {min_vol:.2f}x)",
         )
     )
 

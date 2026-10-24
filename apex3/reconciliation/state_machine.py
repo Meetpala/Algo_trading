@@ -29,6 +29,7 @@ from apex3.models import (
 class PositionPhase(Enum):
     """Macro lifecycle phase for a position."""
     FLAT = auto()
+    CLOSED = auto()
     ENTERING = auto()          # Entry order sent, waiting for fill
     OPEN_UNPROTECTED = auto()  # Filled, but protective stop not yet confirmed
     OPEN_PROTECTED = auto()    # Filled and verified protective stop active

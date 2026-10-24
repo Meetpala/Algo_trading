@@ -61,6 +61,7 @@ from apex3.strategy.trail import (
     ceil_to_tick,
     evaluate_trailing_stop,
     floor_to_tick,
+    round_to_tick,
 )
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -264,6 +265,42 @@ class StrategyEngine:
         open_managed = [p for p in self.state_machine.positions.values() if p.quantity > 0]
 
         for pos in open_managed:
+            # Step 11.0: Reconcile broker stop-loss order status before target / manage checks
+            if pos.protective_order_id:
+                try:
+                    sl_order = self.broker.get_order_status(pos.protective_order_id)
+                    if sl_order and sl_order.status == OrderStatus.COMPLETE:
+                        self.journal.log_event(
+                            event_type="STOP_LOSS_HIT",
+                            symbol=pos.symbol,
+                            side=pos.side.value,
+                            data={
+                                "stop_price": pos.current_stop_price,
+                                "sl_order_id": pos.protective_order_id,
+                                "fill_price": sl_order.average_price or pos.current_stop_price,
+                            },
+                        )
+                        pos.phase = PositionPhase.CLOSED
+                        pos.quantity = 0
+                        decisions.append(
+                            StrategyDecision(
+                                decision=Decision.EXIT,
+                                symbol=pos.symbol,
+                                side=pos.side,
+                                timestamp_ist=now,
+                                reason_codes=["STOP_LOSS_FILLED_AT_BROKER"],
+                                explanation=f"Protective SL order {pos.protective_order_id} filled at broker",
+                                broker_action="STOP_LOSS_FILLED",
+                            )
+                        )
+                        continue
+                except Exception as exc:
+                    self.journal.log_warning(
+                        severity="WARNING",
+                        code="SL_STATUS_CHECK_FAILED",
+                        message=f"Could not check SL order {pos.protective_order_id} for {pos.symbol}: {exc}",
+                    )
+
             # Manage existing position stop or take profit
             try:
                 quote = self.broker.get_quote(pos.symbol)
@@ -398,11 +435,15 @@ class StrategyEngine:
                     if pos.side == Side.BUY:
                         pos.best_favorable_price = max(pos.best_favorable_price, current_price)
                         fav_excursion = pos.best_favorable_price - pos.average_entry
+                        curr_excursion = current_price - pos.average_entry
                     else:
                         pos.best_favorable_price = min(pos.best_favorable_price, current_price) if pos.best_favorable_price > 0 else current_price
                         fav_excursion = pos.average_entry - pos.best_favorable_price
+                        curr_excursion = pos.average_entry - current_price
 
-                    open_r = fav_excursion / pos.r_value if pos.r_value > 0 else 0.0
+                    hwm_r = fav_excursion / pos.r_value if pos.r_value > 0 else 0.0
+                    curr_r = curr_excursion / pos.r_value if pos.r_value > 0 else 0.0
+                    open_r = hwm_r
 
                     # One-Time Profit-Preserving / Fee-Protected Step
                     st_cfg = {}
@@ -420,9 +461,9 @@ class StrategyEngine:
                     now_time_str = now.strftime("%H:%M")
                     target_lock_r = None
                     if fee_lock_enabled and (not getattr(pos, "fee_lock_applied", False)):
-                        if open_r >= trigger_r:
+                        if hwm_r >= trigger_r:
                             target_lock_r = profit_r
-                        elif now_time_str >= late_time and open_r >= late_trigger_r:
+                        elif now_time_str >= late_time and curr_r >= late_trigger_r:
                             target_lock_r = late_profit_r
 
                     broker_action = "NONE"
@@ -682,6 +723,13 @@ class StrategyEngine:
         qualified_candidates = []
         evaluated_signals = {}
 
+        core_list = set()
+        core_mult = 1.35
+        if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
+            radar_cfg = self.config.raw_dict.get("radar", {})
+            core_list = set(radar_cfg.get("core_watchlist", []))
+            core_mult = float(radar_cfg.get("core_conviction_multiplier", 1.35))
+
         for sym in symbols:
             # Skip if already open
             if any(p.symbol == sym and p.quantity > 0 for p in open_managed):
@@ -698,6 +746,7 @@ class StrategyEngine:
                 or_range = build_opening_range(sym, stock_candles, session_date=session_date)
                 self.opening_ranges[sym] = or_range
 
+            is_core = (sym in core_list) if core_list else True
             sig = evaluate_signal(
                 symbol=sym,
                 stock_candles_5m=stock_candles,
@@ -708,6 +757,7 @@ class StrategyEngine:
                 quote=quote,
                 config=self.config.signal,
                 is_entry_window=True,
+                is_core_symbol=is_core,
             )
             evaluated_signals[sym] = (sig, inst, stock_candles, quote)
             if sig.decision in (Decision.PROPOSED_LONG, Decision.PROPOSED_SHORT):
@@ -728,12 +778,6 @@ class StrategyEngine:
             return decisions
 
         # Rank qualified candidates by Conviction Score: (|RS| * 100 * relative_volume) / max(spread_bps, 1.0)
-        core_list = set()
-        core_mult = 1.35
-        if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
-            radar_cfg = self.config.raw_dict.get("radar", {})
-            core_list = set(radar_cfg.get("core_watchlist", []))
-            core_mult = float(radar_cfg.get("core_conviction_multiplier", 1.35))
 
         def compute_conviction(sym_name: str) -> float:
             sig_item, _, _, quote_item = evaluated_signals[sym_name]
@@ -872,13 +916,25 @@ class StrategyEngine:
             broker_action = "PLACE_ENTRY_AND_PROTECTION"
 
             # Execute entry order if enabled (Paper or Live)
+            tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+            slip_cfg = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15)
+            slip_pct = (slip_cfg / 100.0) if slip_cfg > 0.5 else (slip_cfg if slip_cfg > 0 else 0.0015)
+            if side == Side.BUY:
+                cand_price = round_to_tick(entry_price + tick, tick_size=tick)
+                cap_price = round_to_tick(entry_price * (1.0 + slip_pct), tick_size=tick)
+                marketable_entry_price = min(cand_price, cap_price)
+            else:
+                cand_price = round_to_tick(entry_price - tick, tick_size=tick)
+                cap_price = round_to_tick(entry_price * (1.0 - slip_pct), tick_size=tick)
+                marketable_entry_price = max(cand_price, cap_price)
+
             entry_req = OrderRequest(
                 symbol=sym,
                 side=side,
                 quantity=sizing.quantity,
                 product=Product.MIS,
                 order_type=OrderType.LIMIT,
-                price=entry_price,
+                price=marketable_entry_price,
                 tag=tag,
                 strategy_id=self.session_tag,
             )
@@ -889,14 +945,14 @@ class StrategyEngine:
                 managed.phase = PositionPhase.ENTERING
                 managed.side = side
                 managed.quantity = sizing.quantity
-                managed.average_entry = entry_price
+                managed.average_entry = marketable_entry_price
                 managed.initial_stop_price = initial_stop
                 managed.current_stop_price = initial_stop
-                managed.best_favorable_price = entry_price
-                managed.r_value = abs(entry_price - initial_stop)
+                managed.best_favorable_price = marketable_entry_price
+                managed.r_value = abs(marketable_entry_price - initial_stop)
                 managed.target_price = calculate_target_price(
                     side=side,
-                    entry_price=entry_price,
+                    entry_price=marketable_entry_price,
                     initial_stop=initial_stop,
                     target_r=self.config.stops.target_r,
                     tick_size=inst.tick_size,
@@ -911,8 +967,8 @@ class StrategyEngine:
                         symbol=sym,
                         side=side,
                         quantity=sizing.quantity,
-                        average_entry=entry_price,
-                        current_price=entry_price,
+                        average_entry=marketable_entry_price,
+                        current_price=marketable_entry_price,
                         protective_stop_price=initial_stop,
                         initial_stop_price=initial_stop,
                         is_protected=True,

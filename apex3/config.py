@@ -46,7 +46,7 @@ class RiskConfig:
     risk_per_trade_pct: float = 0.80
     max_combined_open_risk_pct: float = 1.60
     daily_loss_limit_pct: float = 1.60
-    slippage_allowance_pct: float = 0.10
+    slippage_allowance_pct: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -123,8 +123,8 @@ class StopsConfig:
 class ScheduleConfig:
     market_open: str = "09:15"
     opening_range_end: str = "09:30"
-    entry_start: str = "09:30"
-    entry_cutoff: str = "14:15"
+    entry_start: str = "09:35"
+    entry_cutoff: str = "12:30"
     flatten_start: str = "14:55"
     flat_target: str = "14:58"
     market_close: str = "15:30"
@@ -259,8 +259,8 @@ def _parse_schedule(raw: dict) -> ScheduleConfig:
     return ScheduleConfig(
         market_open=str(raw.get("or_start_time", raw.get("market_open", "09:15"))),
         opening_range_end=str(raw.get("or_end_time", raw.get("opening_range_end", "09:30"))),
-        entry_start=str(raw.get("entry_start_time", raw.get("entry_start", "09:30"))),
-        entry_cutoff=str(raw.get("entry_cutoff_time", raw.get("entry_cutoff", "13:00"))),
+        entry_start=str(raw.get("entry_start_time", raw.get("entry_start", "09:35"))),
+        entry_cutoff=str(raw.get("entry_cutoff_time", raw.get("entry_cutoff", "12:30"))),
         flatten_start=str(raw.get("square_off_time", raw.get("flatten_start", "14:55"))),
         flat_target=str(raw.get("flat_verification_time", raw.get("flat_target", "14:58"))),
         market_close=str(raw.get("market_close", "15:30")),
@@ -357,7 +357,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             risk_per_trade_pct=risk_per_trade,
             max_combined_open_risk_pct=float(risk_raw.get("max_combined_open_risk_pct", 1.60)),
             daily_loss_limit_pct=daily_loss,
-            slippage_allowance_pct=float(risk_raw.get("slippage_allowance_pct", 0.10)),
+            slippage_allowance_pct=float(risk_raw.get("slippage_allowance_pct", 0.0)),
         ),
         regime=RegimeConfig(
             benchmark_symbol=str(regime_raw.get("benchmark_symbol", "NIFTY 50")),
