@@ -414,3 +414,129 @@ def test_reconciler_flattens_residual_broker_quantity():
     assert placed_req.order_type == OrderType.MARKET
     assert placed_req.side == Side.SELL
 
+
+def test_pause_control_enforces_no_entries():
+    """Verify that when engine is paused, evaluate_step strictly halts new order entry."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    engine.is_paused = True
+    engine.pause_reason = "Manual operator pause"
+
+    now = datetime(2026, 3, 23, 9, 45, tzinfo=IST)
+    decisions = engine.evaluate_step(now)
+
+    assert len(decisions) >= 1
+    assert any(d.reason_codes == ["ENGINE_PAUSED"] for d in decisions)
+    # Zero orders placed
+    assert mock_broker.place_order.call_count == 0
+
+
+def test_angel_provider_rejects_unmapped_token():
+    """Verify Angel One provider fails closed on unmapped symbols without falling back to 2885."""
+    from apex3.broker.angel_data_provider import AngelDataProvider
+
+    provider = AngelDataProvider(api_key="", client_code="", pin="", totp_secret="")
+    token = provider.resolve_token("UNKNOWN_XYZ")
+    assert token == ""
+
+    quote = provider.get_quote("UNKNOWN_XYZ")
+    assert quote.is_fresh is False
+    assert quote.last_price == 0.0
+
+
+def test_unconfirmed_protective_stop_triggers_emergency_flatten():
+    """Verify that if placing a protective stop order fails or is unconfirmed, emergency liquidation runs."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    cfg = AppConfig()
+    object.__setattr__(cfg.watchlist, "symbols", ["HINDALCO"])
+    object.__setattr__(cfg.watchlist, "scanner_enabled", False)
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    now = datetime(2026, 3, 23, 9, 35, 10, tzinfo=IST)
+    candles = []
+    for i in range(15):
+        t = datetime(2026, 3, 23, 9, 15, tzinfo=IST) + timedelta(minutes=5 * i)
+        candles.append(Candle(timestamp=t, open=649.0, high=650.0, low=648.2, close=649.5, volume=10000, is_complete=True))
+    candles[-1] = Candle(timestamp=datetime(2026, 3, 23, 10, 25, tzinfo=IST), open=649.5, high=650.5, low=646.0, close=650.0, volume=35000, is_complete=True)
+
+    mock_broker.get_quote.return_value = Quote(symbol="HINDALCO", exchange="NSE", last_price=650.0, bid=649.95, ask=650.05, volume=10000, timestamp=now, is_fresh=True)
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="HINDALCO", exchange="NSE", tick_size=0.05, lot_size=1)
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.estimate_order_margin.return_value = OrderMarginEstimate(required_margin=1000.0, leverage_available=4.0)
+    mock_broker.get_positions.return_value = []
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_historical.return_value = candles
+
+    # Opening range completed
+    engine.opening_ranges["HINDALCO"] = OpeningRange(symbol="HINDALCO", high=650.0, low=646.0, is_complete=True, candle_count=3)
+
+    # Entry fills immediately
+    entry_ord_state = OrderState(order_id="ENTRY_1", request=OrderRequest(symbol="HINDALCO"), status=OrderStatus.COMPLETE, filled_quantity=10, average_price=650.0)
+    # BUT Stop order fails / is rejected by broker!
+    mock_broker.place_order.side_effect = ["ENTRY_1", RuntimeError("RMS margin block for stop order")]
+    mock_broker.get_order_status.return_value = entry_ord_state
+
+    import apex3.strategy.engine as eng_module
+    orig_eval_sig = eng_module.evaluate_signal
+    orig_regime = eng_module.evaluate_market_regime
+    try:
+        eng_module.evaluate_signal = MagicMock(return_value=SignalEvaluation(
+            symbol="HINDALCO",
+            decision=Decision.PROPOSED_LONG,
+            signal_price=650.0,
+            side=Side.BUY,
+            gates=[GateResult("TEST", GateStatus.PASS, "OK")],
+            relative_strength=0.05,
+            relative_volume=3.0,
+        ))
+        eng_module.evaluate_market_regime = MagicMock(return_value=MagicMock(regime=MarketRegime.BULLISH, is_valid=True))
+
+        engine.evaluate_step(now)
+
+        # Engine must have attempted emergency market liquidation!
+        assert engine.is_paused is True
+        assert "PROTECTIVE_STOP_FAILED" in engine.pause_reason
+        # 3 calls: Entry order, attempted SL order (raised), Emergency Market liquidation order
+        assert mock_broker.place_order.call_count == 3
+        emer_order = mock_broker.place_order.call_args[0][0]
+        assert emer_order.order_type == OrderType.MARKET
+        assert emer_order.quantity == 10
+        assert emer_order.side == Side.SELL
+    finally:
+        eng_module.evaluate_signal = orig_eval_sig
+        eng_module.evaluate_market_regime = orig_regime
+
+
+def test_sizer_bounds_realized_loss_including_statutory_charges():
+    """Verify that sizer bounds total loss (stop distance + round-trip charges) to trade_risk_rupees."""
+    from apex3.strategy.sizer import size_position, calculate_zerodha_intraday_charges
+    from apex3.config import LimitsConfig, RiskConfig
+    from apex3.models import MarginInfo, InstrumentInfo, Side
+
+    m = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    limits = LimitsConfig(max_symbols=2, max_leverage=4.0, min_accepted_leverage=4.0, safety_reserve_pct=5.0)
+    risk = RiskConfig(risk_per_trade_pct=0.80, bound_loss_with_charges=True) # ₹120.00 max risk
+    inst = InstrumentInfo(symbol="TEST", tick_size=0.05, lot_size=1)
+
+    # Entry 1000, Stop 993 -> Rs. 7 risk per share
+    res = size_position(
+        symbol="TEST",
+        side=Side.BUY,
+        entry_price=1000.0,
+        stop_price=993.0,
+        num_qualified_symbols=1,
+        margin_info=m,
+        instrument=inst,
+        limits_config=limits,
+        risk_config=risk,
+    )
+    assert res.is_valid
+    charges = calculate_zerodha_intraday_charges(1000.0, 993.0, res.quantity)
+    total_realized_loss = (res.quantity * 7.0) + charges
+    assert total_realized_loss <= 120.0
+
+

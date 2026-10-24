@@ -31,6 +31,12 @@ DEFAULT_ANGEL_TOKENS: dict[str, str] = {
     "TRENT": "1964",
     "KOTAKBANK": "1922",
     "SUNPHARMA": "3351",
+    # Tier 2 & Extended Radar Symbols
+    "BHARTIARTL": "10604",
+    "JIOFIN": "18147",
+    "TATASTEEL": "3499",
+    "AXISBANK": "5900",
+    "TATAPOWER": "3426",
     # Benchmark & High Liquidity Proxies
     "NIFTY 50": "99926000",
     "NIFTY": "99926000",
@@ -39,9 +45,7 @@ DEFAULT_ANGEL_TOKENS: dict[str, str] = {
     "INFY": "1594",
     "HDFCBANK": "1333",
     "ICICIBANK": "4963",
-    "BHARTIARTL": "10604",
     "LT": "11483",
-    "AXISBANK": "5900",
     "BAJFINANCE": "317",
     "HINDUNILVR": "1394",
     "ASIANPAINT": "236",
@@ -101,17 +105,29 @@ class AngelDataProvider:
             return False
 
     def resolve_token(self, symbol: str, exchange: str = "NSE") -> str:
-        """Resolve exchange symbol token for Angel One."""
+        """Resolve exchange symbol token for Angel One. Fails closed on unmapped symbols."""
         clean = symbol.replace("-EQ", "").upper()
         if clean in self._token_cache:
             return self._token_cache[clean]
-        # Fallback query if dynamic loading is implemented
-        return "2885"  # default fallback
+        logger.error("Unknown Angel One token mapping for symbol %s in %s (no default fallback)", clean, exchange)
+        return ""
 
     def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
         """Fetch live quote snapshot from Angel One."""
         clean = symbol.replace("-EQ", "").upper()
         token = self.resolve_token(clean, exchange)
+        if not token:
+            logger.error("Refusing quote fetch for unmapped symbol %s; failing closed.", clean)
+            return Quote(
+                symbol=clean,
+                exchange=exchange,
+                last_price=0.0,
+                bid=0.0,
+                ask=0.0,
+                volume=0,
+                timestamp=datetime.now(IST),
+                is_fresh=False,
+            )
 
         if self._smart_api:
             try:
@@ -124,31 +140,39 @@ class AngelDataProvider:
                 if res and res.get("status") and "data" in res:
                     data = res["data"]
                     ltp = float(data.get("ltp", 0.0))
-                    open_p = float(data.get("open", ltp))
-                    high_p = float(data.get("high", ltp))
-                    low_p = float(data.get("low", ltp))
-                    close_p = float(data.get("close", ltp))
+                    if ltp <= 0.0:
+                        return Quote(
+                            symbol=clean,
+                            exchange=exchange,
+                            last_price=0.0,
+                            bid=0.0,
+                            ask=0.0,
+                            volume=0,
+                            timestamp=datetime.now(IST),
+                            is_fresh=False,
+                        )
+                    # Use actual LTP touch; do not manufacture synthetic 10-cent bid/ask spreads
                     return Quote(
                         symbol=clean,
                         exchange=exchange,
                         last_price=ltp,
-                        bid=ltp - 0.05,
-                        ask=ltp + 0.05,
-                        volume=10000,
+                        bid=ltp,
+                        ask=ltp,
+                        volume=int(data.get("volume", 0)),
                         timestamp=datetime.now(IST),
                         is_fresh=True,
                     )
             except Exception as e:
                 logger.error("Angel One get_quote error for %s: %s", clean, e)
 
-        # Fallback simulation quote if offline
+        # Fallback quote if offline / unauthenticated (marked strictly stale: is_fresh=False)
         return Quote(
             symbol=clean,
             exchange=exchange,
             last_price=100.0,
-            bid=99.95,
-            ask=100.05,
-            volume=5000,
+            bid=100.0,
+            ask=100.0,
+            volume=0,
             timestamp=datetime.now(IST),
             is_fresh=False,
         )
