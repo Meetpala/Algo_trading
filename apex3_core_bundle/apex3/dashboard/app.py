@@ -39,6 +39,13 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         static_folder=os.path.join(os.path.dirname(__file__), "static"),
     )
 
+    @app.before_request
+    def restrict_to_localhost():
+        # Prevent unauthorized external exposure
+        remote = request.remote_addr or ""
+        if remote not in ("127.0.0.1", "localhost", "::1", "testclient"):
+            return jsonify({"error": "Forbidden: APEX-3 Dashboard is strictly bound to localhost (127.0.0.1)"}), 403
+
     @app.route("/")
     def index():
         return render_template("dashboard.html", mode=config.mode)

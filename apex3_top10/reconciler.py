@@ -98,6 +98,8 @@ class Reconciler:
                 # This is an unknown / manual position
                 unknown_symbols.append(bp.symbol)
             else:
+                if pos.quantity != bp.quantity:
+                    pos.quantity = bp.quantity
                 open_strategy_count += 1
 
         if unknown_symbols:
@@ -191,8 +193,11 @@ class Reconciler:
 
             # Only touch strategy-owned positions
             managed = self.sm.positions.get(bp.symbol)
-            if managed is None or managed.quantity == 0:
+            if managed is None:
                 continue
+
+            # Ensure internal state is synchronized with real broker quantity
+            managed.quantity = bp.quantity
 
             # Cancel protective stop first to free up quantity
             if managed.protective_order_id:
@@ -202,7 +207,8 @@ class Reconciler:
                     logger.warning("Could not cancel protective stop %s: %s", managed.protective_order_id, e)
 
             # Exit side: if BUY, exit is SELL; if SELL, exit is BUY
-            exit_side = Side.SELL if managed.side == Side.BUY else Side.BUY
+            side = getattr(bp, "side", None) or managed.side
+            exit_side = Side.SELL if side == Side.BUY else Side.BUY
             exit_qty = bp.quantity
 
             exit_req = OrderRequest(

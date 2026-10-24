@@ -119,6 +119,7 @@ class StrategyEngine:
         self.pause_reason = ""
         self._daily_loss_halt_date: Optional[date] = None
         self._current_session_date: Optional[date] = None
+        self._last_entry_bar_timestamp: Optional[datetime] = None
 
         # Opening ranges cache: symbol -> OpeningRange
         self.opening_ranges: dict[str, OpeningRange] = {}
@@ -153,6 +154,7 @@ class StrategyEngine:
         if self._current_session_date != session_date:
             self._current_session_date = session_date
             self.opening_ranges.clear()
+            self._last_entry_bar_timestamp = None
         if self._daily_loss_halt_date is not None and self._daily_loss_halt_date != session_date:
             self._daily_loss_halt_date = None
             if self.pause_reason in ("DAILY_LOSS_LIMIT_BREACHED", "DAILY_PNL_ACCOUNTING_FAILED"):
@@ -266,6 +268,91 @@ class StrategyEngine:
         # STEP 11 (Priority): Manage Open Positions
         # -------------------------------------------------------------
         decisions: list[StrategyDecision] = []
+
+        # Step 11.A: Reconcile pending entry orders (PositionPhase.ENTERING)
+        entering_managed = [
+            p for p in self.state_machine.positions.values()
+            if p.phase == PositionPhase.ENTERING and p.entry_order_id
+        ]
+        for ent_pos in entering_managed:
+            try:
+                entry_state = self.broker.get_order_status(ent_pos.entry_order_id)
+                if not entry_state:
+                    continue
+
+                if entry_state.status == OrderStatus.COMPLETE or entry_state.filled_quantity > 0:
+                    ent_pos.quantity = entry_state.filled_quantity
+                    if entry_state.average_price > 0:
+                        ent_pos.average_entry = entry_state.average_price
+                    ent_pos.phase = PositionPhase.OPEN_PROTECTED
+
+                    inst = self.broker.get_instrument_info(ent_pos.symbol)
+                    tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+                    exit_side = Side.SELL if ent_pos.side == Side.BUY else Side.BUY
+                    trigger, limit = calculate_stop_limit_prices(
+                        ent_pos.side, ent_pos.initial_stop_price, self.config.stops, tick
+                    )
+                    sl_req = OrderRequest(
+                        symbol=ent_pos.symbol,
+                        side=exit_side,
+                        quantity=ent_pos.quantity,
+                        product=Product.MIS,
+                        order_type=OrderType.SL,
+                        price=limit,
+                        trigger_price=trigger,
+                        tag=f"{ent_pos.strategy_tag}_SL",
+                        strategy_id=self.session_tag,
+                    )
+                    sl_order_id = self.broker.place_order(sl_req)
+                    ent_pos.protective_order_id = sl_order_id
+                    self.journal.log_event(
+                        event_type="ENTRY_FILLED_PROTECTED",
+                        symbol=ent_pos.symbol,
+                        data={
+                            "quantity": ent_pos.quantity,
+                            "average_entry": ent_pos.average_entry,
+                            "sl_order_id": sl_order_id,
+                        },
+                        explanation=f"Entry filled for {ent_pos.symbol} (qty={ent_pos.quantity}); protective SL placed",
+                    )
+                elif entry_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
+                    ent_pos.phase = PositionPhase.FLAT
+                    ent_pos.quantity = 0
+                else:
+                    timeout_sec = getattr(getattr(self.config, "entry", None), "unfilled_timeout_sec", 30)
+                    if ent_pos.entry_timestamp and (now - ent_pos.entry_timestamp).total_seconds() > timeout_sec:
+                        self.broker.cancel_order(ent_pos.entry_order_id)
+                        refreshed = self.broker.get_order_status(ent_pos.entry_order_id)
+                        if refreshed and refreshed.filled_quantity > 0:
+                            ent_pos.quantity = refreshed.filled_quantity
+                            if refreshed.average_price > 0:
+                                ent_pos.average_entry = refreshed.average_price
+                            ent_pos.phase = PositionPhase.OPEN_PROTECTED
+                            inst = self.broker.get_instrument_info(ent_pos.symbol)
+                            tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+                            exit_side = Side.SELL if ent_pos.side == Side.BUY else Side.BUY
+                            trigger, limit = calculate_stop_limit_prices(
+                                ent_pos.side, ent_pos.initial_stop_price, self.config.stops, tick
+                            )
+                            sl_req = OrderRequest(
+                                symbol=ent_pos.symbol,
+                                side=exit_side,
+                                quantity=ent_pos.quantity,
+                                product=Product.MIS,
+                                order_type=OrderType.SL,
+                                price=limit,
+                                trigger_price=trigger,
+                                tag=f"{ent_pos.strategy_tag}_SL",
+                                strategy_id=self.session_tag,
+                            )
+                            sl_order_id = self.broker.place_order(sl_req)
+                            ent_pos.protective_order_id = sl_order_id
+                        else:
+                            ent_pos.phase = PositionPhase.FLAT
+                            ent_pos.quantity = 0
+            except Exception as exc:
+                logger.error("Error reconciling entering position %s: %s", ent_pos.symbol, exc)
+
         open_managed = [p for p in self.state_machine.positions.values() if p.quantity > 0]
 
         for pos in open_managed:
@@ -335,9 +422,17 @@ class StrategyEngine:
                             self.broker.cancel_order(pos.protective_order_id)
                         exit_order_id = self.broker.place_order(exit_req)
 
-                        pos.phase = PositionPhase.EXITING
+                        # Confirm exit fill status before zeroing position quantity
+                        exit_state = self.broker.get_order_status(exit_order_id)
+                        if exit_state and exit_state.status == OrderStatus.COMPLETE:
+                            pos.phase = PositionPhase.CLOSED
+                            pos.quantity = 0
+                        elif exit_state and exit_state.filled_quantity > 0:
+                            pos.quantity = max(0, pos.quantity - exit_state.filled_quantity)
+                            pos.phase = PositionPhase.CLOSED if pos.quantity == 0 else PositionPhase.EXITING
+                        else:
+                            pos.phase = PositionPhase.EXITING
                         pos.exit_order_id = exit_order_id
-                        pos.quantity = 0
 
                         self.journal.log_event(
                             event_type="TARGET_HIT_EXIT",
@@ -794,6 +889,15 @@ class StrategyEngine:
             return score
 
         qualified_candidates.sort(key=compute_conviction, reverse=True)
+
+        # Completed-bar deduplication: at most 1 entry per 5-minute candle
+        if self._last_entry_bar_timestamp is not None and evaluated_signals:
+            first_sym = next(iter(evaluated_signals))
+            _, _, st_candles, _ = evaluated_signals[first_sym]
+            if st_candles and st_candles[-1].timestamp == self._last_entry_bar_timestamp:
+                logger.debug("Bar %s already has an entry taken. Skipping further entries on this bar.", self._last_entry_bar_timestamp)
+                qualified_candidates = []
+
         max_new = 1
         if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
             max_new = int(self.config.raw_dict.get("risk_management", {}).get("max_new_entries_per_bar", 1))
@@ -966,82 +1070,117 @@ class StrategyEngine:
                     )
                     continue
 
-                actual_qty = sizing.quantity
-                actual_entry = marketable_entry_price
-                if entry_state:
-                    if entry_state.filled_quantity > 0:
-                        actual_qty = entry_state.filled_quantity
-                    if entry_state.average_price > 0:
-                        actual_entry = entry_state.average_price
-
                 managed = self.state_machine.get_or_create_position(sym)
-                managed.phase = PositionPhase.ENTERING
                 managed.side = side
-                managed.quantity = actual_qty
-                managed.average_entry = actual_entry
+                managed.entry_order_id = entry_order_id
+                managed.strategy_tag = tag
+                managed.entry_timestamp = now
+                managed.requested_quantity = sizing.quantity
                 managed.initial_stop_price = initial_stop
                 managed.current_stop_price = initial_stop
-                managed.best_favorable_price = actual_entry
-                managed.r_value = abs(actual_entry - initial_stop)
                 managed.target_price = calculate_target_price(
                     side=side,
-                    entry_price=actual_entry,
+                    entry_price=marketable_entry_price,
                     initial_stop=initial_stop,
                     target_r=self.config.stops.target_r,
                     tick_size=inst.tick_size,
                 )
-                managed.entry_order_id = entry_order_id
-                managed.strategy_tag = tag
 
-                # Reserve the accepted order's risk for any other candidate
-                # considered in this same strategy cycle.
-                risk_positions.append(
-                    PositionState(
+                # Record bar timestamp deduplication
+                self._last_entry_bar_timestamp = stock_candles[-1].timestamp if stock_candles else now
+
+                if entry_state and (entry_state.status == OrderStatus.COMPLETE or entry_state.filled_quantity > 0):
+                    actual_qty = entry_state.filled_quantity if entry_state.filled_quantity > 0 else sizing.quantity
+                    actual_entry = entry_state.average_price if entry_state.average_price > 0 else marketable_entry_price
+                    managed.quantity = actual_qty
+                    managed.average_entry = actual_entry
+                    managed.best_favorable_price = actual_entry
+                    managed.r_value = abs(actual_entry - initial_stop)
+                    managed.phase = PositionPhase.OPEN_PROTECTED
+
+                    # Step 10: Place protective stop immediately for filled quantity
+                    exit_side = Side.SELL if side == Side.BUY else Side.BUY
+                    trigger, limit = calculate_stop_limit_prices(side, initial_stop, self.config.stops, inst.tick_size)
+
+                    sl_req = OrderRequest(
                         symbol=sym,
-                        side=side,
+                        side=exit_side,
                         quantity=actual_qty,
-                        average_entry=actual_entry,
-                        current_price=actual_entry,
-                        protective_stop_price=initial_stop,
-                        initial_stop_price=initial_stop,
-                        is_protected=True,
-                        strategy_tag=tag,
+                        product=Product.MIS,
+                        order_type=OrderType.SL,
+                        price=limit,
+                        trigger_price=trigger,
+                        tag=f"{tag}_SL",
+                        strategy_id=self.session_tag,
                     )
-                )
+                    sl_order_id = self.broker.place_order(sl_req)
+                    managed.protective_order_id = sl_order_id
 
-                # Step 10: Place protective stop immediately for filled quantity
-                exit_side = Side.SELL if side == Side.BUY else Side.BUY
-                trigger, limit = calculate_stop_limit_prices(side, initial_stop, self.config.stops, inst.tick_size)
+                    risk_positions.append(
+                        PositionState(
+                            symbol=sym,
+                            side=side,
+                            quantity=actual_qty,
+                            average_entry=actual_entry,
+                            current_price=actual_entry,
+                            protective_stop_price=initial_stop,
+                            initial_stop_price=initial_stop,
+                            is_protected=True,
+                            strategy_tag=tag,
+                        )
+                    )
 
-                sl_req = OrderRequest(
-                    symbol=sym,
-                    side=exit_side,
-                    quantity=actual_qty,
-                    product=Product.MIS,
-                    order_type=OrderType.SL,
-                    price=limit,
-                    trigger_price=trigger,
-                    tag=f"{tag}_SL",
-                    strategy_id=self.session_tag,
-                )
-                sl_order_id = self.broker.place_order(sl_req)
-                managed.protective_order_id = sl_order_id
-                managed.phase = PositionPhase.OPEN_PROTECTED
+                    self.journal.log_event(
+                        event_type="ENTRY_AND_PROTECTION_PLACED",
+                        symbol=sym,
+                        side=side.value,
+                        data={
+                            "entry_order_id": entry_order_id,
+                            "sl_order_id": sl_order_id,
+                            "quantity": actual_qty,
+                            "entry_price": actual_entry,
+                            "initial_stop": initial_stop,
+                            "target_price": managed.target_price,
+                        },
+                        explanation=f"Placed entry, target ({managed.target_price:.2f}), and protective stop for {sym} ({actual_qty} shares)",
+                    )
+                    broker_action = f"BUY_ENTRY_AND_SL_{initial_stop}" if side == Side.BUY else f"SELL_ENTRY_AND_SL_{initial_stop}"
+                else:
+                    # Accepted on orderbook but unfilled yet — do NOT place naked SL
+                    managed.quantity = 0
+                    managed.average_entry = marketable_entry_price
+                    managed.best_favorable_price = marketable_entry_price
+                    managed.r_value = abs(marketable_entry_price - initial_stop)
+                    managed.phase = PositionPhase.ENTERING
+                    actual_qty = sizing.quantity
+                    actual_entry = marketable_entry_price
 
-                self.journal.log_event(
-                    event_type="ENTRY_AND_PROTECTION_PLACED",
-                    symbol=sym,
-                    side=side.value,
-                    data={
-                        "entry_order_id": entry_order_id,
-                        "sl_order_id": sl_order_id,
-                        "quantity": actual_qty,
-                        "entry_price": actual_entry,
-                        "initial_stop": initial_stop,
-                        "target_price": managed.target_price,
-                    },
-                    explanation=f"Placed entry, target ({managed.target_price:.2f}), and protective stop for {sym} ({actual_qty} shares)",
-                )
+                    risk_positions.append(
+                        PositionState(
+                            symbol=sym,
+                            side=side,
+                            quantity=sizing.quantity,
+                            average_entry=marketable_entry_price,
+                            current_price=marketable_entry_price,
+                            protective_stop_price=initial_stop,
+                            initial_stop_price=initial_stop,
+                            is_protected=False,
+                            strategy_tag=tag,
+                        )
+                    )
+
+                    self.journal.log_event(
+                        event_type="ENTRY_ORDER_PENDING",
+                        symbol=sym,
+                        side=side.value,
+                        data={
+                            "entry_order_id": entry_order_id,
+                            "quantity": sizing.quantity,
+                            "order_price": marketable_entry_price,
+                        },
+                        explanation=f"Submitted {side.value} entry {sizing.quantity} {sym} @ {marketable_entry_price:.2f}; awaiting fill before placing SL",
+                    )
+                    broker_action = f"SUBMITTED_ENTRY_{marketable_entry_price}"
 
                 decisions.append(
                     StrategyDecision(

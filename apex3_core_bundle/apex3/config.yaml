@@ -53,6 +53,7 @@ signal_gates:
   min_adr_baseline: 0.025             # 2.5% minimum ADR baseline prevents choking on morning opening noise
   min_breakout_cushion_atr: 0.15      # Breakout close must clear OR by >= 0.15 * ATR(14)
   min_clv_ratio: 0.70                 # Close Location Value >= 0.70 (closes in top/bottom 30% of bar)
+  min_atr_pct: 0.0012                 # Gate 9A: Minimum Volatility Floor (ATR14 / Price >= 0.12%)
 
 stops_and_targets:
   swing_lookback_bars: 5              # 5-bar structural swing low/high anchor
@@ -129,10 +130,14 @@ schedule:
     - "2026-09-05"
     - "2026-10-02"
     - "2026-10-20"
-    - "2026-11-09"
     - "2026-11-10"
     - "2026-11-30"
     - "2026-12-25"
+
+dashboard:
+  host: "127.0.0.1"
+  port: 5000
+  auth_required: false
 
 rate_limits:
   orders_per_second: 10

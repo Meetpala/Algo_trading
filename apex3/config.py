@@ -76,6 +76,7 @@ class SignalConfig:
     max_stop_distance_pct: float = 0.0090
     min_breakout_cushion_atr: float = 0.15
     min_clv_ratio: float = 0.70
+    min_atr_pct: float = 0.0012
 
 
 @dataclass(frozen=True)
@@ -383,6 +384,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             max_stop_distance_pct=float(signal_raw.get("max_stop_distance_pct", 0.0090)),
             min_breakout_cushion_atr=float(signal_raw.get("min_breakout_cushion_atr", 0.15)),
             min_clv_ratio=float(signal_raw.get("min_clv_ratio", 0.70)),
+            min_atr_pct=float(signal_raw.get("min_atr_pct", 0.0012)),
         ),
         entry=EntryConfig(
             order_type=str(entry_raw.get("order_type", "LIMIT")),

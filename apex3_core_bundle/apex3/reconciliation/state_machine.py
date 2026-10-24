@@ -61,6 +61,8 @@ class ManagedPosition:
     strategy_tag: str = ""
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
+    entry_timestamp: Optional[datetime] = None
+    requested_quantity: int = 0
     last_reconciled: Optional[datetime] = None
 
     def to_position_state(self) -> PositionState:

@@ -91,7 +91,7 @@ Copy `.env.example` to `.env` (never commit `.env`):
 Copy-Item .env.example .env
 ```
 Leave `LIVE_TRADING_ENABLED=false` for Paper Trading mode.
-The current paper setup starts with ₹15,000 and trades the RELIANCE manual symbol only; the 15-symbol scanner remains disabled while it is tested.
+The system starts with ₹15,000 base equity and runs the audited 3-Tier Radar (Core 6 Trend Leaders: HINDALCO, JSWSTEEL, RELIANCE, MARUTI, TCS, TRENT + Extended Radar under the Probation Super-Gate: BHARTIARTL, JIOFIN, TATASTEEL, AXISBANK, TATAPOWER).
 
 ### Step 3: Run Paper Trading Dashboard
 ```powershell
