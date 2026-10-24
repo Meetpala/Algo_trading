@@ -99,7 +99,7 @@ def build_opening_range(
     filtered = []
     for c in completed:
         c_dt = (c.timestamp if c.timestamp.tzinfo else c.timestamp.replace(tzinfo=IST)).astimezone(IST)
-        if c_dt.date() == target_d and time(9, 15) <= c_dt.time() <= time(9, 30):
+        if c_dt.date() == target_d and time(9, 15) <= c_dt.time() < time(9, 30):
             filtered.append(c)
 
     if filtered:
@@ -461,10 +461,11 @@ def evaluate_signal(
     gates.append(GateResult(name="OR_BREAKOUT", status=GateStatus.PASS, reason="Confirmed OR breakout with cushion & CLV conviction on completed bar"))
 
     # 5. Session VWAP Alignment Gate
-    session_highs = [c.high for c in completed_candles]
-    session_lows = [c.low for c in completed_candles]
-    session_closes = [c.close for c in completed_candles]
-    session_volumes = [c.volume for c in completed_candles]
+    session_candles = today_candles if today_candles else completed_candles
+    session_highs = [c.high for c in session_candles]
+    session_lows = [c.low for c in session_candles]
+    session_closes = [c.close for c in session_candles]
+    session_volumes = [c.volume for c in session_candles]
 
     stock_vwap = compute_session_vwap(session_highs, session_lows, session_closes, session_volumes)
 

@@ -118,6 +118,7 @@ class StrategyEngine:
         self.is_paused = False
         self.pause_reason = ""
         self._daily_loss_halt_date: Optional[date] = None
+        self._current_session_date: Optional[date] = None
 
         # Opening ranges cache: symbol -> OpeningRange
         self.opening_ranges: dict[str, OpeningRange] = {}
@@ -149,6 +150,9 @@ class StrategyEngine:
         """
         now = current_time or self.scheduler.now_ist()
         session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
+        if self._current_session_date != session_date:
+            self._current_session_date = session_date
+            self.opening_ranges.clear()
         if self._daily_loss_halt_date is not None and self._daily_loss_halt_date != session_date:
             self._daily_loss_halt_date = None
             if self.pause_reason in ("DAILY_LOSS_LIMIT_BREACHED", "DAILY_PNL_ACCOUNTING_FAILED"):
@@ -327,9 +331,9 @@ class StrategyEngine:
                             tag=f"{pos.strategy_tag}_TARGET",
                             strategy_id=self.session_tag,
                         )
-                        exit_order_id = self.broker.place_order(exit_req)
                         if pos.protective_order_id:
                             self.broker.cancel_order(pos.protective_order_id)
+                        exit_order_id = self.broker.place_order(exit_req)
 
                         pos.phase = PositionPhase.EXITING
                         pos.exit_order_id = exit_order_id
@@ -802,8 +806,22 @@ class StrategyEngine:
             if len(risk_positions) >= self.config.limits.max_symbols:
                 break
             sig, inst, stock_candles, _ = evaluated_signals[sym]
-            entry_price = sig.signal_price
+            sig_price = sig.signal_price
             side = sig.side
+
+            # Compute marketable limit entry price up-front before sizing & stops
+            tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+            slip_cfg = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15)
+            slip_pct = (slip_cfg / 100.0) if slip_cfg > 0.5 else (slip_cfg if slip_cfg > 0 else 0.0015)
+            if side == Side.BUY:
+                cand_price = round_to_tick(sig_price + tick, tick_size=tick)
+                cap_price = round_to_tick(sig_price * (1.0 + slip_pct), tick_size=tick)
+                marketable_entry_price = min(cand_price, cap_price)
+            else:
+                cand_price = round_to_tick(sig_price - tick, tick_size=tick)
+                cap_price = round_to_tick(sig_price * (1.0 - slip_pct), tick_size=tick)
+                marketable_entry_price = max(cand_price, cap_price)
+            entry_price = marketable_entry_price
 
             # Calculate ATR for initial stop
             atr_series = compute_atr(
@@ -915,19 +933,6 @@ class StrategyEngine:
             tag = f"{self.session_tag}_{sym}_{int(now.timestamp())}"
             broker_action = "PLACE_ENTRY_AND_PROTECTION"
 
-            # Execute entry order if enabled (Paper or Live)
-            tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
-            slip_cfg = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15)
-            slip_pct = (slip_cfg / 100.0) if slip_cfg > 0.5 else (slip_cfg if slip_cfg > 0 else 0.0015)
-            if side == Side.BUY:
-                cand_price = round_to_tick(entry_price + tick, tick_size=tick)
-                cap_price = round_to_tick(entry_price * (1.0 + slip_pct), tick_size=tick)
-                marketable_entry_price = min(cand_price, cap_price)
-            else:
-                cand_price = round_to_tick(entry_price - tick, tick_size=tick)
-                cap_price = round_to_tick(entry_price * (1.0 - slip_pct), tick_size=tick)
-                marketable_entry_price = max(cand_price, cap_price)
-
             entry_req = OrderRequest(
                 symbol=sym,
                 side=side,
@@ -941,18 +946,46 @@ class StrategyEngine:
 
             try:
                 entry_order_id = self.broker.place_order(entry_req)
+                entry_state = self.broker.get_order_status(entry_order_id)
+                if entry_state and entry_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
+                    rej_msg = getattr(entry_state, "rejection_reason", None) or getattr(entry_state, "status_message", "Order rejected")
+                    self.journal.log_warning(
+                        severity="ERROR",
+                        code="ENTRY_ORDER_REJECTED",
+                        message=f"Entry order {entry_order_id} for {sym} was {entry_state.status.value}: {rej_msg}",
+                    )
+                    decisions.append(
+                        StrategyDecision(
+                            decision=Decision.WAIT,
+                            symbol=sym,
+                            side=side,
+                            timestamp_ist=now,
+                            reason_codes=["ENTRY_REJECTED"],
+                            explanation=f"Entry order {entry_order_id} {entry_state.status.value}: {rej_msg}",
+                        )
+                    )
+                    continue
+
+                actual_qty = sizing.quantity
+                actual_entry = marketable_entry_price
+                if entry_state:
+                    if entry_state.filled_quantity > 0:
+                        actual_qty = entry_state.filled_quantity
+                    if entry_state.average_price > 0:
+                        actual_entry = entry_state.average_price
+
                 managed = self.state_machine.get_or_create_position(sym)
                 managed.phase = PositionPhase.ENTERING
                 managed.side = side
-                managed.quantity = sizing.quantity
-                managed.average_entry = marketable_entry_price
+                managed.quantity = actual_qty
+                managed.average_entry = actual_entry
                 managed.initial_stop_price = initial_stop
                 managed.current_stop_price = initial_stop
-                managed.best_favorable_price = marketable_entry_price
-                managed.r_value = abs(marketable_entry_price - initial_stop)
+                managed.best_favorable_price = actual_entry
+                managed.r_value = abs(actual_entry - initial_stop)
                 managed.target_price = calculate_target_price(
                     side=side,
-                    entry_price=marketable_entry_price,
+                    entry_price=actual_entry,
                     initial_stop=initial_stop,
                     target_r=self.config.stops.target_r,
                     tick_size=inst.tick_size,
@@ -966,9 +999,9 @@ class StrategyEngine:
                     PositionState(
                         symbol=sym,
                         side=side,
-                        quantity=sizing.quantity,
-                        average_entry=marketable_entry_price,
-                        current_price=marketable_entry_price,
+                        quantity=actual_qty,
+                        average_entry=actual_entry,
+                        current_price=actual_entry,
                         protective_stop_price=initial_stop,
                         initial_stop_price=initial_stop,
                         is_protected=True,
@@ -983,7 +1016,7 @@ class StrategyEngine:
                 sl_req = OrderRequest(
                     symbol=sym,
                     side=exit_side,
-                    quantity=sizing.quantity,
+                    quantity=actual_qty,
                     product=Product.MIS,
                     order_type=OrderType.SL,
                     price=limit,
@@ -1002,12 +1035,12 @@ class StrategyEngine:
                     data={
                         "entry_order_id": entry_order_id,
                         "sl_order_id": sl_order_id,
-                        "quantity": sizing.quantity,
-                        "entry_price": entry_price,
+                        "quantity": actual_qty,
+                        "entry_price": actual_entry,
                         "initial_stop": initial_stop,
                         "target_price": managed.target_price,
                     },
-                    explanation=f"Placed entry, target ({managed.target_price:.2f}), and protective stop for {sym} ({sizing.quantity} shares)",
+                    explanation=f"Placed entry, target ({managed.target_price:.2f}), and protective stop for {sym} ({actual_qty} shares)",
                 )
 
                 decisions.append(
@@ -1017,10 +1050,10 @@ class StrategyEngine:
                         side=side,
                         timestamp_ist=now,
                         reason_codes=["ENTRY_SUBMITTED"],
-                        explanation=f"Submitted {sig.decision.value} for {sizing.quantity} shares of {sym}",
+                        explanation=f"Submitted {sig.decision.value} for {actual_qty} shares of {sym}",
                         gates=sig.gates + [sizing.gate, risk_status.gate],
-                        quantity=sizing.quantity,
-                        entry_limit=entry_price,
+                        quantity=actual_qty,
+                        entry_limit=actual_entry,
                         initial_stop=initial_stop,
                         risk_rupees=sizing.trade_risk_rupees,
                         estimated_margin=sizing.notional_value / sizing.effective_leverage,
