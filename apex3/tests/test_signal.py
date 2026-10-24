@@ -35,15 +35,15 @@ def inst_info() -> InstrumentInfo:
 
 def test_long_signal_full_pass(signal_cfg, inst_info):
     """Verify PROPOSED_LONG when all 8 gates pass."""
-    or_range = OpeningRange(symbol="INFY", high=1500.0, low=1480.0, is_complete=True, candle_count=3)
-    stock_candles = generate_candles(count=25, base_price=1490.0, trend=1.0)
+    or_range = OpeningRange(symbol="INFY", high=1500.0, low=1493.0, is_complete=True, candle_count=3)
+    stock_candles = generate_candles(count=25, base_price=1496.0, trend=0.1)
     # Make the latest candle breakout above OR high (1500) with strong volume
     last_candle = Candle(
         timestamp=datetime.now(IST),
         open=1501.0,
-        high=1510.0,
+        high=1504.0,
         low=1500.5,
-        close=1508.0,  # > 1500.0
+        close=1503.5,  # > 1500.0
         volume=50000,   # > 1.5x average
         is_complete=True,
     )
@@ -53,9 +53,9 @@ def test_long_signal_full_pass(signal_cfg, inst_info):
     quote = Quote(
         symbol="INFY",
         exchange="NSE",
-        last_price=1508.0,
-        bid=1507.95,
-        ask=1508.05,  # Tight spread < 8 bps
+        last_price=1503.5,
+        bid=1503.45,
+        ask=1503.55,  # Tight spread < 8 bps
         volume=50000,
         timestamp=datetime.now(IST),
         is_fresh=True,
@@ -80,15 +80,15 @@ def test_long_signal_full_pass(signal_cfg, inst_info):
 
 def test_short_signal_mirror_pass(signal_cfg, inst_info):
     """Verify PROPOSED_SHORT exact mirror condition when all 8 gates pass."""
-    or_range = OpeningRange(symbol="INFY", high=1500.0, low=1480.0, is_complete=True, candle_count=3)
-    stock_candles = generate_candles(count=25, base_price=1490.0, trend=-1.0)
-    # Make the latest candle breakout below OR low (1480) with strong volume
+    or_range = OpeningRange(symbol="INFY", high=1480.0, low=1470.0, is_complete=True, candle_count=3)
+    stock_candles = generate_candles(count=25, base_price=1475.0, trend=-0.2)
+    # Make the latest candle breakout below OR low (1470) with strong volume
     last_candle = Candle(
         timestamp=datetime.now(IST),
-        open=1479.0,
-        high=1479.5,
-        low=1470.0,
-        close=1472.0,  # < 1480.0
+        open=1469.0,
+        high=1469.5,
+        low=1460.0,
+        close=1462.0,  # < 1470.0
         volume=50000,
         is_complete=True,
     )
@@ -98,9 +98,9 @@ def test_short_signal_mirror_pass(signal_cfg, inst_info):
     quote = Quote(
         symbol="INFY",
         exchange="NSE",
-        last_price=1472.0,
-        bid=1471.95,
-        ask=1472.05,
+        last_price=1462.0,
+        bid=1461.95,
+        ask=1462.05,
         volume=50000,
         timestamp=datetime.now(IST),
         is_fresh=True,

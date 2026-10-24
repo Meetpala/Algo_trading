@@ -467,7 +467,8 @@ class PaperBroker(BrokerInterface):
         return [
             c
             for c in self._fixture_candles[symbol]
-            if from_dt <= c.timestamp <= to_dt
+            if (from_dt is None or from_dt <= c.timestamp)
+            and (to_dt is None or c.timestamp <= to_dt)
         ]
 
     def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:

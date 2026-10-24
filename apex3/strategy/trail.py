@@ -135,9 +135,9 @@ def evaluate_fee_protected_stop(
     cfg: dict,
 ) -> Optional[float]:
     """Continuous trailing is disabled (trail_enabled: false) so winners are not choked.
-    However, a single one-time step to Entry +/- 0.15% is triggered if:
-      1. Unrealized profit >= +1.65R (82.5% of the way to 2.0R target), OR
-      2. Current time >= 14:15 IST and unrealized profit >= +1.15R.
+    However, a single one-time step is triggered if:
+      1. Unrealized profit >= +1.60R (locks +0.60R profit-preserving buffer), OR
+      2. Current time >= 14:15 IST and unrealized profit >= +1.15R (locks +0.35R late-day buffer).
     Returns the new stop price if updated, otherwise None.
     """
     st_cfg = cfg.get("stops_and_targets", cfg.get("stops", {})) if isinstance(cfg, dict) else {}
@@ -153,27 +153,39 @@ def evaluate_fee_protected_stop(
     else:
         unrealized_r = (levels.entry_price - current_price) / levels.risk_per_share
 
-    trigger_r = float(st_cfg.get("fee_lock_trigger_r", 1.65))
+    trigger_r = float(st_cfg.get("fee_lock_trigger_r", 1.60))
     sched_cfg = cfg.get("session_schedule", cfg.get("schedule", {})) if isinstance(cfg, dict) else {}
     late_time = sched_cfg.get("late_day_protection_time", "14:15")
     late_trigger_r = float(st_cfg.get("late_day_lock_trigger_r", 1.15))
     offset_pct = float(st_cfg.get("fee_lock_offset_pct", 0.0015))
+    profit_r = float(st_cfg.get("fee_lock_profit_r", 0.60))
+    late_profit_r = float(st_cfg.get("late_day_lock_profit_r", 0.35))
 
-    should_lock = (unrealized_r >= trigger_r) or (
-        current_time_str >= late_time and unrealized_r >= late_trigger_r
-    )
+    target_lock_r = None
+    if unrealized_r >= trigger_r:
+        target_lock_r = profit_r
+    elif current_time_str >= late_time and unrealized_r >= late_trigger_r:
+        target_lock_r = late_profit_r
 
-    if not should_lock:
+    if target_lock_r is None:
         return None
 
     if side_str in ("LONG", "BUY"):
-        protected_stop = ceil_to_tick(levels.entry_price * (1.0 + offset_pct))
+        candidate = max(
+            levels.entry_price * (1.0 + offset_pct),
+            levels.entry_price + (target_lock_r * levels.risk_per_share),
+        )
+        protected_stop = ceil_to_tick(candidate)
         if protected_stop > levels.current_stop and protected_stop < current_price:
             levels.current_stop = protected_stop
             levels.fee_lock_applied = True
             return protected_stop
     else:
-        protected_stop = floor_to_tick(levels.entry_price * (1.0 - offset_pct))
+        candidate = min(
+            levels.entry_price * (1.0 - offset_pct),
+            levels.entry_price - (target_lock_r * levels.risk_per_share),
+        )
+        protected_stop = floor_to_tick(candidate)
         if protected_stop < levels.current_stop and protected_stop > current_price:
             levels.current_stop = protected_stop
             levels.fee_lock_applied = True

@@ -344,8 +344,10 @@ def evaluate_signal(
     gates.append(GateResult(name="MIN_VOLATILITY", status=GateStatus.PASS, reason=f"Volatility confirmed ({atr14/signal_price*100:.3f}% >= 0.22%)"))
 
     # 4C. ADR Exhaustion Gate (Today's range consumed <= 60% of ADR14)
-    session_high = max(c.high for c in completed_candles)
-    session_low = min(c.low for c in completed_candles)
+    current_date = latest_bar.timestamp.date()
+    today_candles = [c for c in completed_candles if c.timestamp.date() == current_date]
+    session_high = max(c.high for c in today_candles) if today_candles else latest_bar.high
+    session_low = min(c.low for c in today_candles) if today_candles else latest_bar.low
     adr14_pct = getattr(config, "adr14_pct", 0.02)
     if session_low > 0 and adr14_pct > 0:
         today_range_pct = (session_high - session_low) / session_low

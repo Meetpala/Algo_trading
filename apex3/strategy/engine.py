@@ -404,33 +404,40 @@ class StrategyEngine:
 
                     open_r = fav_excursion / pos.r_value if pos.r_value > 0 else 0.0
 
-                    # One-Time Fee-Protected Breakeven Step
+                    # One-Time Profit-Preserving / Fee-Protected Step
                     st_cfg = {}
                     if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
                         st_cfg = self.config.raw_dict.get("stops_and_targets", {})
                     fee_lock_enabled = st_cfg.get("fee_lock_enabled", getattr(self.config.stops, "fee_lock_enabled", True))
-                    trigger_r = float(st_cfg.get("fee_lock_trigger_r", getattr(self.config.stops, "fee_lock_trigger_r", 1.65)))
+                    trigger_r = float(st_cfg.get("fee_lock_trigger_r", getattr(self.config.stops, "fee_lock_trigger_r", 1.60)))
                     sched_cfg = self.config.raw_dict.get("session_schedule", self.config.raw_dict.get("schedule", {})) if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) else {}
                     late_time = sched_cfg.get("late_day_protection_time", getattr(self.config.stops, "late_day_protection_time", "14:15"))
                     late_trigger_r = float(st_cfg.get("late_day_lock_trigger_r", getattr(self.config.stops, "late_day_lock_trigger_r", 1.15)))
                     offset_pct = float(st_cfg.get("fee_lock_offset_pct", getattr(self.config.stops, "fee_lock_offset_pct", 0.0015)))
+                    profit_r = float(st_cfg.get("fee_lock_profit_r", getattr(self.config.stops, "fee_lock_profit_r", 0.60)))
+                    late_profit_r = float(st_cfg.get("late_day_lock_profit_r", getattr(self.config.stops, "late_day_lock_profit_r", 0.35)))
 
                     now_time_str = now.strftime("%H:%M")
-                    should_lock = fee_lock_enabled and (not getattr(pos, "fee_lock_applied", False)) and (
-                        open_r >= trigger_r or (now_time_str >= late_time and open_r >= late_trigger_r)
-                    )
+                    target_lock_r = None
+                    if fee_lock_enabled and (not getattr(pos, "fee_lock_applied", False)):
+                        if open_r >= trigger_r:
+                            target_lock_r = profit_r
+                        elif now_time_str >= late_time and open_r >= late_trigger_r:
+                            target_lock_r = late_profit_r
 
                     broker_action = "NONE"
                     reason_code = "HOLDING_FOR_TARGET"
                     explanation = f"Holding with structural SL ({pos.current_stop_price:.2f}) towards 2.0R target ({pos.target_price:.2f})"
 
-                    if should_lock:
+                    if target_lock_r is not None:
                         tick = inst_info.tick_size if inst_info and inst_info.tick_size > 0 else 0.05
                         if pos.side == Side.BUY:
-                            protected_stop = ceil_to_tick(pos.average_entry * (1.0 + offset_pct), tick)
+                            cand = max(pos.average_entry * (1.0 + offset_pct), pos.average_entry + (target_lock_r * pos.r_value))
+                            protected_stop = ceil_to_tick(cand, tick)
                             valid_move = protected_stop > pos.current_stop_price and protected_stop <= current_price
                         else:
-                            protected_stop = floor_to_tick(pos.average_entry * (1.0 - offset_pct), tick)
+                            cand = min(pos.average_entry * (1.0 - offset_pct), pos.average_entry - (target_lock_r * pos.r_value))
+                            protected_stop = floor_to_tick(cand, tick)
                             valid_move = protected_stop < pos.current_stop_price and protected_stop >= current_price
 
                         if valid_move:
@@ -446,14 +453,14 @@ class StrategyEngine:
                             pos.fee_lock_applied = True
                             pos.stop_modification_count += 1
                             broker_action = f"MODIFIED_STOP_FEE_LOCK_{protected_stop}"
-                            reason_code = "FEE_PROTECTED_BREAKEVEN_STEP"
-                            explanation = f"Moved stop to fee-protected breakeven ({protected_stop:.2f}) at {open_r:.2f}R"
+                            reason_codes = ["PROFIT_PRESERVING_STEP", "FEE_PROTECTED_BREAKEVEN_STEP"]
+                            explanation = f"Moved stop to profit-preserving level ({protected_stop:.2f}, +{target_lock_r:.2f}R) at {open_r:.2f}R"
                             self.journal.log_stop_change(
                                 symbol=pos.symbol,
                                 side=pos.side.value,
                                 previous_stop=prev_stop,
                                 new_stop=protected_stop,
-                                reason="FEE_PROTECTED_BREAKEVEN_STEP",
+                                reason="PROFIT_PRESERVING_STEP",
                                 r_multiple=round(open_r, 2),
                                 best_favorable_price=pos.best_favorable_price,
                                 modification_number=pos.stop_modification_count,
@@ -465,7 +472,7 @@ class StrategyEngine:
                             symbol=pos.symbol,
                             side=pos.side,
                             timestamp_ist=now,
-                            reason_codes=[reason_code],
+                            reason_codes=reason_codes if target_lock_r is not None and valid_move else [reason_code],
                             explanation=explanation,
                             open_r=round(open_r, 2),
                             best_favorable_price=pos.best_favorable_price,
@@ -721,12 +728,22 @@ class StrategyEngine:
             return decisions
 
         # Rank qualified candidates by Conviction Score: (|RS| * 100 * relative_volume) / max(spread_bps, 1.0)
+        core_list = set()
+        core_mult = 1.35
+        if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
+            radar_cfg = self.config.raw_dict.get("radar", {})
+            core_list = set(radar_cfg.get("core_watchlist", []))
+            core_mult = float(radar_cfg.get("core_conviction_multiplier", 1.35))
+
         def compute_conviction(sym_name: str) -> float:
             sig_item, _, _, quote_item = evaluated_signals[sym_name]
             mid = (quote_item.bid + quote_item.ask) / 2.0 if (quote_item and quote_item.bid and quote_item.ask) else 0.0
             spread_bps = ((quote_item.ask - quote_item.bid) / mid) * 10000.0 if mid > 0 else 1.0
             spread_floor = max(spread_bps, 1.0)
-            return (abs(sig_item.relative_strength) * 100.0 * sig_item.relative_volume) / spread_floor
+            score = (abs(sig_item.relative_strength) * 100.0 * sig_item.relative_volume) / spread_floor
+            if sym_name in core_list:
+                score *= core_mult
+            return score
 
         qualified_candidates.sort(key=compute_conviction, reverse=True)
         max_new = 1
@@ -767,6 +784,22 @@ class StrategyEngine:
                 config=self.config.stops,
                 tick_size=inst.tick_size,
             )
+
+            # Gate 9 Stop-width bounds: 0.55% <= R% <= 0.90%
+            min_stop_pct = getattr(self.config.signal, "min_stop_distance_pct", 0.0055)
+            max_stop_pct = getattr(self.config.signal, "max_stop_distance_pct", 0.0090)
+            stop_dist_pct = abs(entry_price - initial_stop) / entry_price if entry_price > 0 else 0.0
+            if stop_dist_pct < min_stop_pct or stop_dist_pct > max_stop_pct:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        symbol=sym,
+                        timestamp_ist=now,
+                        reason_codes=["STOP_WIDTH_OUT_OF_BOUNDS"],
+                        explanation=f"Stop width {stop_dist_pct*100:.2f}% is outside allowed bounds [{min_stop_pct*100:.2f}%, {max_stop_pct*100:.2f}%]",
+                    )
+                )
+                continue
 
             # Estimate order margin from broker
             dummy_req = OrderRequest(

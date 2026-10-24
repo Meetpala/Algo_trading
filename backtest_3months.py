@@ -95,40 +95,71 @@ def fee_lock_stop_for_bar(
     bar_start_time: time | None = None,
     already_applied: bool = False,
     tick_size: float = 0.05,
+    trigger_r: float = 1.60,
+    profit_r: float = 0.60,
+    late_trigger_r: float = 1.15,
+    late_profit_r: float = 0.35,
 ) -> tuple[float, bool] | None:
-    """Return a fee-lock stop and whether its trigger was intrabar."""
+    """Return a profit-preserving stop (+0.60R / +0.35R) and whether its trigger was intrabar."""
     if already_applied or entry_price <= 0 or risk_per_share <= 0 or tick_size <= 0:
         return None
 
     if side == Side.BUY:
         favorable_r = (high - entry_price) / risk_per_share
         close_r = (close - entry_price) / risk_per_share
-        late_trigger = bar_close_time >= time(14, 15) and close_r >= 1.15
+        late_trigger = bar_close_time >= time(14, 15) and close_r >= late_trigger_r
         late_intrabar_trigger = (
             bar_start_time is not None
             and bar_start_time >= time(14, 15)
-            and favorable_r >= 1.15
+            and favorable_r >= late_trigger_r
         )
-        candidate = math.ceil(
-            entry_price * 1.0015 / tick_size - 1e-10
-        ) * tick_size
+        target_lock_r = None
+        intrabar_trigger = False
+        if favorable_r >= trigger_r:
+            target_lock_r = profit_r
+            intrabar_trigger = True
+        elif late_intrabar_trigger:
+            target_lock_r = late_profit_r
+            intrabar_trigger = True
+        elif late_trigger:
+            target_lock_r = late_profit_r
+            intrabar_trigger = False
+
+        if target_lock_r is None:
+            return None
+
+        raw_cand = max(entry_price * 1.0015, entry_price + (target_lock_r * risk_per_share))
+        candidate = math.ceil(raw_cand / tick_size - 1e-10) * tick_size
         improves_stop = candidate > current_stop
     else:
         favorable_r = (entry_price - low) / risk_per_share
         close_r = (entry_price - close) / risk_per_share
-        late_trigger = bar_close_time >= time(14, 15) and close_r >= 1.15
+        late_trigger = bar_close_time >= time(14, 15) and close_r >= late_trigger_r
         late_intrabar_trigger = (
             bar_start_time is not None
             and bar_start_time >= time(14, 15)
-            and favorable_r >= 1.15
+            and favorable_r >= late_trigger_r
         )
-        candidate = math.floor(
-            entry_price * 0.9985 / tick_size + 1e-10
-        ) * tick_size
+        target_lock_r = None
+        intrabar_trigger = False
+        if favorable_r >= trigger_r:
+            target_lock_r = profit_r
+            intrabar_trigger = True
+        elif late_intrabar_trigger:
+            target_lock_r = late_profit_r
+            intrabar_trigger = True
+        elif late_trigger:
+            target_lock_r = late_profit_r
+            intrabar_trigger = False
+
+        if target_lock_r is None:
+            return None
+
+        raw_cand = min(entry_price * 0.9985, entry_price - (target_lock_r * risk_per_share))
+        candidate = math.floor(raw_cand / tick_size + 1e-10) * tick_size
         improves_stop = candidate < current_stop
 
-    intrabar_trigger = favorable_r >= 1.65 or late_intrabar_trigger
-    if not (intrabar_trigger or late_trigger) or not improves_stop:
+    if not improves_stop:
         return None
     return round(candidate, 2), intrabar_trigger
 
@@ -309,6 +340,13 @@ def size_backtest_quantity(
         stop_charges = calculate_charges(stop_buy, stop_sell, quantity, costs)["total_charges"]
         net_stop_risk = (risk_per_share * quantity) + stop_charges
         if net_stop_risk <= risk_cap:
+            target_fill = entry_price + (target_r * risk_per_share) if side == Side.BUY else entry_price - (target_r * risk_per_share)
+            target_buy = entry_price if side == Side.BUY else target_fill
+            target_sell = target_fill if side == Side.BUY else entry_price
+            target_charges = calculate_charges(target_buy, target_sell, quantity, costs)["total_charges"]
+            expected_gross_profit = target_r * risk_per_share * quantity
+            if expected_gross_profit > 0 and (target_charges / expected_gross_profit) > 0.18:
+                return 0
             return quantity
         quantity -= 1
 
@@ -439,6 +477,20 @@ def run_fast_backtest(
     trades = []
     daily_stats = []
 
+    adr_by_symbol_and_date = {}
+    for sym in watchlist_symbols:
+        s_df = data[sym]['df']
+        dates_s = s_df['Datetime'].dt.date
+        daily = s_df.groupby(dates_s, sort=True).agg(
+            high=('High', 'max'),
+            low=('Low', 'min'),
+            close=('Close', 'last'),
+        )
+        prior_close = daily['close'].shift(1)
+        ranges = ((daily['high'] - daily['low']) / prior_close).dropna()
+        adr14_s = ranges.rolling(14, min_periods=1).mean().shift(1)
+        adr_by_symbol_and_date[sym] = adr14_s.to_dict()
+
     for session_date in test_dates:
         n_sess_mask = (nifty_df['Datetime'].dt.date == session_date)
         sess_indices = nifty_df[n_sess_mask].index.tolist()
@@ -448,9 +500,12 @@ def run_fast_backtest(
         opening_ranges = {}
         stock_sess_map = {}
         stock_sess_indices = {}
+        adr14_map = {}
         for sym in watchlist_symbols:
             s_candles = data[sym]['candles']
             s_df = data[sym]['df']
+            adr_val = adr_by_symbol_and_date[sym].get(session_date)
+            adr14_map[sym] = float(adr_val) if (adr_val is not None and pd.notna(adr_val) and adr_val > 0) else 0.02
             s_indices = s_df[s_df['Datetime'].dt.date == session_date].index.tolist()
             stock_sess_indices[sym] = s_indices
             stock_sess_map[sym] = {s_candles[idx].timestamp: idx for idx in s_indices}
@@ -535,6 +590,17 @@ def run_fast_backtest(
                                 math.floor(risk_cap / r_dist),
                                 math.floor(slot_budget / entry_price),
                             )
+                            if qty > 0:
+                                expected_2r_profit = 2.0 * r_dist * qty
+                                est_charges = calculate_charges(
+                                    entry_price if side == Side.BUY else target_price,
+                                    target_price if side == Side.BUY else entry_price,
+                                    qty,
+                                    config.costs,
+                                )['total_charges']
+                                if expected_2r_profit > 0 and (est_charges / expected_2r_profit) > 0.18:
+                                    qty = 0
+
                             if qty > 0:
                                 open_positions[sym] = {
                                     'symbol': sym,
@@ -634,19 +700,21 @@ def run_fast_backtest(
                     pos['unrealized_r'] = unrealized_r
 
                     if not pos['fee_lock_applied']:
-                        should_lock = False
-                        if favorable_r >= 1.65:
-                            should_lock = True
+                        target_lock_r = None
+                        if favorable_r >= 1.60:
+                            target_lock_r = 0.60
                         elif bar_time >= time(14, 15) and unrealized_r >= 1.15:
-                            should_lock = True
-                        if should_lock:
+                            target_lock_r = 0.35
+                        if target_lock_r is not None:
                             pos['fee_lock_applied'] = True
                             if pos['side'] == Side.BUY:
-                                cand_stop = round(math.ceil((pos['entry_price'] * 1.0015) / 0.05) * 0.05, 2)
+                                raw_cand = max(pos['entry_price'] * 1.0015, pos['entry_price'] + (target_lock_r * r_dist))
+                                cand_stop = round(math.ceil(raw_cand / 0.05) * 0.05, 2)
                                 if cand_stop > pos['current_stop']:
                                     pos['current_stop'] = cand_stop
                             else:
-                                cand_stop = round(math.floor((pos['entry_price'] * 0.9985) / 0.05) * 0.05, 2)
+                                raw_cand = min(pos['entry_price'] * 0.9985, pos['entry_price'] - (target_lock_r * r_dist))
+                                cand_stop = round(math.floor(raw_cand / 0.05) * 0.05, 2)
                                 if cand_stop < pos['current_stop']:
                                     pos['current_stop'] = cand_stop
 
@@ -733,7 +801,7 @@ def run_fast_backtest(
                         atr14=atr_val,
                         session_high_so_far=session_high,
                         session_low_so_far=session_low,
-                        adr14_pct=0.02,
+                        adr14_pct=adr14_map.get(sym, 0.02),
                         bar_high=s_bar.high,
                         bar_low=s_bar.low,
                     )

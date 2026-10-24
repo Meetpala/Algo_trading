@@ -109,9 +109,9 @@ def test_evaluate_fee_protected_stop(cfg):
         current_time_str="11:30",
         cfg=cfg,
     )
-    # Should lock breakeven + 0.15% (1000 * 1.0015 = 1001.50)
+    # Should lock +0.60R (1000 + 0.60 * 7 = 1004.20)
     assert new_stop is not None
-    assert new_stop == 1001.50
+    assert new_stop == 1004.20
     assert levels.fee_lock_applied is True
 
 
@@ -176,7 +176,7 @@ def test_conviction_scoring_and_sizing(cfg):
         timestamp_hhmm="10:45",
         close=1200.0,
         or_high=1195.0,
-        or_low=1180.0,
+        or_low=1185.0,
         session_vwap=1190.0,
         stock_return_20=0.015,
         nifty_return_20=0.005,
@@ -227,7 +227,7 @@ def test_select_best_entries_for_bar_ranks_and_picks_top1(cfg):
         timestamp_hhmm="10:15",
         close=1200.0,
         or_high=1195.0,
-        or_low=1180.0,
+        or_low=1185.0,
         session_vwap=1190.0,
         stock_return_20=0.015,
         nifty_return_20=0.005,
@@ -248,7 +248,7 @@ def test_select_best_entries_for_bar_ranks_and_picks_top1(cfg):
         timestamp_hhmm="10:15",
         close=1800.0,
         or_high=1790.0,
-        or_low=1770.0,
+        or_low=1775.0,
         session_vwap=1780.0,
         stock_return_20=0.025,  # Higher RS!
         nifty_return_20=0.005,
@@ -400,5 +400,71 @@ def test_strategy_engine_fee_protected_breakeven(tmp_path):
     assert manage_dec.decision == Decision.MANAGE
     assert "FEE_PROTECTED_BREAKEVEN_STEP" in manage_dec.reason_codes
     assert pos.fee_lock_applied is True
-    # 1000.0 * 1.0015 = 1001.50
-    assert pos.current_stop_price == 1001.50
+    # Locks Entry + 0.60 * R = 1000.0 + 6.0 = 1006.00
+    assert pos.current_stop_price == 1006.00
+
+
+def test_strategy_engine_enforces_slot_budget_and_gate9_bounds(tmp_path):
+    from apex3.broker.paper import PaperBroker
+    from apex3.journal.sqlite_journal import Journal
+    from apex3.strategy.engine import StrategyEngine
+    from apex3.models import Candle, Decision, InstrumentInfo, Quote, Side, OpeningRange, MarginInfo
+    from apex3.strategy.sizer import size_position
+    from zoneinfo import ZoneInfo
+    from datetime import datetime
+
+    IST = ZoneInfo("Asia/Kolkata")
+    cfg = load_config()
+    journal = Journal(db_path=str(tmp_path / "test_engine_gates.db"))
+    broker = PaperBroker(initial_margin=15000.0)
+    engine = StrategyEngine(config=cfg, broker=broker, journal=journal)
+
+    # 1. Verify budget per slot is Rs. 28,500 based on max_symbols = 2
+    assert cfg.limits.max_symbols == 2
+    inst = InstrumentInfo(symbol="RELIANCE", exchange="NSE", tick_size=0.05, lot_size=1, upper_circuit=1300.0, lower_circuit=1100.0, mis_available=True)
+    margin_info = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    sizing = size_position(
+        symbol="RELIANCE",
+        side=Side.BUY,
+        entry_price=1200.0,
+        stop_price=1192.0,  # R = 8.0 / 1200 = 0.67% (valid Gate 9)
+        num_qualified_symbols=1,
+        margin_info=margin_info,
+        instrument=inst,
+        limits_config=cfg.limits,
+        risk_config=cfg.risk,
+    )
+    assert sizing.is_valid
+    assert sizing.per_symbol_budget == 28500.0
+    assert sizing.notional_value <= 28500.0
+
+    # 2. Verify Gate 9 bounds in engine: stop distance outside [0.55%, 0.90%] rejected with STOP_WIDTH_OUT_OF_BOUNDS
+    from datetime import timedelta
+    t_today = datetime(2026, 10, 21, 9, 15, tzinfo=IST)
+    bench_candles = []
+    stock_candles = []
+    for i in range(50):
+        dt = datetime(2026, 10, 20, 9, 15, tzinfo=IST) + timedelta(minutes=5*i)
+        bench_candles.append(Candle(timestamp=dt, open=24000.0 + i*5, high=24000.0 + i*5 + 10, low=24000.0 + i*5 - 10, close=24000.0 + i*5 + 2, volume=10000, is_complete=True))
+        stock_candles.append(Candle(timestamp=dt, open=1200.0, high=1204.0, low=1196.0, close=1201.0, volume=20000, is_complete=True))
+
+    for i in range(15):
+        dt = t_today + timedelta(minutes=5*i)
+        bench_candles.append(Candle(timestamp=dt, open=24250.0 + i*5, high=24250.0 + i*5 + 10, low=24250.0 + i*5 - 10, close=24250.0 + i*5 + 3, volume=10000, is_complete=True))
+        if i < 3:
+            stock_candles.append(Candle(timestamp=dt, open=1206.0, high=1209.0, low=1205.5, close=1208.0, volume=20000, is_complete=True))
+        elif i < 14:
+            stock_candles.append(Candle(timestamp=dt, open=1208.0, high=1209.5, low=1207.0, close=1208.5, volume=20000, is_complete=True))
+        else:
+            stock_candles.append(Candle(timestamp=dt, open=1209.0, high=1214.0, low=1207.5, close=1213.5, volume=60000, is_complete=True))
+
+    t_now = stock_candles[-1].timestamp
+    broker._fixture_candles['NIFTY 50'] = bench_candles
+    broker._fixture_quotes['NIFTY 50'] = Quote(symbol='NIFTY 50', exchange='NSE', last_price=bench_candles[-1].close, bid=bench_candles[-1].close - 1, ask=bench_candles[-1].close + 1, volume=10000, timestamp=t_now, is_fresh=True)
+
+    broker._fixture_candles['RELIANCE'] = stock_candles
+    broker._fixture_quotes['RELIANCE'] = Quote(symbol='RELIANCE', exchange='NSE', last_price=stock_candles[-1].close, bid=stock_candles[-1].close - 0.05, ask=stock_candles[-1].close + 0.05, volume=60000, timestamp=t_now, is_fresh=True)
+    engine.opening_ranges['RELIANCE'] = OpeningRange(symbol='RELIANCE', high=1209.0, low=1205.5, is_complete=True, candle_count=3)
+
+    decisions = engine.evaluate_step(t_now)
+    assert any(d.decision == Decision.WAIT and "STOP_WIDTH_OUT_OF_BOUNDS" in d.reason_codes for d in decisions)
