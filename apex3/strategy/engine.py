@@ -1222,9 +1222,15 @@ class StrategyEngine:
                 # Record bar timestamp deduplication
                 self._last_entry_bar_timestamp = stock_candles[-1].timestamp if stock_candles else now
 
-                if entry_state and (entry_state.status == OrderStatus.COMPLETE or entry_state.filled_quantity > 0):
-                    actual_qty = entry_state.filled_quantity if entry_state.filled_quantity > 0 else sizing.quantity
-                    actual_entry = entry_state.average_price if entry_state.average_price > 0 else marketable_entry_price
+                entry_filled_qty = getattr(entry_state, "filled_quantity", 0)
+                is_filled_qty_positive = isinstance(entry_filled_qty, (int, float)) and entry_filled_qty > 0
+                is_complete = getattr(entry_state, "status", None) == OrderStatus.COMPLETE
+
+                if entry_state and (is_complete or is_filled_qty_positive):
+                    actual_qty = int(entry_filled_qty) if is_filled_qty_positive else sizing.quantity
+                    entry_avg_px = getattr(entry_state, "average_price", 0.0)
+                    is_avg_px_positive = isinstance(entry_avg_px, (int, float)) and entry_avg_px > 0
+                    actual_entry = float(entry_avg_px) if is_avg_px_positive else marketable_entry_price
                     managed.quantity = actual_qty
                     managed.average_entry = actual_entry
                     managed.best_favorable_price = actual_entry

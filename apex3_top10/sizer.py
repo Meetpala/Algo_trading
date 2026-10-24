@@ -312,6 +312,15 @@ def size_position(
     lot_size = max(1, instrument.lot_size)
     q_final = (q_raw // lot_size) * lot_size
 
+    # Hard Risk Bound: Ensure total realized loss at stop-loss (including Zerodha statutory friction) <= trade_risk_rupees
+    if q_final > 0 and getattr(risk_config, "bound_loss_with_charges", True):
+        while q_final > 0:
+            stop_exit_charges = calculate_zerodha_intraday_charges(entry_price, stop_price, q_final)
+            total_realized_loss = (q_final * per_share_risk) + stop_exit_charges
+            if total_realized_loss <= trade_risk_rupees or q_final <= lot_size:
+                break
+            q_final -= lot_size
+
     if q_final <= 0:
         return SizingResult(
             symbol=symbol,

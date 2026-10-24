@@ -166,8 +166,8 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         except Exception:
             events = []
 
-        # Evaluate current pipeline step for reasons
-        decisions = engine.evaluate_step(now)
+        # Read latest decisions from engine background thread (strictly read-only, side-effect free)
+        decisions = getattr(engine, "last_decisions", [])
         decisions_summary = [
             {
                 "symbol": d.symbol or "ALL",

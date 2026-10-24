@@ -456,28 +456,29 @@ def test_unconfirmed_protective_stop_triggers_emergency_flatten():
     object.__setattr__(cfg.watchlist, "scanner_enabled", False)
     engine = StrategyEngine(cfg, mock_broker, mock_journal)
 
+    mock_broker.is_session_valid.return_value = True
     now = datetime(2026, 3, 23, 9, 35, 10, tzinfo=IST)
     candles = []
     for i in range(15):
         t = datetime(2026, 3, 23, 9, 15, tzinfo=IST) + timedelta(minutes=5 * i)
         candles.append(Candle(timestamp=t, open=649.0, high=650.0, low=648.2, close=649.5, volume=10000, is_complete=True))
-    candles[-1] = Candle(timestamp=datetime(2026, 3, 23, 10, 25, tzinfo=IST), open=649.5, high=650.5, low=646.0, close=650.0, volume=35000, is_complete=True)
+    candles[-1] = Candle(timestamp=datetime(2026, 3, 23, 10, 25, tzinfo=IST), open=649.5, high=650.5, low=649.0, close=650.0, volume=35000, is_complete=True)
 
     mock_broker.get_quote.return_value = Quote(symbol="HINDALCO", exchange="NSE", last_price=650.0, bid=649.95, ask=650.05, volume=10000, timestamp=now, is_fresh=True)
     mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="HINDALCO", exchange="NSE", tick_size=0.05, lot_size=1)
     mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
-    mock_broker.estimate_order_margin.return_value = OrderMarginEstimate(required_margin=1000.0, leverage_available=4.0)
+    mock_broker.estimate_order_margin.return_value = OrderMarginEstimate(required_margin=6500.0, leverage_available=4.0)
     mock_broker.get_positions.return_value = []
     mock_broker.get_orders.return_value = []
     mock_broker.get_historical.return_value = candles
 
     # Opening range completed
-    engine.opening_ranges["HINDALCO"] = OpeningRange(symbol="HINDALCO", high=650.0, low=646.0, is_complete=True, candle_count=3)
+    engine.opening_ranges["HINDALCO"] = OpeningRange(symbol="HINDALCO", high=650.0, low=648.2, is_complete=True, candle_count=3)
 
     # Entry fills immediately
     entry_ord_state = OrderState(order_id="ENTRY_1", request=OrderRequest(symbol="HINDALCO"), status=OrderStatus.COMPLETE, filled_quantity=10, average_price=650.0)
     # BUT Stop order fails / is rejected by broker!
-    mock_broker.place_order.side_effect = ["ENTRY_1", RuntimeError("RMS margin block for stop order")]
+    mock_broker.place_order.side_effect = ["ENTRY_1", RuntimeError("RMS margin block for stop order"), "EMERG_1"]
     mock_broker.get_order_status.return_value = entry_ord_state
 
     import apex3.strategy.engine as eng_module

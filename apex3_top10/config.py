@@ -47,6 +47,7 @@ class RiskConfig:
     max_combined_open_risk_pct: float = 1.60
     daily_loss_limit_pct: float = 1.60
     slippage_allowance_pct: float = 0.0
+    bound_loss_with_charges: bool = True
 
 
 @dataclass(frozen=True)
@@ -251,23 +252,33 @@ def _load_secrets() -> SecretsConfig:
     )
 
 
-def _parse_schedule(raw: dict) -> ScheduleConfig:
-    """Parse schedule section, collecting holidays from dated keys."""
+def _parse_schedule(raw: dict, fallback_raw: Optional[dict] = None) -> ScheduleConfig:
+    """Parse schedule section, collecting holidays from all schedule and holiday keys."""
+    merged = dict(fallback_raw or {})
+    merged.update(raw)
+
     holidays: list[str] = []
-    for key, value in raw.items():
-        if key.startswith("holidays_") and isinstance(value, list):
-            holidays.extend(str(v) for v in value)
+    sources = [raw, fallback_raw or {}, merged]
+    for s in sources:
+        if isinstance(s, dict):
+            for key, value in s.items():
+                if (key.startswith("holidays") or key == "holiday_list") and isinstance(value, list):
+                    for v in value:
+                        v_str = str(v)
+                        if v_str not in holidays:
+                            holidays.append(v_str)
+
     return ScheduleConfig(
-        market_open=str(raw.get("or_start_time", raw.get("market_open", "09:15"))),
-        opening_range_end=str(raw.get("or_end_time", raw.get("opening_range_end", "09:30"))),
-        entry_start=str(raw.get("entry_start_time", raw.get("entry_start", "09:35"))),
-        entry_cutoff=str(raw.get("entry_cutoff_time", raw.get("entry_cutoff", "12:30"))),
-        flatten_start=str(raw.get("square_off_time", raw.get("flatten_start", "14:55"))),
-        flat_target=str(raw.get("flat_verification_time", raw.get("flat_target", "14:58"))),
-        market_close=str(raw.get("market_close", "15:30")),
-        hard_deadline=str(raw.get("hard_deadline", "15:00")),
-        stale_threshold_sec=int(raw.get("stale_threshold_sec", 2)),
-        holidays=holidays,
+        market_open=str(merged.get("or_start_time", merged.get("market_open", "09:15"))),
+        opening_range_end=str(merged.get("or_end_time", merged.get("opening_range_end", "09:30"))),
+        entry_start=str(merged.get("entry_start_time", merged.get("entry_start", "09:35"))),
+        entry_cutoff=str(merged.get("entry_cutoff_time", merged.get("entry_cutoff", "12:30"))),
+        flatten_start=str(merged.get("square_off_time", merged.get("flatten_start", "14:55"))),
+        flat_target=str(merged.get("flat_verification_time", merged.get("flat_target", "14:58"))),
+        market_close=str(merged.get("market_close", "15:30")),
+        hard_deadline=str(merged.get("hard_deadline", "15:00")),
+        stale_threshold_sec=int(merged.get("stale_threshold_sec", 2)),
+        holidays=sorted(holidays),
     )
 
 
@@ -293,7 +304,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     regime_raw = raw.get("regime_filter", raw.get("regime", {}))
     signal_raw = raw.get("signal_gates", raw.get("signal", {}))
     stops_raw = raw.get("stops_and_targets", raw.get("stops", {}))
-    schedule_raw = raw.get("session_schedule", raw.get("schedule", {}))
+    session_sched = raw.get("session_schedule", {})
+    sched_section = raw.get("schedule", {})
+    schedule_raw = dict(sched_section)
+    schedule_raw.update(session_sched)
     radar_raw = raw.get("radar", {})
     watchlist_raw = raw.get("watchlist", {})
     limits_raw = raw.get("limits", {})
@@ -359,6 +373,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             max_combined_open_risk_pct=float(risk_raw.get("max_combined_open_risk_pct", 1.60)),
             daily_loss_limit_pct=daily_loss,
             slippage_allowance_pct=float(risk_raw.get("slippage_allowance_pct", 0.0)),
+            bound_loss_with_charges=bool(risk_raw.get("bound_loss_with_charges", True)),
         ),
         regime=RegimeConfig(
             benchmark_symbol=str(regime_raw.get("benchmark_symbol", "NIFTY 50")),
@@ -411,7 +426,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             max_modifications_per_order=int(stops_raw.get("max_modifications_per_order", 25)),
             modification_headroom=int(stops_raw.get("modification_headroom", 3)),
         ),
-        schedule=_parse_schedule(schedule_raw),
+        schedule=_parse_schedule(session_sched, sched_section),
         rate_limits=RateLimitsConfig(
             orders_per_second=int(rate_limits_raw.get("orders_per_second", 10)),
             orders_per_minute=int(rate_limits_raw.get("orders_per_minute", 200)),

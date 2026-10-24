@@ -20,6 +20,7 @@ WAIT, PROPOSED_LONG, PROPOSED_SHORT, MANAGE, EXIT, HALT.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time
 from typing import Optional
@@ -120,6 +121,8 @@ class StrategyEngine:
         self._daily_loss_halt_date: Optional[date] = None
         self._current_session_date: Optional[date] = None
         self._last_entry_bar_timestamp: Optional[datetime] = None
+        self._execution_lock = threading.Lock()
+        self.last_decisions: list[StrategyDecision] = []
 
         # Opening ranges cache: symbol -> OpeningRange
         self.opening_ranges: dict[str, OpeningRange] = {}
@@ -145,10 +148,14 @@ class StrategyEngine:
         return valid_symbols
 
     def evaluate_step(self, current_time: Optional[datetime] = None) -> list[StrategyDecision]:
-        """Run one complete cycle of the 12-step deterministic pipeline.
+        """Run one complete cycle of the 12-step deterministic pipeline (thread-safe)."""
+        with self._execution_lock:
+            decisions = self._evaluate_step_locked(current_time)
+            self.last_decisions = decisions
+            return decisions
 
-        Returns a list of StrategyDecision (one per evaluated symbol or action).
-        """
+    def _evaluate_step_locked(self, current_time: Optional[datetime] = None) -> list[StrategyDecision]:
+        """Internal execution pipeline under execution lock."""
         now = current_time or self.scheduler.now_ist()
         session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
         if self._current_session_date != session_date:
@@ -226,6 +233,19 @@ class StrategyEngine:
                 )
             ]
 
+        # Operator Pause check: if paused and no open positions, halt immediately
+        if self.is_paused:
+            open_count = sum(1 for p in self.state_machine.positions.values() if p.quantity > 0)
+            if open_count == 0:
+                return [
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        timestamp_ist=now,
+                        reason_codes=["ENGINE_PAUSED"],
+                        explanation=f"Strategy engine is paused: {self.pause_reason or 'Operator pause'}",
+                    )
+                ]
+
         if session_state == SessionState.PRE_OPEN:
             return [
                 StrategyDecision(
@@ -284,7 +304,7 @@ class StrategyEngine:
                     ent_pos.quantity = entry_state.filled_quantity
                     if entry_state.average_price > 0:
                         ent_pos.average_entry = entry_state.average_price
-                    ent_pos.phase = PositionPhase.OPEN_PROTECTED
+                    ent_pos.phase = PositionPhase.OPEN_UNPROTECTED
 
                     inst = self.broker.get_instrument_info(ent_pos.symbol)
                     tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
@@ -303,18 +323,52 @@ class StrategyEngine:
                         tag=f"{ent_pos.strategy_tag}_SL",
                         strategy_id=self.session_tag,
                     )
-                    sl_order_id = self.broker.place_order(sl_req)
-                    ent_pos.protective_order_id = sl_order_id
-                    self.journal.log_event(
-                        event_type="ENTRY_FILLED_PROTECTED",
-                        symbol=ent_pos.symbol,
-                        data={
-                            "quantity": ent_pos.quantity,
-                            "average_entry": ent_pos.average_entry,
-                            "sl_order_id": sl_order_id,
-                        },
-                        explanation=f"Entry filled for {ent_pos.symbol} (qty={ent_pos.quantity}); protective SL placed",
-                    )
+                    sl_confirmed = False
+                    try:
+                        sl_order_id = self.broker.place_order(sl_req)
+                        ent_pos.protective_order_id = sl_order_id
+                        sl_check = self.broker.get_order_status(sl_order_id)
+                        if sl_check and sl_check.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN, OrderStatus.COMPLETE):
+                            ent_pos.phase = PositionPhase.OPEN_PROTECTED
+                            sl_confirmed = True
+                    except Exception as sl_err:
+                        logger.error("Failed to place protective stop for pending fill %s: %s", ent_pos.symbol, sl_err)
+
+                    if sl_confirmed:
+                        self.journal.log_event(
+                            event_type="ENTRY_FILLED_PROTECTED",
+                            symbol=ent_pos.symbol,
+                            data={
+                                "quantity": ent_pos.quantity,
+                                "average_entry": ent_pos.average_entry,
+                                "sl_order_id": ent_pos.protective_order_id,
+                            },
+                            explanation=f"Entry filled for {ent_pos.symbol} (qty={ent_pos.quantity}); protective SL placed & confirmed",
+                        )
+                    else:
+                        logger.critical("EMERGENCY: Protective stop unconfirmed for filled entry in %s. Liquidating immediately.", ent_pos.symbol)
+                        self.journal.log_warning(
+                            severity="EMERGENCY",
+                            code="PROTECTIVE_STOP_UNCONFIRMED",
+                            message=f"Protective stop for filled entry in {ent_pos.symbol} failed. Liquidating immediately.",
+                        )
+                        try:
+                            emer_exit = OrderRequest(
+                                symbol=ent_pos.symbol,
+                                side=exit_side,
+                                quantity=ent_pos.quantity,
+                                product=Product.MIS,
+                                order_type=OrderType.MARKET,
+                                tag=f"{ent_pos.strategy_tag}_EMERGENCY_FLATTEN",
+                                strategy_id=self.session_tag,
+                            )
+                            self.broker.place_order(emer_exit)
+                            ent_pos.phase = PositionPhase.EXITING
+                        except Exception as em_err:
+                            logger.critical("FATAL: Failed to execute emergency liquidation for %s: %s", ent_pos.symbol, em_err)
+                            ent_pos.phase = PositionPhase.ERROR
+                        self.is_paused = True
+                        self.pause_reason = f"PROTECTIVE_STOP_FAILED_{ent_pos.symbol}"
                 elif entry_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
                     ent_pos.phase = PositionPhase.FLAT
                     ent_pos.quantity = 0
@@ -385,12 +439,77 @@ class StrategyEngine:
                             )
                         )
                         continue
+                    elif sl_order and sl_order.status == OrderStatus.OPEN:
+                        # Order triggered but resting as unfilled limit order on the book
+                        q_now = self.broker.get_quote(pos.symbol)
+                        px = q_now.last_price if q_now and q_now.last_price > 0 else 0.0
+                        limit_px = sl_order.price if sl_order.price > 0 else pos.current_stop_price
+                        is_gapped = False
+                        if pos.side == Side.BUY and px > 0 and px < limit_px * 0.999:
+                            is_gapped = True
+                        elif pos.side == Side.SELL and px > 0 and px > limit_px * 1.001:
+                            is_gapped = True
+
+                        if is_gapped:
+                            logger.critical(
+                                "EMERGENCY: SL order %s triggered but unfilled and market gapped through limit (%s). Executing market exit!",
+                                pos.protective_order_id,
+                                px,
+                            )
+                            try:
+                                self.broker.cancel_order(pos.protective_order_id)
+                            except Exception:
+                                pass
+                            exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
+                            emer_exit = OrderRequest(
+                                symbol=pos.symbol,
+                                side=exit_side,
+                                quantity=pos.quantity,
+                                product=Product.MIS,
+                                order_type=OrderType.MARKET,
+                                tag=f"{pos.strategy_tag}_EMERGENCY_GAP_EXIT",
+                                strategy_id=self.session_tag,
+                            )
+                            self.broker.place_order(emer_exit)
+                            pos.phase = PositionPhase.EXITING
+                            decisions.append(
+                                StrategyDecision(
+                                    decision=Decision.EXIT,
+                                    symbol=pos.symbol,
+                                    side=pos.side,
+                                    timestamp_ist=now,
+                                    reason_codes=["STOP_TRIGGERED_UNFILLED_GAP_EXIT"],
+                                    explanation=f"Protective SL limit order {pos.protective_order_id} triggered but unfilled as price gapped to {px}. Emergency market exit dispatched.",
+                                    broker_action="EMERGENCY_GAP_EXIT",
+                                )
+                            )
+                            continue
                 except Exception as exc:
                     self.journal.log_warning(
                         severity="WARNING",
                         code="SL_STATUS_CHECK_FAILED",
                         message=f"Could not check SL order {pos.protective_order_id} for {pos.symbol}: {exc}",
                     )
+
+            # Verify confirmed protective stop coverage
+            if pos.phase not in (PositionPhase.OPEN_PROTECTED, PositionPhase.EXITING, PositionPhase.CLOSED) and pos.quantity > 0:
+                logger.critical("EMERGENCY: Open position in %s has no verified protective stop (phase=%s)! Liquidating immediately.", pos.symbol, pos.phase)
+                try:
+                    exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
+                    flat_req = OrderRequest(
+                        symbol=pos.symbol,
+                        side=exit_side,
+                        quantity=pos.quantity,
+                        product=Product.MIS,
+                        order_type=OrderType.MARKET,
+                        tag=f"{pos.strategy_tag}_EMERGENCY_UNPROTECTED_EXIT",
+                        strategy_id=self.session_tag,
+                    )
+                    self.broker.place_order(flat_req)
+                    pos.phase = PositionPhase.EXITING
+                except Exception as unprot_err:
+                    logger.critical("FATAL: Failed to liquidate unprotected position in %s: %s", pos.symbol, unprot_err)
+                continue
 
             # Manage existing position stop or take profit
             try:
@@ -724,6 +843,20 @@ class StrategyEngine:
                     gates=[daily_risk_status.gate],
                 )
             ]
+
+        # Enforce engine pause state: if paused, block all new entries
+        if self.is_paused:
+            logger.info("Strategy engine is PAUSED (%s). New entries are blocked.", self.pause_reason or "Operator pause")
+            if not decisions:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        timestamp_ist=now,
+                        reason_codes=["ENGINE_PAUSED"],
+                        explanation=f"New entries blocked because engine is paused: {self.pause_reason or 'Operator pause'}",
+                    )
+                )
+            return decisions
 
         # If already at max simultaneous positions, cannot take new entries
         active_managed_count = sum(1 for position in open_managed if position.quantity > 0)
@@ -1089,14 +1222,20 @@ class StrategyEngine:
                 # Record bar timestamp deduplication
                 self._last_entry_bar_timestamp = stock_candles[-1].timestamp if stock_candles else now
 
-                if entry_state and (entry_state.status == OrderStatus.COMPLETE or entry_state.filled_quantity > 0):
-                    actual_qty = entry_state.filled_quantity if entry_state.filled_quantity > 0 else sizing.quantity
-                    actual_entry = entry_state.average_price if entry_state.average_price > 0 else marketable_entry_price
+                entry_filled_qty = getattr(entry_state, "filled_quantity", 0)
+                is_filled_qty_positive = isinstance(entry_filled_qty, (int, float)) and entry_filled_qty > 0
+                is_complete = getattr(entry_state, "status", None) == OrderStatus.COMPLETE
+
+                if entry_state and (is_complete or is_filled_qty_positive):
+                    actual_qty = int(entry_filled_qty) if is_filled_qty_positive else sizing.quantity
+                    entry_avg_px = getattr(entry_state, "average_price", 0.0)
+                    is_avg_px_positive = isinstance(entry_avg_px, (int, float)) and entry_avg_px > 0
+                    actual_entry = float(entry_avg_px) if is_avg_px_positive else marketable_entry_price
                     managed.quantity = actual_qty
                     managed.average_entry = actual_entry
                     managed.best_favorable_price = actual_entry
                     managed.r_value = abs(actual_entry - initial_stop)
-                    managed.phase = PositionPhase.OPEN_PROTECTED
+                    managed.phase = PositionPhase.OPEN_UNPROTECTED
 
                     # Step 10: Place protective stop immediately for filled quantity
                     exit_side = Side.SELL if side == Side.BUY else Side.BUY
@@ -1113,8 +1252,46 @@ class StrategyEngine:
                         tag=f"{tag}_SL",
                         strategy_id=self.session_tag,
                     )
-                    sl_order_id = self.broker.place_order(sl_req)
-                    managed.protective_order_id = sl_order_id
+                    sl_confirmed = False
+                    sl_order_id = ""
+                    try:
+                        sl_order_id = self.broker.place_order(sl_req)
+                        managed.protective_order_id = sl_order_id
+                        sl_state = self.broker.get_order_status(sl_order_id)
+                        if sl_state and sl_state.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN, OrderStatus.COMPLETE):
+                            managed.phase = PositionPhase.OPEN_PROTECTED
+                            sl_confirmed = True
+                        else:
+                            logger.error("Stop order %s in unconfirmed state: %s", sl_order_id, getattr(sl_state, 'status', None))
+                    except Exception as sl_err:
+                        logger.error("Failed to place protective stop for %s: %s", sym, sl_err)
+
+                    if not sl_confirmed:
+                        # Recovery path: liquidate filled position immediately to prevent naked risk
+                        logger.critical("EMERGENCY: Protective stop placement failed/unconfirmed for %s! Liquidating immediately.", sym)
+                        self.journal.log_warning(
+                            severity="EMERGENCY",
+                            code="PROTECTIVE_STOP_UNCONFIRMED",
+                            message=f"Protective stop for {sym} failed or unconfirmed. Executing immediate market liquidation.",
+                        )
+                        try:
+                            flat_req = OrderRequest(
+                                symbol=sym,
+                                side=exit_side,
+                                quantity=actual_qty,
+                                product=Product.MIS,
+                                order_type=OrderType.MARKET,
+                                tag=f"{tag}_EMERGENCY_FLATTEN",
+                                strategy_id=self.session_tag,
+                            )
+                            self.broker.place_order(flat_req)
+                            managed.phase = PositionPhase.EXITING
+                        except Exception as flat_err:
+                            logger.critical("FATAL: Emergency liquidation order failed for %s: %s", sym, flat_err)
+                            managed.phase = PositionPhase.ERROR
+                        self.is_paused = True
+                        self.pause_reason = f"PROTECTIVE_STOP_FAILED_{sym}"
+                        continue
 
                     risk_positions.append(
                         PositionState(

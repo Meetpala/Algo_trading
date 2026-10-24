@@ -225,7 +225,12 @@ class KiteAdapter(BrokerInterface):
                 leverage_available=min(4.0, round(leverage, 2)),
             )
         except Exception as e:
-            logger.warning("Order margin estimation fallback used for %s: %s", request.symbol, e)
+            logger.error("Order margin estimation failed for %s: %s", request.symbol, e)
+            if getattr(self, "_live_enabled", False):
+                raise RuntimeError(
+                    f"Fresh margin estimate failed for {request.symbol}: {e}. "
+                    "Cannot safely assume 4x leverage in live trading."
+                ) from e
             notional = request.price * request.quantity
             est_req = notional / 4.0
             return OrderMarginEstimate(
