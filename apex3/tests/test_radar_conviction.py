@@ -300,7 +300,7 @@ def test_strategy_engine_watchlist_resolution(tmp_path):
     assert "RELIANCE" in watchlist
     assert "TRENT" in watchlist
     assert "BHARTIARTL" in watchlist
-    assert len(watchlist) == 9
+    assert len(watchlist) == len(cfg.watchlist.symbols)
 
 
 def test_strategy_engine_slot2_lock(tmp_path):

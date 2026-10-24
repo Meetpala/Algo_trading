@@ -54,29 +54,38 @@
   "variants": {
     "Elite 10 baseline": {
       "summary": {
-        "total_trades": 25,
-        "winning_trades": 15,
-        "losing_trades": 10,
-        "win_rate": 60.0,
-        "profit_factor": 1.66,
-        "gross_pnl": 529.9,
-        "gross_profit": 1336.75,
+        "total_trades": 26,
+        "winning_trades": 14,
+        "losing_trades": 12,
+        "win_rate": 53.85,
+        "profit_factor": 1.74,
+        "gross_pnl": 597.9,
+        "gross_profit": 1404.75,
         "gross_loss": 806.85,
-        "total_charges": 400.88,
+        "total_charges": 419.86,
         "charge_breakdown": {
-          "brokerage": 225.7,
-          "stt": 94.1,
-          "exchange_txn": 23.93,
-          "sebi": 0.76,
-          "gst": 45.08,
-          "stamp_duty": 11.27
+          "brokerage": 236.39,
+          "stt": 98.57,
+          "exchange_txn": 25.06,
+          "sebi": 0.78,
+          "gst": 47.25,
+          "stamp_duty": 11.8
         },
-        "friction_ratio_pct": 29.99,
-        "net_pnl": 129.02,
-        "profit_pct": 0.86,
-        "ending_capital": 15129.02
+        "friction_ratio_pct": 29.89,
+        "net_pnl": 178.04,
+        "profit_pct": 1.19,
+        "ending_capital": 15178.04
       },
       "monthly": [
+        {
+          "month": "2026-04",
+          "trades": 1,
+          "win_rate_pct": 100.0,
+          "gross_pnl": 191.2,
+          "charges": 13.91,
+          "friction_pct_of_gross_profit": 7.28,
+          "net_pnl": 177.29
+        },
         {
           "month": "2026-05",
           "trades": 2,
@@ -97,30 +106,30 @@
         },
         {
           "month": "2026-07",
-          "trades": 2,
+          "trades": 1,
           "win_rate_pct": 100.0,
-          "gross_pnl": 167.55,
-          "charges": 31.16,
-          "friction_pct_of_gross_profit": 18.6,
-          "net_pnl": 136.39
+          "gross_pnl": 110.95,
+          "charges": 14.66,
+          "friction_pct_of_gross_profit": 13.21,
+          "net_pnl": 96.29
         },
         {
           "month": "2026-08",
-          "trades": 7,
-          "win_rate_pct": 57.14,
-          "gross_pnl": 126.45,
-          "charges": 119.77,
-          "friction_pct_of_gross_profit": 43.16,
-          "net_pnl": 6.68
+          "trades": 6,
+          "win_rate_pct": 50.0,
+          "gross_pnl": 48.55,
+          "charges": 102.39,
+          "friction_pct_of_gross_profit": 51.3,
+          "net_pnl": -53.84
         },
         {
           "month": "2026-09",
-          "trades": 9,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 460.4,
-          "charges": 148.18,
-          "friction_pct_of_gross_profit": 21.14,
-          "net_pnl": 312.22
+          "trades": 11,
+          "win_rate_pct": 54.55,
+          "gross_pnl": 471.7,
+          "charges": 187.13,
+          "friction_pct_of_gross_profit": 26.27,
+          "net_pnl": 284.57
         },
         {
           "month": "2026-10",
@@ -142,44 +151,36 @@
           "net_pnl": 271.4
         },
         {
-          "symbol": "TRENT",
+          "symbol": "MARUTI",
           "trades": 3,
           "win_rate_pct": 66.67,
-          "gross_pnl": 137.2,
-          "charges": 42.83,
-          "net_pnl": 94.37
+          "gross_pnl": 169.1,
+          "charges": 39.91,
+          "net_pnl": 129.19
         },
         {
           "symbol": "HINDALCO",
-          "trades": 2,
+          "trades": 3,
+          "win_rate_pct": 33.33,
+          "gross_pnl": 140.6,
+          "charges": 58.97,
+          "net_pnl": 81.63
+        },
+        {
+          "symbol": "TRENT",
+          "trades": 4,
           "win_rate_pct": 50.0,
-          "gross_pnl": 129.6,
-          "charges": 38.07,
-          "net_pnl": 91.53
+          "gross_pnl": 137.5,
+          "charges": 60.88,
+          "net_pnl": 76.62
         },
         {
           "symbol": "SUNPHARMA",
           "trades": 4,
           "win_rate_pct": 75.0,
-          "gross_pnl": 85.35,
-          "charges": 63.53,
-          "net_pnl": 21.82
-        },
-        {
-          "symbol": "KOTAKBANK",
-          "trades": 6,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 85.4,
-          "charges": 105.75,
-          "net_pnl": -20.35
-        },
-        {
-          "symbol": "MARUTI",
-          "trades": 3,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 13.85,
-          "charges": 40.41,
-          "net_pnl": -26.56
+          "gross_pnl": 64.7,
+          "charges": 61.44,
+          "net_pnl": 3.26
         },
         {
           "symbol": "SBIN",
@@ -188,6 +189,14 @@
           "gross_pnl": -33.65,
           "charges": 27.86,
           "net_pnl": -61.51
+        },
+        {
+          "symbol": "KOTAKBANK",
+          "trades": 5,
+          "win_rate_pct": 60.0,
+          "gross_pnl": 7.5,
+          "charges": 88.37,
+          "net_pnl": -80.87
         },
         {
           "symbol": "ITC",
@@ -207,6 +216,35 @@
         }
       ],
       "trades": [
+        {
+          "date": "2026-04-28",
+          "symbol": "MARUTI",
+          "side": "SELL",
+          "qty": 1,
+          "entry_time": "12:10",
+          "signal_time": "12:10",
+          "signal_price": 13135.0,
+          "entry_price": 13134.95,
+          "exit_time": "14:40",
+          "exit_price": 12943.75,
+          "exit_reason": "TARGET_HIT",
+          "gross_pnl": 191.2,
+          "charges": {
+            "buy_turnover": 12943.75,
+            "sell_turnover": 13134.95,
+            "total_turnover": 26078.7,
+            "brokerage": 7.82,
+            "stt": 3.28,
+            "exchange_txn": 0.83,
+            "sebi": 0.02,
+            "gst": 1.57,
+            "stamp_duty": 0.39,
+            "total_charges": 13.91
+          },
+          "total_charges": 13.91,
+          "net_pnl": 177.29,
+          "r_multiple": 2.0
+        },
         {
           "date": "2026-05-05",
           "symbol": "SBIN",
@@ -353,62 +391,33 @@
           "r_multiple": 0.66
         },
         {
-          "date": "2026-07-14",
-          "symbol": "MARUTI",
-          "side": "SELL",
-          "qty": 1,
-          "entry_time": "10:40",
-          "signal_time": "10:40",
-          "signal_price": 13538.0,
-          "entry_price": 13535.95,
-          "exit_time": "14:55",
-          "exit_price": 13500.0,
-          "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 35.95,
-          "charges": {
-            "buy_turnover": 13500.0,
-            "sell_turnover": 13535.95,
-            "total_turnover": 27035.95,
-            "brokerage": 8.11,
-            "stt": 3.38,
-            "exchange_txn": 0.86,
-            "sebi": 0.02,
-            "gst": 1.62,
-            "stamp_duty": 0.41,
-            "total_charges": 14.41
-          },
-          "total_charges": 14.41,
-          "net_pnl": 21.54,
-          "r_multiple": 0.32
-        },
-        {
           "date": "2026-07-27",
           "symbol": "SUNPHARMA",
           "side": "BUY",
-          "qty": 8,
-          "entry_time": "10:50",
-          "signal_time": "10:50",
-          "signal_price": 1955.0,
-          "entry_price": 1954.75,
+          "qty": 7,
+          "entry_time": "11:25",
+          "signal_time": "11:25",
+          "signal_price": 1955.2,
+          "entry_price": 1955.35,
           "exit_time": "14:55",
           "exit_price": 1971.2,
           "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 131.6,
+          "gross_pnl": 110.95,
           "charges": {
-            "buy_turnover": 15638.0,
-            "sell_turnover": 15769.6,
-            "total_turnover": 31407.6,
-            "brokerage": 9.42,
-            "stt": 3.94,
-            "exchange_txn": 1.0,
-            "sebi": 0.04,
-            "gst": 1.88,
-            "stamp_duty": 0.47,
-            "total_charges": 16.75
+            "buy_turnover": 13687.449999999999,
+            "sell_turnover": 13798.4,
+            "total_turnover": 27485.85,
+            "brokerage": 8.25,
+            "stt": 3.45,
+            "exchange_txn": 0.88,
+            "sebi": 0.02,
+            "gst": 1.65,
+            "stamp_duty": 0.41,
+            "total_charges": 14.66
           },
-          "total_charges": 16.75,
-          "net_pnl": 114.85,
-          "r_multiple": 1.15
+          "total_charges": 14.66,
+          "net_pnl": 96.29,
+          "r_multiple": 0.95
         },
         {
           "date": "2026-08-03",
@@ -496,35 +505,6 @@
           "total_charges": 15.05,
           "net_pnl": -58.4,
           "r_multiple": -0.36
-        },
-        {
-          "date": "2026-08-20",
-          "symbol": "KOTAKBANK",
-          "side": "BUY",
-          "qty": 41,
-          "entry_time": "11:15",
-          "signal_time": "11:15",
-          "signal_price": 396.8,
-          "entry_price": 396.75,
-          "exit_time": "14:55",
-          "exit_price": 398.65,
-          "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 77.9,
-          "charges": {
-            "buy_turnover": 16266.75,
-            "sell_turnover": 16344.65,
-            "total_turnover": 32611.4,
-            "brokerage": 9.78,
-            "stt": 4.09,
-            "exchange_txn": 1.04,
-            "sebi": 0.04,
-            "gst": 1.95,
-            "stamp_duty": 0.49,
-            "total_charges": 17.38
-          },
-          "total_charges": 17.38,
-          "net_pnl": 60.52,
-          "r_multiple": 0.66
         },
         {
           "date": "2026-08-24",
@@ -759,6 +739,35 @@
           "r_multiple": -1.0
         },
         {
+          "date": "2026-09-21",
+          "symbol": "TRENT",
+          "side": "BUY",
+          "qty": 6,
+          "entry_time": "12:15",
+          "signal_time": "12:15",
+          "signal_price": 2825.1,
+          "entry_price": 2824.95,
+          "exit_time": "14:55",
+          "exit_price": 2825.0,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": 0.3,
+          "charges": {
+            "buy_turnover": 16949.699999999997,
+            "sell_turnover": 16950.0,
+            "total_turnover": 33899.7,
+            "brokerage": 10.16,
+            "stt": 4.24,
+            "exchange_txn": 1.08,
+            "sebi": 0.04,
+            "gst": 2.04,
+            "stamp_duty": 0.51,
+            "total_charges": 18.05
+          },
+          "total_charges": 18.05,
+          "net_pnl": -17.75,
+          "r_multiple": 0.0
+        },
+        {
           "date": "2026-09-22",
           "symbol": "SUNPHARMA",
           "side": "SELL",
@@ -873,6 +882,35 @@
           "total_charges": 17.72,
           "net_pnl": 58.33,
           "r_multiple": 0.68
+        },
+        {
+          "date": "2026-09-24",
+          "symbol": "HINDALCO",
+          "side": "SELL",
+          "qty": 20,
+          "entry_time": "12:30",
+          "signal_time": "12:30",
+          "signal_price": 981.4,
+          "entry_price": 981.35,
+          "exit_time": "14:55",
+          "exit_price": 980.8,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": 11.0,
+          "charges": {
+            "buy_turnover": 19616.0,
+            "sell_turnover": 19627.0,
+            "total_turnover": 39243.0,
+            "brokerage": 11.77,
+            "stt": 4.91,
+            "exchange_txn": 1.24,
+            "sebi": 0.04,
+            "gst": 2.36,
+            "stamp_duty": 0.59,
+            "total_charges": 20.9
+          },
+          "total_charges": 20.9,
+          "net_pnl": -9.9,
+          "r_multiple": 0.09
         },
         {
           "date": "2026-10-08",
@@ -936,27 +974,27 @@
     },
     "Exclude SBIN + MARUTI": {
       "summary": {
-        "total_trades": 20,
-        "winning_trades": 12,
-        "losing_trades": 8,
-        "win_rate": 60.0,
-        "profit_factor": 1.9,
-        "gross_pnl": 549.7,
-        "gross_profit": 1160.5,
+        "total_trades": 21,
+        "winning_trades": 11,
+        "losing_trades": 10,
+        "win_rate": 52.38,
+        "profit_factor": 1.76,
+        "gross_pnl": 462.45,
+        "gross_profit": 1073.25,
         "gross_loss": 610.8,
-        "total_charges": 332.61,
+        "total_charges": 352.09,
         "charge_breakdown": {
-          "brokerage": 187.26,
-          "stt": 78.09,
-          "exchange_txn": 19.84,
-          "sebi": 0.66,
-          "gst": 37.41,
-          "stamp_duty": 9.34
+          "brokerage": 198.24,
+          "stt": 82.66,
+          "exchange_txn": 21.0,
+          "sebi": 0.68,
+          "gst": 39.63,
+          "stamp_duty": 9.89
         },
-        "friction_ratio_pct": 28.66,
-        "net_pnl": 217.09,
-        "profit_pct": 1.45,
-        "ending_capital": 15217.09
+        "friction_ratio_pct": 32.81,
+        "net_pnl": 110.36,
+        "profit_pct": 0.74,
+        "ending_capital": 15110.36
       },
       "monthly": [
         {
@@ -981,28 +1019,28 @@
           "month": "2026-07",
           "trades": 1,
           "win_rate_pct": 100.0,
-          "gross_pnl": 131.6,
-          "charges": 16.75,
-          "friction_pct_of_gross_profit": 12.73,
-          "net_pnl": 114.85
+          "gross_pnl": 110.95,
+          "charges": 14.66,
+          "friction_pct_of_gross_profit": 13.21,
+          "net_pnl": 96.29
         },
         {
           "month": "2026-08",
-          "trades": 7,
-          "win_rate_pct": 57.14,
-          "gross_pnl": 126.45,
-          "charges": 119.77,
-          "friction_pct_of_gross_profit": 43.16,
-          "net_pnl": 6.68
+          "trades": 6,
+          "win_rate_pct": 50.0,
+          "gross_pnl": 48.55,
+          "charges": 102.39,
+          "friction_pct_of_gross_profit": 51.3,
+          "net_pnl": -53.84
         },
         {
           "month": "2026-09",
-          "trades": 9,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 460.4,
-          "charges": 148.18,
-          "friction_pct_of_gross_profit": 21.14,
-          "net_pnl": 312.22
+          "trades": 11,
+          "win_rate_pct": 54.55,
+          "gross_pnl": 471.7,
+          "charges": 187.13,
+          "friction_pct_of_gross_profit": 26.27,
+          "net_pnl": 284.57
         },
         {
           "month": "2026-10",
@@ -1024,36 +1062,36 @@
           "net_pnl": 271.4
         },
         {
-          "symbol": "TRENT",
+          "symbol": "HINDALCO",
           "trades": 3,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 137.2,
-          "charges": 42.83,
-          "net_pnl": 94.37
+          "win_rate_pct": 33.33,
+          "gross_pnl": 140.6,
+          "charges": 58.97,
+          "net_pnl": 81.63
         },
         {
-          "symbol": "HINDALCO",
-          "trades": 2,
+          "symbol": "TRENT",
+          "trades": 4,
           "win_rate_pct": 50.0,
-          "gross_pnl": 129.6,
-          "charges": 38.07,
-          "net_pnl": 91.53
+          "gross_pnl": 137.5,
+          "charges": 60.88,
+          "net_pnl": 76.62
         },
         {
           "symbol": "SUNPHARMA",
           "trades": 4,
           "win_rate_pct": 75.0,
-          "gross_pnl": 85.35,
-          "charges": 63.53,
-          "net_pnl": 21.82
+          "gross_pnl": 64.7,
+          "charges": 61.44,
+          "net_pnl": 3.26
         },
         {
           "symbol": "KOTAKBANK",
-          "trades": 6,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 85.4,
-          "charges": 105.75,
-          "net_pnl": -20.35
+          "trades": 5,
+          "win_rate_pct": 60.0,
+          "gross_pnl": 7.5,
+          "charges": 88.37,
+          "net_pnl": -80.87
         },
         {
           "symbol": "ITC",
@@ -1135,30 +1173,30 @@
           "date": "2026-07-27",
           "symbol": "SUNPHARMA",
           "side": "BUY",
-          "qty": 8,
-          "entry_time": "10:50",
-          "signal_time": "10:50",
-          "signal_price": 1955.0,
-          "entry_price": 1954.75,
+          "qty": 7,
+          "entry_time": "11:25",
+          "signal_time": "11:25",
+          "signal_price": 1955.2,
+          "entry_price": 1955.35,
           "exit_time": "14:55",
           "exit_price": 1971.2,
           "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 131.6,
+          "gross_pnl": 110.95,
           "charges": {
-            "buy_turnover": 15638.0,
-            "sell_turnover": 15769.6,
-            "total_turnover": 31407.6,
-            "brokerage": 9.42,
-            "stt": 3.94,
-            "exchange_txn": 1.0,
-            "sebi": 0.04,
-            "gst": 1.88,
-            "stamp_duty": 0.47,
-            "total_charges": 16.75
+            "buy_turnover": 13687.449999999999,
+            "sell_turnover": 13798.4,
+            "total_turnover": 27485.85,
+            "brokerage": 8.25,
+            "stt": 3.45,
+            "exchange_txn": 0.88,
+            "sebi": 0.02,
+            "gst": 1.65,
+            "stamp_duty": 0.41,
+            "total_charges": 14.66
           },
-          "total_charges": 16.75,
-          "net_pnl": 114.85,
-          "r_multiple": 1.15
+          "total_charges": 14.66,
+          "net_pnl": 96.29,
+          "r_multiple": 0.95
         },
         {
           "date": "2026-08-03",
@@ -1246,35 +1284,6 @@
           "total_charges": 15.05,
           "net_pnl": -58.4,
           "r_multiple": -0.36
-        },
-        {
-          "date": "2026-08-20",
-          "symbol": "KOTAKBANK",
-          "side": "BUY",
-          "qty": 41,
-          "entry_time": "11:15",
-          "signal_time": "11:15",
-          "signal_price": 396.8,
-          "entry_price": 396.75,
-          "exit_time": "14:55",
-          "exit_price": 398.65,
-          "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 77.9,
-          "charges": {
-            "buy_turnover": 16266.75,
-            "sell_turnover": 16344.65,
-            "total_turnover": 32611.4,
-            "brokerage": 9.78,
-            "stt": 4.09,
-            "exchange_txn": 1.04,
-            "sebi": 0.04,
-            "gst": 1.95,
-            "stamp_duty": 0.49,
-            "total_charges": 17.38
-          },
-          "total_charges": 17.38,
-          "net_pnl": 60.52,
-          "r_multiple": 0.66
         },
         {
           "date": "2026-08-24",
@@ -1509,6 +1518,35 @@
           "r_multiple": -1.0
         },
         {
+          "date": "2026-09-21",
+          "symbol": "TRENT",
+          "side": "BUY",
+          "qty": 6,
+          "entry_time": "12:15",
+          "signal_time": "12:15",
+          "signal_price": 2825.1,
+          "entry_price": 2824.95,
+          "exit_time": "14:55",
+          "exit_price": 2825.0,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": 0.3,
+          "charges": {
+            "buy_turnover": 16949.699999999997,
+            "sell_turnover": 16950.0,
+            "total_turnover": 33899.7,
+            "brokerage": 10.16,
+            "stt": 4.24,
+            "exchange_txn": 1.08,
+            "sebi": 0.04,
+            "gst": 2.04,
+            "stamp_duty": 0.51,
+            "total_charges": 18.05
+          },
+          "total_charges": 18.05,
+          "net_pnl": -17.75,
+          "r_multiple": 0.0
+        },
+        {
           "date": "2026-09-22",
           "symbol": "SUNPHARMA",
           "side": "SELL",
@@ -1625,6 +1663,35 @@
           "r_multiple": 0.68
         },
         {
+          "date": "2026-09-24",
+          "symbol": "HINDALCO",
+          "side": "SELL",
+          "qty": 20,
+          "entry_time": "12:30",
+          "signal_time": "12:30",
+          "signal_price": 981.4,
+          "entry_price": 981.35,
+          "exit_time": "14:55",
+          "exit_price": 980.8,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": 11.0,
+          "charges": {
+            "buy_turnover": 19616.0,
+            "sell_turnover": 19627.0,
+            "total_turnover": 39243.0,
+            "brokerage": 11.77,
+            "stt": 4.91,
+            "exchange_txn": 1.24,
+            "sebi": 0.04,
+            "gst": 2.36,
+            "stamp_duty": 0.59,
+            "total_charges": 20.9
+          },
+          "total_charges": 20.9,
+          "net_pnl": -9.9,
+          "r_multiple": 0.09
+        },
+        {
           "date": "2026-10-09",
           "symbol": "SUNPHARMA",
           "side": "BUY",
@@ -1657,27 +1724,27 @@
     },
     "Noon entry cutoff": {
       "summary": {
-        "total_trades": 25,
-        "winning_trades": 15,
+        "total_trades": 23,
+        "winning_trades": 13,
         "losing_trades": 10,
-        "win_rate": 60.0,
-        "profit_factor": 1.66,
-        "gross_pnl": 529.9,
-        "gross_profit": 1336.75,
+        "win_rate": 56.52,
+        "profit_factor": 1.49,
+        "gross_pnl": 395.4,
+        "gross_profit": 1202.25,
         "gross_loss": 806.85,
-        "total_charges": 400.88,
+        "total_charges": 367.0,
         "charge_breakdown": {
-          "brokerage": 225.7,
-          "stt": 94.1,
-          "exchange_txn": 23.93,
-          "sebi": 0.76,
-          "gst": 45.08,
-          "stamp_duty": 11.27
+          "brokerage": 206.64,
+          "stt": 86.14,
+          "exchange_txn": 21.91,
+          "sebi": 0.68,
+          "gst": 41.28,
+          "stamp_duty": 10.31
         },
-        "friction_ratio_pct": 29.99,
-        "net_pnl": 129.02,
-        "profit_pct": 0.86,
-        "ending_capital": 15129.02
+        "friction_ratio_pct": 30.53,
+        "net_pnl": 28.4,
+        "profit_pct": 0.19,
+        "ending_capital": 15028.4
       },
       "monthly": [
         {
@@ -1700,21 +1767,21 @@
         },
         {
           "month": "2026-07",
-          "trades": 2,
+          "trades": 1,
           "win_rate_pct": 100.0,
-          "gross_pnl": 167.55,
-          "charges": 31.16,
-          "friction_pct_of_gross_profit": 18.6,
-          "net_pnl": 136.39
+          "gross_pnl": 110.95,
+          "charges": 14.66,
+          "friction_pct_of_gross_profit": 13.21,
+          "net_pnl": 96.29
         },
         {
           "month": "2026-08",
-          "trades": 7,
-          "win_rate_pct": 57.14,
-          "gross_pnl": 126.45,
-          "charges": 119.77,
-          "friction_pct_of_gross_profit": 43.16,
-          "net_pnl": 6.68
+          "trades": 6,
+          "win_rate_pct": 50.0,
+          "gross_pnl": 48.55,
+          "charges": 102.39,
+          "friction_pct_of_gross_profit": 51.3,
+          "net_pnl": -53.84
         },
         {
           "month": "2026-09",
@@ -1764,25 +1831,17 @@
           "symbol": "SUNPHARMA",
           "trades": 4,
           "win_rate_pct": 75.0,
-          "gross_pnl": 85.35,
-          "charges": 63.53,
-          "net_pnl": 21.82
-        },
-        {
-          "symbol": "KOTAKBANK",
-          "trades": 6,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 85.4,
-          "charges": 105.75,
-          "net_pnl": -20.35
+          "gross_pnl": 64.7,
+          "charges": 61.44,
+          "net_pnl": 3.26
         },
         {
           "symbol": "MARUTI",
-          "trades": 3,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 13.85,
-          "charges": 40.41,
-          "net_pnl": -26.56
+          "trades": 2,
+          "win_rate_pct": 50.0,
+          "gross_pnl": -22.1,
+          "charges": 26.0,
+          "net_pnl": -48.1
         },
         {
           "symbol": "SBIN",
@@ -1791,6 +1850,14 @@
           "gross_pnl": -33.65,
           "charges": 27.86,
           "net_pnl": -61.51
+        },
+        {
+          "symbol": "KOTAKBANK",
+          "trades": 5,
+          "win_rate_pct": 60.0,
+          "gross_pnl": 7.5,
+          "charges": 88.37,
+          "net_pnl": -80.87
         },
         {
           "symbol": "ITC",
@@ -1956,62 +2023,33 @@
           "r_multiple": 0.66
         },
         {
-          "date": "2026-07-14",
-          "symbol": "MARUTI",
-          "side": "SELL",
-          "qty": 1,
-          "entry_time": "10:40",
-          "signal_time": "10:40",
-          "signal_price": 13538.0,
-          "entry_price": 13535.95,
-          "exit_time": "14:55",
-          "exit_price": 13500.0,
-          "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 35.95,
-          "charges": {
-            "buy_turnover": 13500.0,
-            "sell_turnover": 13535.95,
-            "total_turnover": 27035.95,
-            "brokerage": 8.11,
-            "stt": 3.38,
-            "exchange_txn": 0.86,
-            "sebi": 0.02,
-            "gst": 1.62,
-            "stamp_duty": 0.41,
-            "total_charges": 14.41
-          },
-          "total_charges": 14.41,
-          "net_pnl": 21.54,
-          "r_multiple": 0.32
-        },
-        {
           "date": "2026-07-27",
           "symbol": "SUNPHARMA",
           "side": "BUY",
-          "qty": 8,
-          "entry_time": "10:50",
-          "signal_time": "10:50",
-          "signal_price": 1955.0,
-          "entry_price": 1954.75,
+          "qty": 7,
+          "entry_time": "11:25",
+          "signal_time": "11:25",
+          "signal_price": 1955.2,
+          "entry_price": 1955.35,
           "exit_time": "14:55",
           "exit_price": 1971.2,
           "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 131.6,
+          "gross_pnl": 110.95,
           "charges": {
-            "buy_turnover": 15638.0,
-            "sell_turnover": 15769.6,
-            "total_turnover": 31407.6,
-            "brokerage": 9.42,
-            "stt": 3.94,
-            "exchange_txn": 1.0,
-            "sebi": 0.04,
-            "gst": 1.88,
-            "stamp_duty": 0.47,
-            "total_charges": 16.75
+            "buy_turnover": 13687.449999999999,
+            "sell_turnover": 13798.4,
+            "total_turnover": 27485.85,
+            "brokerage": 8.25,
+            "stt": 3.45,
+            "exchange_txn": 0.88,
+            "sebi": 0.02,
+            "gst": 1.65,
+            "stamp_duty": 0.41,
+            "total_charges": 14.66
           },
-          "total_charges": 16.75,
-          "net_pnl": 114.85,
-          "r_multiple": 1.15
+          "total_charges": 14.66,
+          "net_pnl": 96.29,
+          "r_multiple": 0.95
         },
         {
           "date": "2026-08-03",
@@ -2099,35 +2137,6 @@
           "total_charges": 15.05,
           "net_pnl": -58.4,
           "r_multiple": -0.36
-        },
-        {
-          "date": "2026-08-20",
-          "symbol": "KOTAKBANK",
-          "side": "BUY",
-          "qty": 41,
-          "entry_time": "11:15",
-          "signal_time": "11:15",
-          "signal_price": 396.8,
-          "entry_price": 396.75,
-          "exit_time": "14:55",
-          "exit_price": 398.65,
-          "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 77.9,
-          "charges": {
-            "buy_turnover": 16266.75,
-            "sell_turnover": 16344.65,
-            "total_turnover": 32611.4,
-            "brokerage": 9.78,
-            "stt": 4.09,
-            "exchange_txn": 1.04,
-            "sebi": 0.04,
-            "gst": 1.95,
-            "stamp_duty": 0.49,
-            "total_charges": 17.38
-          },
-          "total_charges": 17.38,
-          "net_pnl": 60.52,
-          "r_multiple": 0.66
         },
         {
           "date": "2026-08-24",
@@ -2539,27 +2548,27 @@
     },
     "Exclude pair + noon cutoff": {
       "summary": {
-        "total_trades": 20,
-        "winning_trades": 12,
+        "total_trades": 19,
+        "winning_trades": 11,
         "losing_trades": 8,
-        "win_rate": 60.0,
-        "profit_factor": 1.9,
-        "gross_pnl": 549.7,
-        "gross_profit": 1160.5,
+        "win_rate": 57.89,
+        "profit_factor": 1.74,
+        "gross_pnl": 451.15,
+        "gross_profit": 1061.95,
         "gross_loss": 610.8,
-        "total_charges": 332.61,
+        "total_charges": 313.14,
         "charge_breakdown": {
-          "brokerage": 187.26,
-          "stt": 78.09,
-          "exchange_txn": 19.84,
-          "sebi": 0.66,
-          "gst": 37.41,
-          "stamp_duty": 9.34
+          "brokerage": 176.31,
+          "stt": 73.51,
+          "exchange_txn": 18.68,
+          "sebi": 0.6,
+          "gst": 35.23,
+          "stamp_duty": 8.79
         },
-        "friction_ratio_pct": 28.66,
-        "net_pnl": 217.09,
-        "profit_pct": 1.45,
-        "ending_capital": 15217.09
+        "friction_ratio_pct": 29.49,
+        "net_pnl": 138.01,
+        "profit_pct": 0.92,
+        "ending_capital": 15138.01
       },
       "monthly": [
         {
@@ -2584,19 +2593,19 @@
           "month": "2026-07",
           "trades": 1,
           "win_rate_pct": 100.0,
-          "gross_pnl": 131.6,
-          "charges": 16.75,
-          "friction_pct_of_gross_profit": 12.73,
-          "net_pnl": 114.85
+          "gross_pnl": 110.95,
+          "charges": 14.66,
+          "friction_pct_of_gross_profit": 13.21,
+          "net_pnl": 96.29
         },
         {
           "month": "2026-08",
-          "trades": 7,
-          "win_rate_pct": 57.14,
-          "gross_pnl": 126.45,
-          "charges": 119.77,
-          "friction_pct_of_gross_profit": 43.16,
-          "net_pnl": 6.68
+          "trades": 6,
+          "win_rate_pct": 50.0,
+          "gross_pnl": 48.55,
+          "charges": 102.39,
+          "friction_pct_of_gross_profit": 51.3,
+          "net_pnl": -53.84
         },
         {
           "month": "2026-09",
@@ -2646,17 +2655,17 @@
           "symbol": "SUNPHARMA",
           "trades": 4,
           "win_rate_pct": 75.0,
-          "gross_pnl": 85.35,
-          "charges": 63.53,
-          "net_pnl": 21.82
+          "gross_pnl": 64.7,
+          "charges": 61.44,
+          "net_pnl": 3.26
         },
         {
           "symbol": "KOTAKBANK",
-          "trades": 6,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 85.4,
-          "charges": 105.75,
-          "net_pnl": -20.35
+          "trades": 5,
+          "win_rate_pct": 60.0,
+          "gross_pnl": 7.5,
+          "charges": 88.37,
+          "net_pnl": -80.87
         },
         {
           "symbol": "ITC",
@@ -2738,30 +2747,30 @@
           "date": "2026-07-27",
           "symbol": "SUNPHARMA",
           "side": "BUY",
-          "qty": 8,
-          "entry_time": "10:50",
-          "signal_time": "10:50",
-          "signal_price": 1955.0,
-          "entry_price": 1954.75,
+          "qty": 7,
+          "entry_time": "11:25",
+          "signal_time": "11:25",
+          "signal_price": 1955.2,
+          "entry_price": 1955.35,
           "exit_time": "14:55",
           "exit_price": 1971.2,
           "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 131.6,
+          "gross_pnl": 110.95,
           "charges": {
-            "buy_turnover": 15638.0,
-            "sell_turnover": 15769.6,
-            "total_turnover": 31407.6,
-            "brokerage": 9.42,
-            "stt": 3.94,
-            "exchange_txn": 1.0,
-            "sebi": 0.04,
-            "gst": 1.88,
-            "stamp_duty": 0.47,
-            "total_charges": 16.75
+            "buy_turnover": 13687.449999999999,
+            "sell_turnover": 13798.4,
+            "total_turnover": 27485.85,
+            "brokerage": 8.25,
+            "stt": 3.45,
+            "exchange_txn": 0.88,
+            "sebi": 0.02,
+            "gst": 1.65,
+            "stamp_duty": 0.41,
+            "total_charges": 14.66
           },
-          "total_charges": 16.75,
-          "net_pnl": 114.85,
-          "r_multiple": 1.15
+          "total_charges": 14.66,
+          "net_pnl": 96.29,
+          "r_multiple": 0.95
         },
         {
           "date": "2026-08-03",
@@ -2849,35 +2858,6 @@
           "total_charges": 15.05,
           "net_pnl": -58.4,
           "r_multiple": -0.36
-        },
-        {
-          "date": "2026-08-20",
-          "symbol": "KOTAKBANK",
-          "side": "BUY",
-          "qty": 41,
-          "entry_time": "11:15",
-          "signal_time": "11:15",
-          "signal_price": 396.8,
-          "entry_price": 396.75,
-          "exit_time": "14:55",
-          "exit_price": 398.65,
-          "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 77.9,
-          "charges": {
-            "buy_turnover": 16266.75,
-            "sell_turnover": 16344.65,
-            "total_turnover": 32611.4,
-            "brokerage": 9.78,
-            "stt": 4.09,
-            "exchange_txn": 1.04,
-            "sebi": 0.04,
-            "gst": 1.95,
-            "stamp_duty": 0.49,
-            "total_charges": 17.38
-          },
-          "total_charges": 17.38,
-          "net_pnl": 60.52,
-          "r_multiple": 0.66
         },
         {
           "date": "2026-08-24",
@@ -3260,27 +3240,27 @@
     },
     "Active 3-Tier Radar (Config)": {
       "summary": {
-        "total_trades": 13,
-        "winning_trades": 9,
+        "total_trades": 12,
+        "winning_trades": 8,
         "losing_trades": 4,
-        "win_rate": 69.23,
-        "profit_factor": 3.12,
-        "gross_pnl": 643.25,
-        "gross_profit": 946.25,
+        "win_rate": 66.67,
+        "profit_factor": 3.0,
+        "gross_pnl": 607.3,
+        "gross_profit": 910.3,
         "gross_loss": 303.0,
-        "total_charges": 205.06,
+        "total_charges": 190.65,
         "charge_breakdown": {
-          "brokerage": 115.43,
-          "stt": 48.17,
-          "exchange_txn": 12.25,
-          "sebi": 0.4,
-          "gst": 23.05,
-          "stamp_duty": 5.77
+          "brokerage": 107.32,
+          "stt": 44.79,
+          "exchange_txn": 11.39,
+          "sebi": 0.38,
+          "gst": 21.43,
+          "stamp_duty": 5.36
         },
-        "friction_ratio_pct": 21.67,
-        "net_pnl": 438.19,
-        "profit_pct": 2.92,
-        "ending_capital": 15438.19
+        "friction_ratio_pct": 20.94,
+        "net_pnl": 416.65,
+        "profit_pct": 2.78,
+        "ending_capital": 15416.65
       },
       "monthly": [
         {
@@ -3300,15 +3280,6 @@
           "charges": 13.98,
           "friction_pct_of_gross_profit": null,
           "net_pnl": -99.03
-        },
-        {
-          "month": "2026-07",
-          "trades": 1,
-          "win_rate_pct": 100.0,
-          "gross_pnl": 35.95,
-          "charges": 14.41,
-          "friction_pct_of_gross_profit": 40.08,
-          "net_pnl": 21.54
         },
         {
           "month": "2026-08",
@@ -3381,11 +3352,11 @@
         },
         {
           "symbol": "MARUTI",
-          "trades": 3,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 13.85,
-          "charges": 40.41,
-          "net_pnl": -26.56
+          "trades": 2,
+          "win_rate_pct": 50.0,
+          "gross_pnl": -22.1,
+          "charges": 26.0,
+          "net_pnl": -48.1
         },
         {
           "symbol": "RELIANCE",
@@ -3454,35 +3425,6 @@
           "total_charges": 13.98,
           "net_pnl": -99.03,
           "r_multiple": -0.76
-        },
-        {
-          "date": "2026-07-14",
-          "symbol": "MARUTI",
-          "side": "SELL",
-          "qty": 1,
-          "entry_time": "10:40",
-          "signal_time": "10:40",
-          "signal_price": 13538.0,
-          "entry_price": 13535.95,
-          "exit_time": "14:55",
-          "exit_price": 13500.0,
-          "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 35.95,
-          "charges": {
-            "buy_turnover": 13500.0,
-            "sell_turnover": 13535.95,
-            "total_turnover": 27035.95,
-            "brokerage": 8.11,
-            "stt": 3.38,
-            "exchange_txn": 0.86,
-            "sebi": 0.02,
-            "gst": 1.62,
-            "stamp_duty": 0.41,
-            "total_charges": 14.41
-          },
-          "total_charges": 14.41,
-          "net_pnl": 21.54,
-          "r_multiple": 0.32
         },
         {
           "date": "2026-08-03",
@@ -3778,29 +3720,38 @@
     },
     "All available historical symbols": {
       "summary": {
-        "total_trades": 35,
-        "winning_trades": 20,
-        "losing_trades": 15,
-        "win_rate": 57.14,
-        "profit_factor": 1.28,
-        "gross_pnl": 350.18,
-        "gross_profit": 1594.67,
-        "gross_loss": 1244.49,
-        "total_charges": 577.35,
+        "total_trades": 39,
+        "winning_trades": 21,
+        "losing_trades": 18,
+        "win_rate": 53.85,
+        "profit_factor": 1.36,
+        "gross_pnl": 475.88,
+        "gross_profit": 1780.92,
+        "gross_loss": 1305.04,
+        "total_charges": 642.81,
         "charge_breakdown": {
-          "brokerage": 325.1,
-          "stt": 135.5,
-          "exchange_txn": 34.46,
-          "sebi": 1.1,
-          "gst": 64.92,
-          "stamp_duty": 16.24
+          "brokerage": 361.95,
+          "stt": 150.88,
+          "exchange_txn": 38.38,
+          "sebi": 1.22,
+          "gst": 72.3,
+          "stamp_duty": 18.07
         },
-        "friction_ratio_pct": 36.2,
-        "net_pnl": -227.17,
-        "profit_pct": -1.51,
-        "ending_capital": 14772.83
+        "friction_ratio_pct": 36.09,
+        "net_pnl": -166.93,
+        "profit_pct": -1.11,
+        "ending_capital": 14833.07
       },
       "monthly": [
+        {
+          "month": "2026-04",
+          "trades": 1,
+          "win_rate_pct": 100.0,
+          "gross_pnl": 191.2,
+          "charges": 13.91,
+          "friction_pct_of_gross_profit": 7.28,
+          "net_pnl": 177.29
+        },
         {
           "month": "2026-05",
           "trades": 2,
@@ -3821,12 +3772,12 @@
         },
         {
           "month": "2026-07",
-          "trades": 2,
+          "trades": 1,
           "win_rate_pct": 100.0,
-          "gross_pnl": 167.55,
-          "charges": 31.16,
-          "friction_pct_of_gross_profit": 18.6,
-          "net_pnl": 136.39
+          "gross_pnl": 110.95,
+          "charges": 14.66,
+          "friction_pct_of_gross_profit": 13.21,
+          "net_pnl": 96.29
         },
         {
           "month": "2026-08",
@@ -3839,21 +3790,21 @@
         },
         {
           "month": "2026-09",
-          "trades": 10,
-          "win_rate_pct": 60.0,
-          "gross_pnl": 420.46,
-          "charges": 162.02,
-          "friction_pct_of_gross_profit": 23.11,
-          "net_pnl": 258.44
+          "trades": 12,
+          "win_rate_pct": 50.0,
+          "gross_pnl": 407.71,
+          "charges": 197.17,
+          "friction_pct_of_gross_profit": 28.11,
+          "net_pnl": 210.54
         },
         {
           "month": "2026-10",
-          "trades": 4,
+          "trades": 6,
           "win_rate_pct": 50.0,
-          "gross_pnl": -43.55,
-          "charges": 60.76,
-          "friction_pct_of_gross_profit": 53.6,
-          "net_pnl": -104.31
+          "gross_pnl": -39.7,
+          "charges": 93.66,
+          "friction_pct_of_gross_profit": 56.87,
+          "net_pnl": -133.36
         }
       ],
       "by_symbol": [
@@ -3866,12 +3817,12 @@
           "net_pnl": 271.4
         },
         {
-          "symbol": "TRENT",
+          "symbol": "MARUTI",
           "trades": 3,
           "win_rate_pct": 66.67,
-          "gross_pnl": 137.2,
-          "charges": 42.83,
-          "net_pnl": 94.37
+          "gross_pnl": 169.1,
+          "charges": 39.91,
+          "net_pnl": 129.19
         },
         {
           "symbol": "HINDALCO",
@@ -3880,6 +3831,14 @@
           "gross_pnl": 129.6,
           "charges": 38.07,
           "net_pnl": 91.53
+        },
+        {
+          "symbol": "TRENT",
+          "trades": 4,
+          "win_rate_pct": 50.0,
+          "gross_pnl": 137.5,
+          "charges": 60.88,
+          "net_pnl": 76.62
         },
         {
           "symbol": "JIOFIN",
@@ -3898,6 +3857,14 @@
           "net_pnl": 57.78
         },
         {
+          "symbol": "AXISBANK",
+          "trades": 1,
+          "win_rate_pct": 100.0,
+          "gross_pnl": 51.35,
+          "charges": 17.25,
+          "net_pnl": 34.1
+        },
+        {
           "symbol": "TATAPOWER",
           "trades": 1,
           "win_rate_pct": 100.0,
@@ -3909,17 +3876,9 @@
           "symbol": "SUNPHARMA",
           "trades": 4,
           "win_rate_pct": 75.0,
-          "gross_pnl": 85.35,
-          "charges": 63.53,
-          "net_pnl": 21.82
-        },
-        {
-          "symbol": "ADANIPORTS",
-          "trades": 1,
-          "win_rate_pct": 100.0,
-          "gross_pnl": 30.5,
-          "charges": 17.96,
-          "net_pnl": 12.54
+          "gross_pnl": 64.7,
+          "charges": 61.44,
+          "net_pnl": 3.26
         },
         {
           "symbol": "ICICIBANK",
@@ -3930,12 +3889,12 @@
           "net_pnl": 0.5
         },
         {
-          "symbol": "MARUTI",
-          "trades": 3,
-          "win_rate_pct": 66.67,
-          "gross_pnl": 13.85,
-          "charges": 40.41,
-          "net_pnl": -26.56
+          "symbol": "ADANIPORTS",
+          "trades": 2,
+          "win_rate_pct": 50.0,
+          "gross_pnl": 17.45,
+          "charges": 35.06,
+          "net_pnl": -17.61
         },
         {
           "symbol": "HINDUNILVR",
@@ -4011,14 +3970,43 @@
         },
         {
           "symbol": "BEL",
-          "trades": 1,
+          "trades": 2,
           "win_rate_pct": 0.0,
-          "gross_pnl": -119.0,
-          "charges": 14.95,
-          "net_pnl": -133.95
+          "gross_pnl": -166.5,
+          "charges": 30.6,
+          "net_pnl": -197.1
         }
       ],
       "trades": [
+        {
+          "date": "2026-04-28",
+          "symbol": "MARUTI",
+          "side": "SELL",
+          "qty": 1,
+          "entry_time": "12:10",
+          "signal_time": "12:10",
+          "signal_price": 13135.0,
+          "entry_price": 13134.95,
+          "exit_time": "14:40",
+          "exit_price": 12943.75,
+          "exit_reason": "TARGET_HIT",
+          "gross_pnl": 191.2,
+          "charges": {
+            "buy_turnover": 12943.75,
+            "sell_turnover": 13134.95,
+            "total_turnover": 26078.7,
+            "brokerage": 7.82,
+            "stt": 3.28,
+            "exchange_txn": 0.83,
+            "sebi": 0.02,
+            "gst": 1.57,
+            "stamp_duty": 0.39,
+            "total_charges": 13.91
+          },
+          "total_charges": 13.91,
+          "net_pnl": 177.29,
+          "r_multiple": 2.0
+        },
         {
           "date": "2026-05-05",
           "symbol": "SBIN",
@@ -4165,62 +4153,33 @@
           "r_multiple": 0.66
         },
         {
-          "date": "2026-07-14",
-          "symbol": "MARUTI",
-          "side": "SELL",
-          "qty": 1,
-          "entry_time": "10:40",
-          "signal_time": "10:40",
-          "signal_price": 13538.0,
-          "entry_price": 13535.95,
-          "exit_time": "14:55",
-          "exit_price": 13500.0,
-          "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 35.95,
-          "charges": {
-            "buy_turnover": 13500.0,
-            "sell_turnover": 13535.95,
-            "total_turnover": 27035.95,
-            "brokerage": 8.11,
-            "stt": 3.38,
-            "exchange_txn": 0.86,
-            "sebi": 0.02,
-            "gst": 1.62,
-            "stamp_duty": 0.41,
-            "total_charges": 14.41
-          },
-          "total_charges": 14.41,
-          "net_pnl": 21.54,
-          "r_multiple": 0.32
-        },
-        {
           "date": "2026-07-27",
           "symbol": "SUNPHARMA",
           "side": "BUY",
-          "qty": 8,
-          "entry_time": "10:50",
-          "signal_time": "10:50",
-          "signal_price": 1955.0,
-          "entry_price": 1954.75,
+          "qty": 7,
+          "entry_time": "11:25",
+          "signal_time": "11:25",
+          "signal_price": 1955.2,
+          "entry_price": 1955.35,
           "exit_time": "14:55",
           "exit_price": 1971.2,
           "exit_reason": "EOD_FLATTEN_1455",
-          "gross_pnl": 131.6,
+          "gross_pnl": 110.95,
           "charges": {
-            "buy_turnover": 15638.0,
-            "sell_turnover": 15769.6,
-            "total_turnover": 31407.6,
-            "brokerage": 9.42,
-            "stt": 3.94,
-            "exchange_txn": 1.0,
-            "sebi": 0.04,
-            "gst": 1.88,
-            "stamp_duty": 0.47,
-            "total_charges": 16.75
+            "buy_turnover": 13687.449999999999,
+            "sell_turnover": 13798.4,
+            "total_turnover": 27485.85,
+            "brokerage": 8.25,
+            "stt": 3.45,
+            "exchange_txn": 0.88,
+            "sebi": 0.02,
+            "gst": 1.65,
+            "stamp_duty": 0.41,
+            "total_charges": 14.66
           },
-          "total_charges": 16.75,
-          "net_pnl": 114.85,
-          "r_multiple": 1.15
+          "total_charges": 14.66,
+          "net_pnl": 96.29,
+          "r_multiple": 0.95
         },
         {
           "date": "2026-08-03",
@@ -4803,6 +4762,35 @@
           "r_multiple": -1.0
         },
         {
+          "date": "2026-09-21",
+          "symbol": "TRENT",
+          "side": "BUY",
+          "qty": 6,
+          "entry_time": "12:15",
+          "signal_time": "12:15",
+          "signal_price": 2825.1,
+          "entry_price": 2824.95,
+          "exit_time": "14:55",
+          "exit_price": 2825.0,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": 0.3,
+          "charges": {
+            "buy_turnover": 16949.699999999997,
+            "sell_turnover": 16950.0,
+            "total_turnover": 33899.7,
+            "brokerage": 10.16,
+            "stt": 4.24,
+            "exchange_txn": 1.08,
+            "sebi": 0.04,
+            "gst": 2.04,
+            "stamp_duty": 0.51,
+            "total_charges": 18.05
+          },
+          "total_charges": 18.05,
+          "net_pnl": -17.75,
+          "r_multiple": 0.0
+        },
+        {
           "date": "2026-09-22",
           "symbol": "SUNPHARMA",
           "side": "SELL",
@@ -4917,6 +4905,93 @@
           "total_charges": 17.72,
           "net_pnl": 58.33,
           "r_multiple": 0.68
+        },
+        {
+          "date": "2026-09-24",
+          "symbol": "ADANIPORTS",
+          "side": "SELL",
+          "qty": 9,
+          "entry_time": "12:30",
+          "signal_time": "12:30",
+          "signal_price": 1782.7,
+          "entry_price": 1782.35,
+          "exit_time": "14:55",
+          "exit_price": 1783.8,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": -13.05,
+          "charges": {
+            "buy_turnover": 16054.200439453125,
+            "sell_turnover": 16041.15,
+            "total_turnover": 32095.350439453126,
+            "brokerage": 9.63,
+            "stt": 4.01,
+            "exchange_txn": 1.02,
+            "sebi": 0.04,
+            "gst": 1.92,
+            "stamp_duty": 0.48,
+            "total_charges": 17.1
+          },
+          "total_charges": 17.1,
+          "net_pnl": -30.15,
+          "r_multiple": -0.12
+        },
+        {
+          "date": "2026-10-06",
+          "symbol": "BEL",
+          "side": "BUY",
+          "qty": 38,
+          "entry_time": "12:05",
+          "signal_time": "12:05",
+          "signal_price": 387.15,
+          "entry_price": 387.25,
+          "exit_time": "14:55",
+          "exit_price": 386.0,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": -47.5,
+          "charges": {
+            "buy_turnover": 14715.5,
+            "sell_turnover": 14668.0,
+            "total_turnover": 29383.5,
+            "brokerage": 8.81,
+            "stt": 3.67,
+            "exchange_txn": 0.94,
+            "sebi": 0.02,
+            "gst": 1.76,
+            "stamp_duty": 0.44,
+            "total_charges": 15.65
+          },
+          "total_charges": 15.65,
+          "net_pnl": -63.15,
+          "r_multiple": -0.4
+        },
+        {
+          "date": "2026-10-06",
+          "symbol": "AXISBANK",
+          "side": "BUY",
+          "qty": 13,
+          "entry_time": "12:10",
+          "signal_time": "12:10",
+          "signal_price": 1242.6,
+          "entry_price": 1242.65,
+          "exit_time": "14:55",
+          "exit_price": 1246.6,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": 51.35,
+          "charges": {
+            "buy_turnover": 16154.45,
+            "sell_turnover": 16205.799682617188,
+            "total_turnover": 32360.24968261719,
+            "brokerage": 9.71,
+            "stt": 4.05,
+            "exchange_txn": 1.03,
+            "sebi": 0.04,
+            "gst": 1.94,
+            "stamp_duty": 0.48,
+            "total_charges": 17.25
+          },
+          "total_charges": 17.25,
+          "net_pnl": 34.1,
+          "r_multiple": 0.45
         },
         {
           "date": "2026-10-08",
@@ -5043,46 +5118,46 @@
       "winning_trades": 3,
       "losing_trades": 3,
       "win_rate": 50.0,
-      "profit_factor": 0.53,
-      "gross_pnl": -142.6,
-      "gross_profit": 163.7,
+      "profit_factor": 1.04,
+      "gross_pnl": 12.65,
+      "gross_profit": 318.95,
       "gross_loss": 306.3,
-      "total_charges": 87.22,
+      "total_charges": 86.72,
       "charge_breakdown": {
-        "brokerage": 49.11,
-        "stt": 20.44,
-        "exchange_txn": 5.21,
+        "brokerage": 48.82,
+        "stt": 20.34,
+        "exchange_txn": 5.18,
         "sebi": 0.14,
-        "gst": 9.8,
-        "stamp_duty": 2.46
+        "gst": 9.75,
+        "stamp_duty": 2.44
       },
-      "friction_ratio_pct": 53.28,
-      "net_pnl": -229.82,
-      "profit_pct": -1.53,
-      "ending_capital": 14770.18
+      "friction_ratio_pct": 27.19,
+      "net_pnl": -74.07,
+      "profit_pct": -0.49,
+      "ending_capital": 14925.93
     },
     "Elite 10 baseline / Second half": {
-      "total_trades": 19,
-      "winning_trades": 12,
-      "losing_trades": 7,
-      "win_rate": 63.16,
-      "profit_factor": 2.34,
-      "gross_pnl": 672.5,
-      "gross_profit": 1173.05,
+      "total_trades": 20,
+      "winning_trades": 11,
+      "losing_trades": 9,
+      "win_rate": 55.0,
+      "profit_factor": 2.17,
+      "gross_pnl": 585.25,
+      "gross_profit": 1085.8,
       "gross_loss": 500.55,
-      "total_charges": 313.66,
+      "total_charges": 333.14,
       "charge_breakdown": {
-        "brokerage": 176.59,
-        "stt": 73.66,
-        "exchange_txn": 18.72,
-        "sebi": 0.62,
-        "gst": 35.28,
-        "stamp_duty": 8.81
+        "brokerage": 187.57,
+        "stt": 78.23,
+        "exchange_txn": 19.88,
+        "sebi": 0.64,
+        "gst": 37.5,
+        "stamp_duty": 9.36
       },
-      "friction_ratio_pct": 26.74,
-      "net_pnl": 358.84,
-      "profit_pct": 2.39,
-      "ending_capital": 15358.84
+      "friction_ratio_pct": 30.68,
+      "net_pnl": 252.11,
+      "profit_pct": 1.68,
+      "ending_capital": 15252.11
     },
     "Exclude pair + noon cutoff / First half": {
       "total_trades": 2,
@@ -5108,50 +5183,50 @@
       "ending_capital": 14909.18
     },
     "Exclude pair + noon cutoff / Second half": {
-      "total_trades": 18,
-      "winning_trades": 11,
+      "total_trades": 17,
+      "winning_trades": 10,
       "losing_trades": 7,
-      "win_rate": 61.11,
-      "profit_factor": 2.22,
-      "gross_pnl": 609.55,
-      "gross_profit": 1110.1,
+      "win_rate": 58.82,
+      "profit_factor": 2.02,
+      "gross_pnl": 511.0,
+      "gross_profit": 1011.55,
       "gross_loss": 500.55,
-      "total_charges": 301.64,
+      "total_charges": 282.17,
       "charge_breakdown": {
-        "brokerage": 169.83,
-        "stt": 70.83,
-        "exchange_txn": 18.0,
-        "sebi": 0.6,
-        "gst": 33.93,
-        "stamp_duty": 8.47
+        "brokerage": 158.88,
+        "stt": 66.25,
+        "exchange_txn": 16.84,
+        "sebi": 0.54,
+        "gst": 31.75,
+        "stamp_duty": 7.92
       },
-      "friction_ratio_pct": 27.17,
-      "net_pnl": 307.91,
-      "profit_pct": 2.05,
-      "ending_capital": 15307.91
+      "friction_ratio_pct": 27.89,
+      "net_pnl": 228.83,
+      "profit_pct": 1.53,
+      "ending_capital": 15228.83
     },
     "Active 3-Tier Radar (Config) / First half": {
-      "total_trades": 3,
-      "winning_trades": 1,
+      "total_trades": 2,
+      "winning_trades": 0,
       "losing_trades": 2,
-      "win_rate": 33.33,
-      "profit_factor": 0.18,
-      "gross_pnl": -159.35,
-      "gross_profit": 35.95,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "gross_pnl": -195.3,
+      "gross_profit": 0,
       "gross_loss": 195.3,
-      "total_charges": 41.48,
+      "total_charges": 27.07,
       "charge_breakdown": {
-        "brokerage": 23.36,
-        "stt": 9.71,
-        "exchange_txn": 2.48,
-        "sebi": 0.06,
-        "gst": 4.66,
-        "stamp_duty": 1.18
+        "brokerage": 15.25,
+        "stt": 6.33,
+        "exchange_txn": 1.62,
+        "sebi": 0.04,
+        "gst": 3.04,
+        "stamp_duty": 0.77
       },
-      "friction_ratio_pct": 115.38,
-      "net_pnl": -200.83,
-      "profit_pct": -1.34,
-      "ending_capital": 14799.17
+      "friction_ratio_pct": null,
+      "net_pnl": -222.37,
+      "profit_pct": -1.48,
+      "ending_capital": 14777.63
     },
     "Active 3-Tier Radar (Config) / Second half": {
       "total_trades": 10,
@@ -5181,46 +5256,46 @@
       "winning_trades": 3,
       "losing_trades": 3,
       "win_rate": 50.0,
-      "profit_factor": 0.53,
-      "gross_pnl": -142.6,
-      "gross_profit": 163.7,
+      "profit_factor": 1.04,
+      "gross_pnl": 12.65,
+      "gross_profit": 318.95,
       "gross_loss": 306.3,
-      "total_charges": 87.22,
+      "total_charges": 86.72,
       "charge_breakdown": {
-        "brokerage": 49.11,
-        "stt": 20.44,
-        "exchange_txn": 5.21,
+        "brokerage": 48.82,
+        "stt": 20.34,
+        "exchange_txn": 5.18,
         "sebi": 0.14,
-        "gst": 9.8,
-        "stamp_duty": 2.46
+        "gst": 9.75,
+        "stamp_duty": 2.44
       },
-      "friction_ratio_pct": 53.28,
-      "net_pnl": -229.82,
-      "profit_pct": -1.53,
-      "ending_capital": 14770.18
+      "friction_ratio_pct": 27.19,
+      "net_pnl": -74.07,
+      "profit_pct": -0.49,
+      "ending_capital": 14925.93
     },
     "All available historical symbols / Second half": {
-      "total_trades": 29,
-      "winning_trades": 17,
-      "losing_trades": 12,
-      "win_rate": 58.62,
-      "profit_factor": 1.53,
-      "gross_pnl": 492.78,
-      "gross_profit": 1430.97,
-      "gross_loss": 938.19,
-      "total_charges": 490.13,
+      "total_trades": 33,
+      "winning_trades": 18,
+      "losing_trades": 15,
+      "win_rate": 54.55,
+      "profit_factor": 1.46,
+      "gross_pnl": 463.23,
+      "gross_profit": 1461.97,
+      "gross_loss": 998.74,
+      "total_charges": 556.09,
       "charge_breakdown": {
-        "brokerage": 275.99,
-        "stt": 115.06,
-        "exchange_txn": 29.25,
-        "sebi": 0.96,
-        "gst": 55.12,
-        "stamp_duty": 13.78
+        "brokerage": 313.13,
+        "stt": 130.54,
+        "exchange_txn": 33.2,
+        "sebi": 1.08,
+        "gst": 62.55,
+        "stamp_duty": 15.63
       },
-      "friction_ratio_pct": 34.25,
-      "net_pnl": 2.65,
-      "profit_pct": 0.02,
-      "ending_capital": 15002.65
+      "friction_ratio_pct": 38.04,
+      "net_pnl": -92.86,
+      "profit_pct": -0.62,
+      "ending_capital": 14907.14
     }
   }
 }

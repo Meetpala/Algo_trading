@@ -58,15 +58,15 @@ Continuous trailing stop-loss is **strictly disabled** (`trail_enabled: false`) 
 * **Gate 9 Stop-Width Sweet Spot**:
   * **Gate 9A (Minimum Volatility)**: $\frac{\text{ATR}_{14}}{\text{Price}} \ge 0.0022$ ($0.22\%$) to filter out sluggish/defensive stocks.
   * **Gate 9B (Stop Width Bounds)**: Risk distance $R\%$ must satisfy:
-    $$0.45\% \le R\% \le 0.85\% \quad \left(\text{where } R\% = \frac{|\text{Entry} - \text{Initial Stop}|}{\text{Entry}}\right)$$
-    * $R\% < 0.45\%$ is rejected (stops too narrow where Zerodha charges consume $> 40\%$ of the payout).
-    * $R\% > 0.85\%$ is rejected (stops too wide where a 2.0R target requires $> 1.70\%$ intraday move, unachievable before 14:55).
-  * **Gate 9C (ADR Exhaustion Filter)**: Reject breakout if the stock has already consumed $> 60\%$ of its 14-day Average Daily Range ($\text{ADR Consumed} > 0.60$).
+    $$0.55\% \le R\% \le 0.90\% \quad \left(\text{where } R\% = \frac{|\text{Entry} - \text{Initial Stop}|}{\text{Entry}}\right)$$
+    * $R\% < 0.55\%$ is rejected (stops too narrow where Zerodha charges consume $> 40\%$ of the payout).
+    * $R\% > 0.90\%$ is rejected (stops too wide where a 2.0R target requires $> 1.80\%$ intraday move, unachievable before 14:55).
+  * **Gate 9C (ADR Exhaustion Filter)**: Reject breakout if the stock has already consumed $> 60\%$ of its 14-day Average Daily Range ($\text{ADR Consumed} > 0.60$, with 2.5% minimum baseline).
 * **Target Multiple**: Fixed **$2.0R$** Limit Target order placed simultaneously with entry.
-* **One-Time Fee-Protected Breakeven Step**:
-  * Move stop to **$\text{Entry} \pm 0.15\%$** (which covers the 0.1065% round-trip Zerodha statutory fees plus 1 tick buffer) **only** if:
-    1. Unrealized profit reaches **$+1.65R$** ($82.5\%$ of the distance to target), OR
-    2. Session time reaches **$13:45 \text{ IST}$** and unrealized profit is $\ge \mathbf{+0.75R}$.
+* **Profit-Preserving Fee Lock Step**:
+  * Step stop to **preserve profit** without continuous trailing:
+    1. Triggers when favorable excursion reaches **$\ge +1.60R$**, locking **$+0.60R$** gross profit ($\approx +₹65$ to $+₹75$, covering all Zerodha + statutory charges plus a profit buffer).
+    2. Session time reaches **$14:15 \text{ IST}$** and current unrealized profit is $\ge \mathbf{+1.15R}$, locking **$+0.35R$** gross profit.
   * Once the fee lock is applied, the stop is never loosened or continuously trailed.
 * **EOD Liquidation**: Strict square-off at **14:55 IST** before Zerodha's 15:15 RMS auto-square-off penalty window.
 

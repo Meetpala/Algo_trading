@@ -76,16 +76,12 @@ radar:
   probation_min_clv_ratio: 0.75       # Stricter CLV for non-core stocks (>= 0.75 vs 0.70)
   # Tier 1: Audited Institutional Trend Leaders (Max Profitability & Low Friction)
   core_watchlist:
-    - "TRENT"
-    - "JSWSTEEL"
     - "HINDALCO"
-    - "SUNPHARMA"
+    - "JSWSTEEL"
     - "RELIANCE"
-    - "TCS"
-    - "KOTAKBANK"
     - "MARUTI"
-    - "ITC"
-    - "SBIN"
+    - "TCS"
+    - "TRENT"
 
   # Tier 2: Top audited net-positive stocks discovered from 31-stock screening
   enable_extended_radar: true
