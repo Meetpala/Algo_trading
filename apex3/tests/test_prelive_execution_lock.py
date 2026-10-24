@@ -10,9 +10,12 @@ from apex3.indicators.vwap import compute_session_vwap
 from apex3.models import (
     Candle,
     Decision,
+    GateResult,
     GateStatus,
     InstrumentInfo,
+    MarginInfo,
     OpeningRange,
+    OrderMarginEstimate,
     OrderRequest,
     OrderState,
     OrderStatus,
@@ -24,7 +27,8 @@ from apex3.models import (
 )
 from apex3.reconciliation.state_machine import PositionPhase
 from apex3.strategy.engine import StrategyEngine
-from apex3.strategy.signal import build_opening_range, evaluate_signal
+from apex3.strategy.regime import MarketRegime
+from apex3.strategy.signal import SignalEvaluation, build_opening_range, evaluate_signal
 
 IST = zoneinfo.ZoneInfo("Asia/Kolkata")
 
@@ -47,8 +51,6 @@ def test_opening_range_excludes_0930_candle():
     assert or_range.high == 107.0  # NOT 120.0!
     assert or_range.low == 99.0
 
-
-from apex3.strategy.regime import MarketRegime
 
 def test_session_vwap_today_candles_isolation():
     """Verify evaluate_signal computes session VWAP using today's candles rather than multi-day history."""
@@ -87,9 +89,13 @@ def test_session_vwap_today_candles_isolation():
         is_entry_window=True,
     )
 
+    # Check that VWAP alignment gate was evaluated and passed
+    vwap_gate = next((g for g in sig.gates if g.name == "VWAP_ALIGNMENT"), None)
+    assert vwap_gate is not None
+    assert vwap_gate.status == GateStatus.PASS
     # If yesterday's candles were included, VWAP would be near ~50.
-    # Isolated to today, VWAP is around 100.5.
-    assert sig.vwap > 95.0, f"Expected today's VWAP > 95.0, got {sig.vwap}"
+    # Isolated to today, VWAP is ~100.50.
+    assert "100.50" in vwap_gate.reason, f"Expected 100.50 in reason, got {vwap_gate.reason}"
 
 
 def test_engine_clears_opening_range_on_new_session():
@@ -97,7 +103,10 @@ def test_engine_clears_opening_range_on_new_session():
     mock_broker = MagicMock()
     mock_journal = MagicMock()
     mock_broker.is_session_valid.return_value = True
-    mock_broker.get_margins.return_value = MagicMock(available_cash=15000.0)
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.get_positions.return_value = []
 
     cfg = AppConfig()
     engine = StrategyEngine(cfg, mock_broker, mock_journal)
@@ -124,6 +133,11 @@ def test_target_exit_cancels_protective_sl_first():
     mock_broker = MagicMock()
     mock_journal = MagicMock()
     mock_broker.is_session_valid.return_value = True
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.get_positions.return_value = []
+
     now = datetime(2026, 3, 20, 11, 0, tzinfo=IST)
     mock_broker.get_quote.return_value = Quote(symbol="TCS", exchange="NSE", last_price=3100.0, bid=3099.0, ask=3101.0, volume=5000, timestamp=now)
     mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TCS", exchange="NSE", lot_size=1, tick_size=0.05)
@@ -162,9 +176,14 @@ def test_entry_rejected_prevents_naked_sl():
     mock_broker = MagicMock()
     mock_journal = MagicMock()
     mock_broker.is_session_valid.return_value = True
-    mock_broker.get_margins.return_value = MagicMock(available_cash=15000.0, used_margin=0.0)
-    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="HINDALCO", exchange="NSE", lot_size=1, tick_size=0.05)
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.get_positions.return_value = []
+    mock_broker.estimate_order_margin.return_value = OrderMarginEstimate(required_margin=6500.0, leverage_available=4.0)
+
     now = datetime(2026, 3, 20, 9, 35, tzinfo=IST)
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="HINDALCO", exchange="NSE", lot_size=1, tick_size=0.05)
     mock_broker.get_quote.return_value = Quote(symbol="HINDALCO", exchange="NSE", last_price=650.0, bid=649.95, ask=650.05, volume=10000, timestamp=now)
 
     # Reject the entry order
@@ -175,6 +194,7 @@ def test_entry_rejected_prevents_naked_sl():
         request=dummy_req,
         status=OrderStatus.REJECTED,
         status_message="RMS: Margin Insufficient",
+        filled_quantity=0,
     )
 
     cfg = AppConfig()
@@ -182,18 +202,15 @@ def test_entry_rejected_prevents_naked_sl():
     object.__setattr__(cfg.watchlist, "scanner_enabled", False)
     engine = StrategyEngine(cfg, mock_broker, mock_journal)
 
-    # Mock candidate signal evaluation
-    candles = [
-        Candle(timestamp=datetime(2026, 3, 20, 9, 15, tzinfo=IST), open=640.0, high=645.0, low=638.0, close=644.0, volume=10000, is_complete=True),
-        Candle(timestamp=datetime(2026, 3, 20, 9, 20, tzinfo=IST), open=644.0, high=646.0, low=642.0, close=645.0, volume=12000, is_complete=True),
-        Candle(timestamp=datetime(2026, 3, 20, 9, 25, tzinfo=IST), open=645.0, high=647.0, low=644.0, close=646.0, volume=11000, is_complete=True),
-        Candle(timestamp=datetime(2026, 3, 20, 9, 30, tzinfo=IST), open=646.0, high=652.0, low=645.0, close=650.0, volume=35000, is_complete=True),
-    ]
+    # 15 candles so ATR is realistic and Gate 9 stop width is valid
+    candles = []
+    for i in range(15):
+        t = datetime(2026, 3, 20, 9, 15, tzinfo=IST) + timedelta(minutes=5 * i)
+        candles.append(Candle(timestamp=t, open=649.0, high=650.0, low=648.2, close=649.5, volume=10000, is_complete=True))
+    candles[-1] = Candle(timestamp=datetime(2026, 3, 20, 10, 25, tzinfo=IST), open=649.5, high=650.5, low=649.0, close=650.0, volume=35000, is_complete=True)
     mock_broker.get_historical.return_value = candles
 
     # Mock evaluate_signal to return PROPOSED_LONG
-    from apex3.models import GateResult
-    from apex3.strategy.signal import SignalEvaluation
     fake_sig = SignalEvaluation(
         symbol="HINDALCO",
         decision=Decision.PROPOSED_LONG,
@@ -220,9 +237,9 @@ def test_entry_rejected_prevents_naked_sl():
         assert placed_req.order_type == OrderType.LIMIT
 
         # Ensure no position is open
-        open_pos = engine.state_machine.get_open_positions()
+        open_pos = [p for p in engine.state_machine.positions.values() if p.quantity > 0]
         assert len(open_pos) == 0, "No open position should exist if entry was rejected"
+        assert decisions[0].reason_codes == ["ENTRY_REJECTED"]
     finally:
         eng_module.evaluate_signal = orig_eval_sig
         eng_module.evaluate_market_regime = orig_regime
-
