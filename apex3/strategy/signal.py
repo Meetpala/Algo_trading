@@ -69,15 +69,23 @@ class SignalEvaluation:
             self.reason_codes = []
 
 
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
 def build_opening_range(
     symbol: str,
     candles_0915_0930: list[Candle],
+    session_date: Optional[date] = None,
 ) -> OpeningRange:
     """Build the 09:15 - 09:30 IST opening range from completed candles.
 
     Args:
         symbol: Instrument symbol
         candles_0915_0930: Candles strictly within 09:15 to 09:30 IST.
+        session_date: Target session date (default: date of last candle).
 
     Returns:
         OpeningRange with high, low, candle_count, and is_complete.
@@ -86,11 +94,21 @@ def build_opening_range(
     if not completed:
         return OpeningRange(symbol=symbol, high=0.0, low=0.0, is_complete=False, candle_count=0)
 
+    # If candles span beyond 09:15-09:30 or multiple days, isolate the true opening range window
+    target_d = session_date or (completed[-1].timestamp if completed[-1].timestamp.tzinfo else completed[-1].timestamp.replace(tzinfo=IST)).astimezone(IST).date()
+    filtered = []
+    for c in completed:
+        c_dt = (c.timestamp if c.timestamp.tzinfo else c.timestamp.replace(tzinfo=IST)).astimezone(IST)
+        if c_dt.date() == target_d and time(9, 15) <= c_dt.time() <= time(9, 30):
+            filtered.append(c)
+
+    if filtered:
+        completed = filtered
+
     high = max(c.high for c in completed)
     low = min(c.low for c in completed)
 
     # 15 minutes of 5-min bars = 3 bars; or 1-min bars = 15 bars
-    # If 5-min bars, at least 3 completed bars; if 1-min bars, at least 15 bars
     is_complete = len(completed) >= 3
 
     return OpeningRange(

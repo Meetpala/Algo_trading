@@ -621,9 +621,10 @@ class StrategyEngine:
         # -------------------------------------------------------------
         if self.scheduler.is_opening_range_period(now):
             # In opening range build phase - update ranges
+            session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
             for sym in symbols:
                 candles_0915_0930 = self.broker.get_historical(sym, "5minute", None, None)
-                self.opening_ranges[sym] = build_opening_range(sym, candles_0915_0930)
+                self.opening_ranges[sym] = build_opening_range(sym, candles_0915_0930, session_date=session_date)
 
             return [
                 StrategyDecision(
@@ -685,8 +686,8 @@ class StrategyEngine:
             # Build/retrieve opening range
             or_range = self.opening_ranges.get(sym)
             if or_range is None or not or_range.is_complete:
-                # Build from history
-                or_range = build_opening_range(sym, stock_candles[:3] if len(stock_candles) >= 3 else [])
+                session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
+                or_range = build_opening_range(sym, stock_candles, session_date=session_date)
                 self.opening_ranges[sym] = or_range
 
             sig = evaluate_signal(
