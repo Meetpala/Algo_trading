@@ -23,7 +23,7 @@ This skill documents and enforces the four permanent quantitative invariants of 
   * **Per-Slot Leveraged Budget**: $\frac{₹57,000.00}{2} = \mathbf{₹28,500.00 \text{ per trade}}$.
   * **Risk-per-Trade Cap**: **0.80%** of account equity ($\mathbf{₹120.00 \text{ max risk per trade}}$).
   * **Hard Daily Loss Limit**: **1.60%** of account equity ($\mathbf{-₹240.00 \text{ hard daily stop}}$). If realized daily net loss hits $-₹240.00$ (equivalent to 2 consecutive maximum losses), all new entries are halted for the remainder of the trading day.
-  * **Second-Slot Unlock Gate**: If 1 slot is currently occupied, Slot 2 is **strictly locked** and cannot open unless Slot 1 is already in profit by at least **$+0.50R$** ($\text{unrealized\_r} \ge 0.50$).
+  * **Second-Slot Unlock Gate**: Governed directly by available equity margin and capacity (`second_slot_requires_slot1_profit_r: 0.0`). As long as position capacity (< 2 slots) and usable margin allow, Slot 2 trades independently with its dedicated ₹28,500 slot budget and ₹120.00 risk cap, taking all structural stop-loss and gate validations without requiring Slot 1 profit.
   * **New Entries Per Bar**: Maximum **1 new entry** on any single 5-minute candle (`max_new_entries_per_bar: 1`), deploying capital only into the #1 highest-conviction institutional breakout across the radar.
 
 ---

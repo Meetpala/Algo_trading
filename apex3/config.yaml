@@ -13,7 +13,7 @@ account:
 risk_management:
   max_concurrent_positions: 2         # 2 slots max -> ₹28,500 leveraged budget per slot
   max_new_entries_per_bar: 1          # Only take the #1 ranked stock on any single 5m candle
-  second_slot_requires_slot1_profit_r: 0.50  # Slot 2 only unlocks if Slot 1 is >= +0.5R
+  second_slot_requires_slot1_profit_r: 0.0   # 0.0 = Slot 2 trades independently whenever margin allows (no profit lock)
   risk_per_trade_pct: 0.0080          # 0.80% of equity (₹120.00 risk cap per trade)
   daily_loss_limit_pct: 0.0160        # 1.60% of equity (-₹240.00 hard daily stop = 2 losses)
 

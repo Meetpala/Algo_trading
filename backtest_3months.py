@@ -491,7 +491,9 @@ def run_fast_backtest(
                     and len(open_positions) < max_positions
                 )
 
-                if can_fill and len(open_positions) == 1:
+                risk_cfg = config.raw_dict.get("risk_management", {})
+                req_r_slot2 = float(risk_cfg.get("second_slot_requires_slot1_profit_r", 0.0))
+                if can_fill and len(open_positions) == 1 and req_r_slot2 > 0.0:
                     first = next(iter(open_positions.values()))
                     first_bar_idx = stock_sess_map[first['symbol']].get(current_dt)
                     if first_bar_idx is None:
@@ -502,7 +504,7 @@ def run_fast_backtest(
                             open_r = (first_open - first['entry_price']) / first['r_rupees']
                         else:
                             open_r = (first['entry_price'] - first_open) / first['r_rupees']
-                        if open_r < 0.50:
+                        if open_r < req_r_slot2:
                             can_fill = False
 
                 if can_fill:
@@ -659,9 +661,11 @@ def run_fast_backtest(
                 and len(open_positions) < max_positions
                 and time(9, 35) <= bar_close_dt.time() <= cutoff_time
             ):
-                if len(open_positions) == 1:
+                risk_cfg = config.raw_dict.get("risk_management", {})
+                req_r_slot2 = float(risk_cfg.get("second_slot_requires_slot1_profit_r", 0.0))
+                if len(open_positions) == 1 and req_r_slot2 > 0.0:
                     first_p = next(iter(open_positions.values()))
-                    if first_p.get('unrealized_r', 0.0) < 0.50:
+                    if first_p.get('unrealized_r', 0.0) < req_r_slot2:
                         continue
                 bench_slice = nifty_candles[max(0, n_idx - 100): n_idx + 1]
                 regime_eval = evaluate_market_regime(bench_slice, config.regime)

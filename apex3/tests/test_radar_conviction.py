@@ -313,6 +313,7 @@ def test_strategy_engine_slot2_lock(tmp_path):
 
     IST = ZoneInfo("Asia/Kolkata")
     cfg = load_config()
+    cfg.raw_dict.setdefault("risk_management", {})["second_slot_requires_slot1_profit_r"] = 0.50
     journal = Journal(db_path=str(tmp_path / "test_engine_lock.db"))
     broker = PaperBroker(initial_margin=100000.0)
     engine = StrategyEngine(config=cfg, broker=broker, journal=journal)
@@ -345,6 +346,12 @@ def test_strategy_engine_slot2_lock(tmp_path):
     wait_dec = next((d for d in decisions if "SECOND_SLOT_LOCKED_UNTIL_0.5R" in d.reason_codes), None)
     assert wait_dec is not None
     assert wait_dec.decision == Decision.WAIT
+
+    # 2. When req_r is 0.0 (independent margin allocation), slot 2 lock is bypassed
+    cfg.raw_dict["risk_management"]["second_slot_requires_slot1_profit_r"] = 0.0
+    decisions_unlocked = engine.evaluate_step(t)
+    unlocked_lock_dec = next((d for d in decisions_unlocked if "SECOND_SLOT_LOCKED_UNTIL_0.5R" in d.reason_codes), None)
+    assert unlocked_lock_dec is None
 
 
 def test_strategy_engine_fee_protected_breakeven(tmp_path):

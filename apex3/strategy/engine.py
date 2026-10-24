@@ -592,29 +592,30 @@ class StrategyEngine:
                 )
             return decisions
 
-        # Slot-2 Lock Gate: Only allow a 2nd position if Slot 1 is already in profit >= +0.50R
+        # Slot-2 Lock Gate: Only allow a 2nd position if Slot 1 is already in profit >= req_r (if req_r > 0)
         active_positions = [p for p in open_managed if p.quantity > 0]
         if len(active_positions) == 1:
-            first_pos = active_positions[0]
-            mark = self.broker.get_quote(first_pos.symbol)
-            curr_px = mark.last_price if (mark and mark.is_fresh and mark.last_price > 0) else first_pos.average_entry
-            r_val = first_pos.r_value if first_pos.r_value > 0 else abs(first_pos.average_entry - first_pos.initial_stop_price)
-            unrealized_r = 0.0
-            if r_val > 0:
-                unrealized_r = (curr_px - first_pos.average_entry) / r_val if first_pos.side == Side.BUY else (first_pos.average_entry - curr_px) / r_val
-
             risk_raw = self.config.raw_dict.get("risk_management", {}) if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) else {}
-            req_r = float(risk_raw.get("second_slot_requires_slot1_profit_r", 0.50))
-            if unrealized_r < req_r:
-                decisions.append(
-                    StrategyDecision(
-                        decision=Decision.WAIT,
-                        timestamp_ist=now,
-                        reason_codes=["SECOND_SLOT_LOCKED_UNTIL_0.5R"],
-                        explanation=f"Slot 2 locked: Active position in {first_pos.symbol} has unrealized R of {unrealized_r:.2f}R (requires >= {req_r:.2f}R)",
+            req_r = float(risk_raw.get("second_slot_requires_slot1_profit_r", 0.0))
+            if req_r > 0.0:
+                first_pos = active_positions[0]
+                mark = self.broker.get_quote(first_pos.symbol)
+                curr_px = mark.last_price if (mark and mark.is_fresh and mark.last_price > 0) else first_pos.average_entry
+                r_val = first_pos.r_value if first_pos.r_value > 0 else abs(first_pos.average_entry - first_pos.initial_stop_price)
+                unrealized_r = 0.0
+                if r_val > 0:
+                    unrealized_r = (curr_px - first_pos.average_entry) / r_val if first_pos.side == Side.BUY else (first_pos.average_entry - curr_px) / r_val
+
+                if unrealized_r < req_r:
+                    decisions.append(
+                        StrategyDecision(
+                            decision=Decision.WAIT,
+                            timestamp_ist=now,
+                            reason_codes=["SECOND_SLOT_LOCKED_UNTIL_0.5R", "SECOND_SLOT_LOCKED_UNTIL_PROFIT"],
+                            explanation=f"Slot 2 locked: Active position in {first_pos.symbol} has unrealized R of {unrealized_r:.2f}R (requires >= {req_r:.2f}R)",
+                        )
                     )
-                )
-                return decisions
+                    return decisions
 
         # -------------------------------------------------------------
         # STEP 6: Opening Range Period Check (09:15 - 09:30)
@@ -993,12 +994,13 @@ def select_best_entries_for_bar(
     if len(open_positions) >= max_slots:
         return []
 
-    # Slot 2 Gate: Only allow a 2nd concurrent position if Slot 1 is already >= +0.50R in profit
+    # Slot 2 Gate: If req_r > 0, only allow 2nd position when Slot 1 is >= req_r in profit
     if len(open_positions) == 1:
-        first_pos = next(iter(open_positions.values()))
-        req_r = float(risk_cfg.get("second_slot_requires_slot1_profit_r", 0.50))
-        if first_pos.get("unrealized_r", 0.0) < req_r:
-            return []
+        req_r = float(risk_cfg.get("second_slot_requires_slot1_profit_r", 0.0))
+        if req_r > 0.0:
+            first_pos = next(iter(open_positions.values()))
+            if first_pos.get("unrealized_r", 0.0) < req_r:
+                return []
 
     # Step 1: Evaluate NIFTY 50 Regime
     regime = evaluate_market_regime(benchmark_bar, cfg)
