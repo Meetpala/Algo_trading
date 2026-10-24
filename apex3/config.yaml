@@ -22,7 +22,7 @@ session_schedule:
   or_start_time: "09:15"              # Opening Range start
   or_end_time: "09:30"                # Opening Range locked at 09:30 IST
   entry_start_time: "09:35"           # Morning Stability Window: requires first post-OR 5m bar to complete
-  entry_cutoff_time: "12:30"          # Hard cutoff for new entries (leaves >= 2h 25m to reach target)
+  entry_cutoff_time: "12:00"          # Hard cutoff for new entries (leaves >= 2h 55m to reach target)
   late_day_protection_time: "14:15"   # Time-based fee-lock evaluation (raised from 13:45 to prevent choking)
   square_off_time: "14:55"            # Orderly MIS liquidation before Zerodha 15:15 RMS
   flat_verification_time: "14:58"     # Verify zero open positions and zero pending SL/Target orders
@@ -47,6 +47,8 @@ signal_gates:
   min_circuit_distance_pct: 0.020     # Gate 7: >= 2.0% away from upper/lower circuit
   min_stop_distance_pct: 0.0055       # Stop-width floor: Minimum R = 0.55% (eliminates fee compression)
   max_stop_distance_pct: 0.0090       # Stop-width ceiling: Maximum R = 0.90%
+  max_adr_consumed_pct: 0.60          # Gate 9C: Reject if stock already moved > 60% of baseline ADR
+  min_adr_baseline: 0.025             # 2.5% minimum ADR baseline prevents choking on morning opening noise
   min_breakout_cushion_atr: 0.15      # Breakout close must clear OR by >= 0.15 * ATR(14)
   min_clv_ratio: 0.70                 # Close Location Value >= 0.70 (closes in top/bottom 30% of bar)
 
@@ -70,25 +72,23 @@ radar:
   core_conviction_multiplier: 1.35    # Tier 1 priority boost in conviction ranking
   probation_volume_surge_ratio: 2.5   # Stricter volume surge for non-core stocks (>= 2.5x vs 2.0x)
   probation_min_clv_ratio: 0.75       # Stricter CLV for non-core stocks (>= 0.75 vs 0.70)
-  # Tier 1: Audited Elite 10 Institutional Trend Leaders (Max Profitability & Low Friction)
+  # Tier 1: Audited Institutional Trend Leaders (Max Profitability & Low Friction)
   core_watchlist:
     - "HINDALCO"
     - "JSWSTEEL"
     - "RELIANCE"
     - "MARUTI"
-    - "ITC"
     - "TCS"
-    - "SBIN"
     - "TRENT"
     - "KOTAKBANK"
     - "SUNPHARMA"
 
-  # Tier 2: Disabled by default to block negative-expectancy choppy whipsaws (HAL, AXISBANK, BEL, etc.)
-  enable_extended_radar: false
+  # Tier 2: Top audited net-positive stocks discovered from 31-stock screening
+  enable_extended_radar: true
   extended_radar:
-    - "BEL"
-    - "HAL"
     - "BHARTIARTL"
+    - "JIOFIN"
+    - "TATASTEEL"
 
   # Tier 3: Optional Custom List (Disabled by default)
   custom_user_radar: []

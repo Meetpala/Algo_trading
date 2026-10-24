@@ -324,13 +324,14 @@ def evaluate_signal(
             )
     gates.append(GateResult(name="OR_WIDTH", status=GateStatus.PASS, reason="Opening Range width acceptable (<= 1.05%)"))
 
-    # 4B. Minimum Volatility Floor (ATR14 / Price >= 0.0022)
-    if signal_price > 0 and (atr14 / signal_price) < 0.0022:
+    # 4B. Minimum Volatility Floor (ATR14 / Price >= min_atr_pct)
+    min_atr = float(getattr(config, "min_atr_pct", 0.0))
+    if min_atr > 0 and signal_price > 0 and (atr14 / signal_price) < min_atr:
         gates.append(
             GateResult(
                 name="MIN_VOLATILITY",
                 status=GateStatus.FAIL,
-                reason=f"ATR/Price ratio ({atr14/signal_price*100:.3f}%) < min 0.22%",
+                reason=f"ATR/Price ratio ({atr14/signal_price*100:.3f}%) < min {min_atr*100:.3f}%",
                 data={"atr_pct": atr14 / signal_price},
             )
         )
@@ -339,9 +340,9 @@ def evaluate_signal(
             decision=Decision.WAIT,
             gates=gates,
             reason_codes=["INSUFFICIENT_VOLATILITY"],
-            explanation=f"ATR/Price {atr14/signal_price*100:.3f}% is below minimum required 0.22%",
+            explanation=f"ATR/Price {atr14/signal_price*100:.3f}% is below minimum required {min_atr*100:.3f}%",
         )
-    gates.append(GateResult(name="MIN_VOLATILITY", status=GateStatus.PASS, reason=f"Volatility confirmed ({atr14/signal_price*100:.3f}% >= 0.22%)"))
+    gates.append(GateResult(name="MIN_VOLATILITY", status=GateStatus.PASS, reason="Volatility confirmed"))
 
     # 4C. ADR Exhaustion Gate (Today's range consumed <= 60% of ADR14)
     current_date = latest_bar.timestamp.date()
@@ -349,15 +350,18 @@ def evaluate_signal(
     session_high = max(c.high for c in today_candles) if today_candles else latest_bar.high
     session_low = min(c.low for c in today_candles) if today_candles else latest_bar.low
     adr14_pct = getattr(config, "adr14_pct", 0.02)
-    if session_low > 0 and adr14_pct > 0:
+    max_adr_mult = float(getattr(config, "max_adr_consumed_pct", 0.60))
+    min_adr_base = float(getattr(config, "min_adr_baseline", 0.025))
+    effective_adr = max(min_adr_base, adr14_pct)
+    if session_low > 0 and effective_adr > 0:
         today_range_pct = (session_high - session_low) / session_low
-        if today_range_pct > 0.60 * adr14_pct:
+        if today_range_pct > max_adr_mult * effective_adr:
             gates.append(
                 GateResult(
                     name="ADR_EXHAUSTION",
                     status=GateStatus.FAIL,
-                    reason=f"Today's range ({today_range_pct*100:.2f}%) has consumed > 60% of ADR ({adr14_pct*100:.2f}%)",
-                    data={"today_range_pct": today_range_pct, "adr14_pct": adr14_pct},
+                    reason=f"Today's range ({today_range_pct*100:.2f}%) has consumed > 60% of ADR ({effective_adr*100:.2f}%)",
+                    data={"today_range_pct": today_range_pct, "adr14_pct": effective_adr},
                 )
             )
             return SignalEvaluation(
@@ -706,15 +710,18 @@ def evaluate_candidate_signal(
         if or_width_pct > 0.0105:
             return None
 
-    # Gate 9B: Minimum Volatility Floor (ATR14 / Price >= min_atr_pct, default 0.0022)
-    min_atr_pct = float(gates.get("min_atr_pct", 0.0022))
-    if bar.close > 0 and (bar.atr14 / bar.close) < min_atr_pct:
+    # Gate 9B: Minimum Volatility Floor (ATR14 / Price >= min_atr_pct)
+    min_atr_pct = float(gates.get("min_atr_pct", 0.0))
+    if min_atr_pct > 0 and bar.close > 0 and (bar.atr14 / bar.close) < min_atr_pct:
         return None
 
-    # Gate 9C: ADR Exhaustion Filter (Today's range consumed <= 60% of ADR14)
-    if bar.adr14_pct > 0 and bar.session_low_so_far > 0:
+    # Gate 9C: ADR Exhaustion Filter (Today's range consumed <= 60% of ADR14, with baseline)
+    max_adr_mult = float(gates.get("max_adr_consumed_pct", 0.60))
+    min_adr_base = float(gates.get("min_adr_baseline", 0.025))
+    effective_adr = max(min_adr_base, bar.adr14_pct)
+    if effective_adr > 0 and bar.session_low_so_far > 0:
         today_range_pct = (bar.session_high_so_far - bar.session_low_so_far) / bar.session_low_so_far
-        if today_range_pct > 0.60 * bar.adr14_pct:
+        if today_range_pct > max_adr_mult * effective_adr:
             return None
 
     # Tiered Radar & Non-Core Probation Guard
