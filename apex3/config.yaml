@@ -89,6 +89,8 @@ radar:
     - "BHARTIARTL"
     - "JIOFIN"
     - "TATASTEEL"
+    - "AXISBANK"
+    - "TATAPOWER"
 
   # Tier 3: Optional Custom List (Disabled by default)
   custom_user_radar: []

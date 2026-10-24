@@ -3240,27 +3240,27 @@
     },
     "Active 3-Tier Radar (Config)": {
       "summary": {
-        "total_trades": 12,
-        "winning_trades": 8,
+        "total_trades": 14,
+        "winning_trades": 10,
         "losing_trades": 4,
-        "win_rate": 66.67,
-        "profit_factor": 3.0,
-        "gross_pnl": 607.3,
-        "gross_profit": 910.3,
+        "win_rate": 71.43,
+        "profit_factor": 3.23,
+        "gross_pnl": 675.7,
+        "gross_profit": 978.7,
         "gross_loss": 303.0,
-        "total_charges": 190.65,
+        "total_charges": 226.29,
         "charge_breakdown": {
-          "brokerage": 107.32,
-          "stt": 44.79,
-          "exchange_txn": 11.39,
-          "sebi": 0.38,
-          "gst": 21.43,
-          "stamp_duty": 5.36
+          "brokerage": 127.38,
+          "stt": 53.16,
+          "exchange_txn": 13.53,
+          "sebi": 0.46,
+          "gst": 25.43,
+          "stamp_duty": 6.37
         },
-        "friction_ratio_pct": 20.94,
-        "net_pnl": 416.65,
-        "profit_pct": 2.78,
-        "ending_capital": 15416.65
+        "friction_ratio_pct": 23.12,
+        "net_pnl": 449.41,
+        "profit_pct": 3.0,
+        "ending_capital": 15449.41
       },
       "monthly": [
         {
@@ -3292,21 +3292,21 @@
         },
         {
           "month": "2026-09",
-          "trades": 4,
+          "trades": 5,
           "win_rate_pct": 100.0,
-          "gross_pnl": 638.35,
-          "charges": 68.07,
-          "friction_pct_of_gross_profit": 10.66,
-          "net_pnl": 570.28
+          "gross_pnl": 656.35,
+          "charges": 85.7,
+          "friction_pct_of_gross_profit": 13.06,
+          "net_pnl": 570.65
         },
         {
           "month": "2026-10",
-          "trades": 1,
+          "trades": 2,
           "win_rate_pct": 100.0,
-          "gross_pnl": 62.95,
-          "charges": 12.02,
-          "friction_pct_of_gross_profit": 19.09,
-          "net_pnl": 50.93
+          "gross_pnl": 113.35,
+          "charges": 30.03,
+          "friction_pct_of_gross_profit": 26.49,
+          "net_pnl": 83.32
         }
       ],
       "by_symbol": [
@@ -3349,6 +3349,14 @@
           "gross_pnl": 74.8,
           "charges": 17.02,
           "net_pnl": 57.78
+        },
+        {
+          "symbol": "TATAPOWER",
+          "trades": 2,
+          "win_rate_pct": 100.0,
+          "gross_pnl": 68.4,
+          "charges": 35.64,
+          "net_pnl": 32.76
         },
         {
           "symbol": "MARUTI",
@@ -3572,6 +3580,35 @@
           "r_multiple": -1.0
         },
         {
+          "date": "2026-09-04",
+          "symbol": "TATAPOWER",
+          "side": "BUY",
+          "qty": 45,
+          "entry_time": "11:00",
+          "signal_time": "11:00",
+          "signal_price": 367.25,
+          "entry_price": 367.35,
+          "exit_time": "14:55",
+          "exit_price": 367.75,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": 18.0,
+          "charges": {
+            "buy_turnover": 16530.75,
+            "sell_turnover": 16548.75,
+            "total_turnover": 33079.5,
+            "brokerage": 9.92,
+            "stt": 4.14,
+            "exchange_txn": 1.06,
+            "sebi": 0.04,
+            "gst": 1.98,
+            "stamp_duty": 0.5,
+            "total_charges": 17.63
+          },
+          "total_charges": 17.63,
+          "net_pnl": 0.37,
+          "r_multiple": 0.15
+        },
+        {
           "date": "2026-09-07",
           "symbol": "TRENT",
           "side": "SELL",
@@ -3715,6 +3752,35 @@
           "total_charges": 12.02,
           "net_pnl": 50.93,
           "r_multiple": 0.86
+        },
+        {
+          "date": "2026-10-16",
+          "symbol": "TATAPOWER",
+          "side": "BUY",
+          "qty": 48,
+          "entry_time": "10:55",
+          "signal_time": "10:55",
+          "signal_price": 351.75,
+          "entry_price": 351.5,
+          "exit_time": "14:55",
+          "exit_price": 352.55,
+          "exit_reason": "EOD_FLATTEN_1455",
+          "gross_pnl": 50.4,
+          "charges": {
+            "buy_turnover": 16872.0,
+            "sell_turnover": 16922.3994140625,
+            "total_turnover": 33794.3994140625,
+            "brokerage": 10.14,
+            "stt": 4.23,
+            "exchange_txn": 1.08,
+            "sebi": 0.04,
+            "gst": 2.02,
+            "stamp_duty": 0.51,
+            "total_charges": 18.01
+          },
+          "total_charges": 18.01,
+          "net_pnl": 32.39,
+          "r_multiple": 0.42
         }
       ]
     },
@@ -5229,27 +5295,27 @@
       "ending_capital": 14777.63
     },
     "Active 3-Tier Radar (Config) / Second half": {
-      "total_trades": 10,
-      "winning_trades": 8,
+      "total_trades": 12,
+      "winning_trades": 10,
       "losing_trades": 2,
-      "win_rate": 80.0,
-      "profit_factor": 8.45,
-      "gross_pnl": 802.6,
-      "gross_profit": 910.3,
+      "win_rate": 83.33,
+      "profit_factor": 9.09,
+      "gross_pnl": 871.0,
+      "gross_profit": 978.7,
       "gross_loss": 107.7,
-      "total_charges": 163.58,
+      "total_charges": 199.22,
       "charge_breakdown": {
-        "brokerage": 92.07,
-        "stt": 38.46,
-        "exchange_txn": 9.77,
-        "sebi": 0.34,
-        "gst": 18.39,
-        "stamp_duty": 4.59
+        "brokerage": 112.13,
+        "stt": 46.83,
+        "exchange_txn": 11.91,
+        "sebi": 0.42,
+        "gst": 22.39,
+        "stamp_duty": 5.6
       },
-      "friction_ratio_pct": 17.97,
-      "net_pnl": 639.02,
-      "profit_pct": 4.26,
-      "ending_capital": 15639.02
+      "friction_ratio_pct": 20.36,
+      "net_pnl": 671.78,
+      "profit_pct": 4.48,
+      "ending_capital": 15671.78
     },
     "All available historical symbols / First half": {
       "total_trades": 6,
