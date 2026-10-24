@@ -964,4 +964,5 @@ if __name__ == '__main__':
     assert res_3m['net_pnl'] > 0.0, f"Net P&L Rs. {res_3m['net_pnl']} was not positive"
     assert res_3m['win_rate'] >= 50.0, f"Win Rate {res_3m['win_rate']}% < 50.0% threshold"
     assert res_3m['profit_factor'] >= 1.50, f"Profit Factor {res_3m['profit_factor']} < 1.50 threshold"
-    print("\n[PASS] 3-Month Net Realized P&L, win-rate, and profit-factor thresholds verified")
+    assert res_3m['friction_ratio_pct'] < 26.0, f"Friction {res_3m['friction_ratio_pct']}% >= 26.0% threshold"
+    print("\n[PASS] 3-Month Net Realized P&L, win-rate, profit-factor, and friction thresholds verified")

@@ -298,8 +298,9 @@ def test_strategy_engine_watchlist_resolution(tmp_path):
     assert "HINDALCO" in watchlist
     assert "JSWSTEEL" in watchlist
     assert "RELIANCE" in watchlist
-    assert "SUNPHARMA" in watchlist
-    assert len(watchlist) == 10
+    assert "TRENT" in watchlist
+    assert "BHARTIARTL" in watchlist
+    assert len(watchlist) == 9
 
 
 def test_strategy_engine_slot2_lock(tmp_path):

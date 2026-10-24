@@ -19,6 +19,8 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from apex3.config import load_config
+from apex3.strategy.engine import build_active_radar
 from backtest_3months import load_preparsed_data, run_fast_backtest
 
 ELITE_10 = [
@@ -127,12 +129,15 @@ def run_6month_audit() -> dict | None:
     dates = sorted(set(data["NSEI"]["df"]["Datetime"].dt.date))
     print(f"Data span: {dates[0]} to {dates[-1]} ({len(dates)} trading sessions)")
 
+    config = load_config()
+    active_radar = build_active_radar(config.raw_dict)
     no_sbin_maruti = [s for s in ELITE_10 if s not in {"SBIN", "MARUTI"}]
     variants = {
         "Elite 10 baseline": (ELITE_10, None),
         "Exclude SBIN + MARUTI": (no_sbin_maruti, None),
         "Noon entry cutoff": (ELITE_10, time(12, 0)),
         "Exclude pair + noon cutoff": (no_sbin_maruti, time(12, 0)),
+        "Active 3-Tier Radar (Config)": (active_radar, time(12, 0)),
         "All available historical symbols": (available_symbols, None),
     }
 
@@ -181,6 +186,7 @@ def run_6month_audit() -> dict | None:
     for strategy_name in (
         "Elite 10 baseline",
         "Exclude pair + noon cutoff",
+        "Active 3-Tier Radar (Config)",
         "All available historical symbols",
     ):
         symbols, cutoff = variants[strategy_name]
@@ -254,6 +260,11 @@ def run_6month_audit() -> dict | None:
     output_path = "six_month_conservative_audit.json"
     with open(output_path, "w", encoding="utf-8") as output_file:
         json.dump(payload, output_file, indent=2, allow_nan=False)
+    active_res = full_results["Active 3-Tier Radar (Config)"]
+    assert active_res["net_pnl"] > 336.66, f"Active radar net P&L Rs. {active_res['net_pnl']} not > baseline +Rs. 336.66"
+    assert active_res["friction_ratio_pct"] < 26.0, f"Active radar friction {active_res['friction_ratio_pct']}% >= 26.0%"
+    print(f"\n[PASS] 6-Month Active Radar Net P&L (Rs. {active_res['net_pnl']:.2f} > Rs. 336.66) and friction ({active_res['friction_ratio_pct']:.2f}% < 26.0%) verified")
+
     print(f"\nDetailed audit written to {output_path}")
     return payload
 
