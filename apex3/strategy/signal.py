@@ -303,6 +303,70 @@ def evaluate_signal(
     cushion = cushion_mult * atr14
     bar_range = max(latest_bar.high - latest_bar.low, 0.05)
 
+    # 4A. Opening Range Width Cap (max 1.05%)
+    if opening_range.low > 0:
+        or_width_pct = (opening_range.high - opening_range.low) / opening_range.low
+        if or_width_pct > 0.0105:
+            gates.append(
+                GateResult(
+                    name="OR_WIDTH",
+                    status=GateStatus.FAIL,
+                    reason=f"Opening Range width ({or_width_pct*100:.2f}%) exceeds max 1.05%",
+                    data={"or_width_pct": or_width_pct},
+                )
+            )
+            return SignalEvaluation(
+                symbol=symbol,
+                decision=Decision.WAIT,
+                gates=gates,
+                reason_codes=["OR_WIDTH_EXCEEDED"],
+                explanation=f"Opening Range width {or_width_pct*100:.2f}% > 1.05%",
+            )
+    gates.append(GateResult(name="OR_WIDTH", status=GateStatus.PASS, reason="Opening Range width acceptable (<= 1.05%)"))
+
+    # 4B. Minimum Volatility Floor (ATR14 / Price >= 0.0022)
+    if signal_price > 0 and (atr14 / signal_price) < 0.0022:
+        gates.append(
+            GateResult(
+                name="MIN_VOLATILITY",
+                status=GateStatus.FAIL,
+                reason=f"ATR/Price ratio ({atr14/signal_price*100:.3f}%) < min 0.22%",
+                data={"atr_pct": atr14 / signal_price},
+            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["INSUFFICIENT_VOLATILITY"],
+            explanation=f"ATR/Price {atr14/signal_price*100:.3f}% is below minimum required 0.22%",
+        )
+    gates.append(GateResult(name="MIN_VOLATILITY", status=GateStatus.PASS, reason=f"Volatility confirmed ({atr14/signal_price*100:.3f}% >= 0.22%)"))
+
+    # 4C. ADR Exhaustion Gate (Today's range consumed <= 60% of ADR14)
+    session_high = max(c.high for c in completed_candles)
+    session_low = min(c.low for c in completed_candles)
+    adr14_pct = getattr(config, "adr14_pct", 0.02)
+    if session_low > 0 and adr14_pct > 0:
+        today_range_pct = (session_high - session_low) / session_low
+        if today_range_pct > 0.60 * adr14_pct:
+            gates.append(
+                GateResult(
+                    name="ADR_EXHAUSTION",
+                    status=GateStatus.FAIL,
+                    reason=f"Today's range ({today_range_pct*100:.2f}%) has consumed > 60% of ADR ({adr14_pct*100:.2f}%)",
+                    data={"today_range_pct": today_range_pct, "adr14_pct": adr14_pct},
+                )
+            )
+            return SignalEvaluation(
+                symbol=symbol,
+                decision=Decision.WAIT,
+                gates=gates,
+                reason_codes=["ADR_EXHAUSTED"],
+                explanation=f"Today's range {today_range_pct*100:.2f}% exceeds 60% of ADR14",
+            )
+    gates.append(GateResult(name="ADR_EXHAUSTION", status=GateStatus.PASS, reason="ADR exhaustion check passed (<= 60% of ADR)"))
+
     if target_side == Side.BUY:
         required_long = opening_range.high + cushion
         if signal_price < required_long:
@@ -634,9 +698,28 @@ def evaluate_candidate_signal(
     else:
         return None
 
-    # Gate 1 (Opening Range Breakout with Cushion & CLV) & Gate 2 (Session VWAP) & Gate 4 (Relative Strength vs NIFTY)
+    # Gate 9A: Opening Range Width Cap (1.05%)
+    if bar.or_low > 0:
+        or_width_pct = (bar.or_high - bar.or_low) / bar.or_low
+        if or_width_pct > 0.0105:
+            return None
+
+    # Gate 9B: Minimum Volatility Floor (ATR14 / Price >= 0.0022)
+    if bar.close > 0 and (bar.atr14 / bar.close) < 0.0022:
+        return None
+
+    # Gate 9C: ADR Exhaustion Filter (Today's range consumed <= 60% of ADR14)
+    if bar.adr14_pct > 0 and bar.session_low_so_far > 0:
+        today_range_pct = (bar.session_high_so_far - bar.session_low_so_far) / bar.session_low_so_far
+        if today_range_pct > 0.60 * bar.adr14_pct:
+            return None
+
+    # Tiered Radar & Non-Core Probation Guard
+    radar_cfg = cfg.get("radar", {})
+    core_wl = radar_cfg.get("core_watchlist", [])
+    is_core = (bar.symbol in core_wl)
     cushion_mult = float(gates.get("min_breakout_cushion_atr", 0.15))
-    min_clv = float(gates.get("min_clv_ratio", 0.70))
+    min_clv = float(gates.get("min_clv_ratio", 0.70)) if is_core else float(gates.get("probation_min_clv_ratio", 0.75))
     cushion = cushion_mult * bar.atr14
 
     rel_strength = bar.stock_return_20 - bar.nifty_return_20
@@ -651,11 +734,11 @@ def evaluate_candidate_signal(
         if not (bar.close <= (bar.or_low - cushion) and clv >= min_clv and bar.close < bar.session_vwap and rel_strength < 0):
             return None
 
-    # Gate 5: Institutional Volume Surge (>= 2.0x 20-bar average)
+    # Gate 5: Institutional Volume Surge (Core >= 2.0x, Non-Core Probation >= 2.5x)
     if bar.avg_volume_20 <= 0:
         return None
     vol_ratio = bar.bar_volume / bar.avg_volume_20
-    min_vol = float(gates.get("min_volume_surge_ratio", gates.get("min_relative_volume", 2.0)))
+    min_vol = float(gates.get("min_volume_surge_ratio", 2.0)) if is_core else float(gates.get("probation_volume_surge_ratio", 2.5))
     if vol_ratio < min_vol:
         return None
 
@@ -689,9 +772,10 @@ def evaluate_candidate_signal(
     if not (min_r_pct <= levels.risk_pct <= max_r_pct):
         return None
 
-    # Conviction Score to rank simultaneous triggers across a 25-40 stock radar
+    # Conviction Score with Core Priority Multiplier (1.35x)
     spread_floor = max(bar.bid_ask_spread_bps, 1.0)
-    conviction_score = (abs(rel_strength) * 100.0 * vol_ratio) / spread_floor
+    core_mult = float(radar_cfg.get("core_conviction_multiplier", 1.35)) if is_core else 1.0
+    conviction_score = core_mult * ((abs(rel_strength) * 100.0 * vol_ratio) / spread_floor)
 
     return TradeSignal(
         symbol=bar.symbol,

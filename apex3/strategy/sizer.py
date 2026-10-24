@@ -74,6 +74,36 @@ def compute_usable_margin(margin_info: MarginInfo, safety_reserve_pct: float = 5
     return max(0.0, available - reserve)
 
 
+def calculate_zerodha_intraday_charges(buy_price: float, sell_price: float, quantity: int) -> float:
+    """
+    Exact NSE + Zerodha MIS statutory fee calculator:
+    - Brokerage: 0.03% or ₹20 per order (whichever is lower)
+    - STT: 0.025% on sell turnover
+    - NSE Exchange Turnover: 0.00318% on total turnover (matches audited spec)
+    - SEBI Fee: 0.0001% (₹10/Crore) on total turnover
+    - Stamp Duty: 0.003% on buy turnover
+    - GST: 18% on (Brokerage + NSE Turnover + SEBI Fee)
+    """
+    if quantity <= 0:
+        return 0.0
+
+    buy_turnover = buy_price * quantity
+    sell_turnover = sell_price * quantity
+    total_turnover = buy_turnover + sell_turnover
+
+    brok_buy = min(20.0, buy_turnover * 0.0003)
+    brok_sell = min(20.0, sell_turnover * 0.0003)
+    brokerage = brok_buy + brok_sell
+
+    stt = sell_turnover * 0.00025
+    nse_charges = total_turnover * 0.0000318
+    sebi_charges = total_turnover * 0.000001
+    stamp_duty = buy_turnover * 0.00003
+    gst = 0.18 * (brokerage + nse_charges + sebi_charges)
+
+    return round(brokerage + stt + nse_charges + sebi_charges + stamp_duty + gst, 2)
+
+
 def size_position(
     symbol: str,
     side: Side,
@@ -247,9 +277,8 @@ def size_position(
 
     effective_leverage = min(limits_config.max_leverage, broker_leverage)
 
-    # 3. Equal Notional Allocation across N qualified symbols
-    # N must be capped at max_symbols and at least 1
-    n = max(1, min(limits_config.max_symbols, num_qualified_symbols))
+    # 3. Equal Notional Allocation across max_symbols slots (e.g. 2 slots = ₹28,500 each)
+    n = max(1, limits_config.max_symbols)
     per_symbol_budget = (usable_margin * effective_leverage) / n
 
     # Q_notional = floor(B / E)
@@ -310,6 +339,38 @@ def size_position(
             rejection_reason="Risk or margin constraints resulted in 0 shares",
         )
 
+    # Gate: Reject trade if Zerodha charges consume > 18% of expected 2.0R gross profit
+    target_price = round(entry_price + (2.0 * per_share_loss) if side == Side.BUY else entry_price - (2.0 * per_share_loss), 2)
+    est_charges = calculate_zerodha_intraday_charges(entry_price, target_price, q_final)
+    expected_gross_win = abs(target_price - entry_price) * q_final
+
+    if expected_gross_win <= 0 or (est_charges / expected_gross_win) > 0.18:
+        return SizingResult(
+            symbol=symbol,
+            quantity=0,
+            is_valid=False,
+            side=side,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            per_share_risk=per_share_risk,
+            notional_value=0.0,
+            trade_risk_rupees=trade_risk_rupees,
+            usable_margin=usable_margin,
+            per_symbol_budget=per_symbol_budget,
+            effective_leverage=effective_leverage,
+            q_notional=q_notional,
+            q_risk=q_risk,
+            q_margin=q_margin,
+            gate=GateResult(
+                name="FEE_TO_PROFIT_RATIO",
+                status=GateStatus.FAIL,
+                reason=f"Estimated charges (₹{est_charges:.2f}) exceed 18% of expected 2.0R gross profit (₹{expected_gross_win:.2f}, {est_charges/expected_gross_win*100:.1f}%)",
+                data={"charges": est_charges, "expected_profit": expected_gross_win, "ratio": est_charges / expected_gross_win},
+            ),
+            rejection_code="EXCEEDED_FEE_TO_PROFIT_LIMIT",
+            rejection_reason=f"Charges consume > 18% of expected 2.0R gross profit ({est_charges/expected_gross_win*100:.1f}%)",
+        )
+
     notional_value = q_final * entry_price
     actual_trade_risk = q_final * per_share_risk
 
@@ -365,35 +426,6 @@ def fetch_zerodha_live_capital(kite_client, fallback_capital: float) -> float:
     except Exception:
         return fallback_capital
 
-
-def calculate_zerodha_intraday_charges(buy_price: float, sell_price: float, quantity: int) -> float:
-    """
-    Exact NSE + Zerodha MIS statutory fee calculator:
-    - Brokerage: 0.03% or ₹20 per order (whichever is lower)
-    - STT: 0.025% on sell turnover
-    - NSE Exchange Turnover: 0.00318% on total turnover (matches audited spec)
-    - SEBI Fee: 0.0001% (₹10/Crore) on total turnover
-    - Stamp Duty: 0.003% on buy turnover
-    - GST: 18% on (Brokerage + NSE Turnover + SEBI Fee)
-    """
-    if quantity <= 0:
-        return 0.0
-
-    buy_turnover = buy_price * quantity
-    sell_turnover = sell_price * quantity
-    total_turnover = buy_turnover + sell_turnover
-
-    brok_buy = min(20.0, buy_turnover * 0.0003)
-    brok_sell = min(20.0, sell_turnover * 0.0003)
-    brokerage = brok_buy + brok_sell
-
-    stt = sell_turnover * 0.00025
-    nse_charges = total_turnover * 0.0000318
-    sebi_charges = total_turnover * 0.000001
-    stamp_duty = buy_turnover * 0.00003
-    gst = 0.18 * (brokerage + nse_charges + sebi_charges)
-
-    return round(brokerage + stt + nse_charges + sebi_charges + stamp_duty + gst, 2)
 
 
 def calculate_position_size(

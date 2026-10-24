@@ -35,7 +35,7 @@ class WatchlistConfig:
 
 @dataclass(frozen=True)
 class LimitsConfig:
-    max_symbols: int = 3
+    max_symbols: int = 2
     max_leverage: float = 4.0
     min_accepted_leverage: float = 4.0
     safety_reserve_pct: float = 5.0
@@ -43,9 +43,9 @@ class LimitsConfig:
 
 @dataclass(frozen=True)
 class RiskConfig:
-    risk_per_trade_pct: float = 0.25
-    max_combined_open_risk_pct: float = 0.75
-    daily_loss_limit_pct: float = 1.0
+    risk_per_trade_pct: float = 0.80
+    max_combined_open_risk_pct: float = 1.60
+    daily_loss_limit_pct: float = 1.60
     slippage_allowance_pct: float = 0.10
 
 
@@ -108,8 +108,10 @@ class StopsConfig:
     use_fixed_target: bool = True
     trail_enabled: bool = False
     fee_lock_enabled: bool = True
-    fee_lock_trigger_r: float = 1.65
+    fee_lock_trigger_r: float = 1.60
+    fee_lock_profit_r: float = 0.60
     late_day_lock_trigger_r: float = 1.15
+    late_day_lock_profit_r: float = 0.35
     late_day_protection_time: str = "14:15"
     fee_lock_offset_pct: float = 0.0015
     trail: TrailConfig = field(default_factory=TrailConfig)
@@ -397,8 +399,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             use_fixed_target=bool(stops_raw.get("use_fixed_target", True)),
             trail_enabled=bool(stops_raw.get("trail_enabled", False)),
             fee_lock_enabled=bool(stops_raw.get("fee_lock_enabled", True)),
-            fee_lock_trigger_r=float(stops_raw.get("fee_lock_trigger_r", 1.65)),
+            fee_lock_trigger_r=float(stops_raw.get("fee_lock_trigger_r", 1.60)),
+            fee_lock_profit_r=float(stops_raw.get("fee_lock_profit_r", 0.60)),
             late_day_lock_trigger_r=float(stops_raw.get("late_day_lock_trigger_r", 1.15)),
+            late_day_lock_profit_r=float(stops_raw.get("late_day_lock_profit_r", 0.35)),
             late_day_protection_time=str(schedule_raw.get("late_day_protection_time", stops_raw.get("late_day_protection_time", "14:15"))),
             fee_lock_offset_pct=float(stops_raw.get("fee_lock_offset_pct", 0.0015)),
             trail=trail_config,

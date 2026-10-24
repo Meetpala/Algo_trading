@@ -56,15 +56,20 @@ stops_and_targets:
   atr_stop_multiplier: 1.5            # 1.5x ATR structural buffer (proven over 1.0x ATR)
   target_r_multiple: 2.0              # Fixed 2.0R limit target order
   trail_enabled: false                # Continuous trailing disabled (prevents choking runners)
-  fee_lock_enabled: true              # One-time step to Entry +/- 0.15% to protect late winners
-  fee_lock_trigger_r: 1.65            # Triggers when unrealized profit hits +1.65R (82.5% of target)
-  late_day_lock_trigger_r: 1.15       # At 14:15 IST, locks Entry +/- 0.15% if trade is >= +1.15R
+  fee_lock_enabled: true              # One-time step to profit-preserving buffer
+  fee_lock_trigger_r: 1.60            # Triggers when unrealized profit hits +1.60R (locks +0.60R)
+  fee_lock_profit_r: 0.60             # +0.60R profit preserved (~+₹65 to +₹75 gross)
+  late_day_lock_trigger_r: 1.15       # At 14:15 IST, triggers if trade is >= +1.15R (locks +0.35R)
+  late_day_lock_profit_r: 0.35        # +0.35R profit preserved
   fee_lock_offset_pct: 0.0015         # +0.15% covers 0.1065% Zerodha + statutory charges + 1 tick
   sl_limit_buffer_pct: 0.25           # Stop-limit buffer below/above trigger
   max_modifications_per_order: 25     # Kite order modification limit
   modification_headroom: 3
 
 radar:
+  core_conviction_multiplier: 1.35    # Tier 1 priority boost in conviction ranking
+  probation_volume_surge_ratio: 2.5   # Stricter volume surge for non-core stocks (>= 2.5x vs 2.0x)
+  probation_min_clv_ratio: 0.75       # Stricter CLV for non-core stocks (>= 0.75 vs 0.70)
   # Tier 1: Audited Elite 10 Institutional Trend Leaders (Max Profitability & Low Friction)
   core_watchlist:
     - "HINDALCO"

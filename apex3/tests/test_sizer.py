@@ -9,7 +9,7 @@ from apex3.strategy.sizer import compute_usable_margin, size_position
 @pytest.fixture
 def limits_cfg() -> LimitsConfig:
     return LimitsConfig(
-        max_symbols=3,
+        max_symbols=2,
         max_leverage=4.0,
         min_accepted_leverage=4.0,
         safety_reserve_pct=5.0,
@@ -39,11 +39,11 @@ def test_usable_margin_safety_reserve():
 
 
 def test_equal_allocation_division(limits_cfg, risk_cfg, inst_info):
-    """Verify notional budget divides equally across only qualified symbols (N=2 vs N=1)."""
+    """Verify notional budget divides equally across max_symbols slots (e.g. max_symbols=2 -> 190,000 per slot)."""
     m = MarginInfo(equity_available=100000.0, net_value=100000.0)
 
-    # 1 qualified symbol: budget = 95,000 * 4.0 / 1 = 380,000
-    res_1 = size_position(
+    # With max_symbols=2: budget = 95,000 * 4.0 / 2 = 190,000
+    res = size_position(
         symbol="RELIANCE",
         side=Side.BUY,
         entry_price=1000.0,
@@ -54,23 +54,8 @@ def test_equal_allocation_division(limits_cfg, risk_cfg, inst_info):
         limits_config=limits_cfg,
         risk_config=risk_cfg,
     )
-    assert res_1.per_symbol_budget == 380000.0
-    assert res_1.q_notional == 380
-
-    # 2 qualified symbols: budget = 95,000 * 4.0 / 2 = 190,000
-    res_2 = size_position(
-        symbol="RELIANCE",
-        side=Side.BUY,
-        entry_price=1000.0,
-        stop_price=990.0,
-        num_qualified_symbols=2,
-        margin_info=m,
-        instrument=inst_info,
-        limits_config=limits_cfg,
-        risk_config=risk_cfg,
-    )
-    assert res_2.per_symbol_budget == 190000.0
-    assert res_2.q_notional == 190
+    assert res.per_symbol_budget == 190000.0
+    assert res.q_notional == 190
 
 
 def test_risk_capping_takes_precedence(limits_cfg, risk_cfg, inst_info):

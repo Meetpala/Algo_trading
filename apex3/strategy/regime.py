@@ -180,6 +180,26 @@ def evaluate_market_regime(
     is_bullish = (latest_close > latest_ema) and dual_ema_bull and (slope > 0) and is_trending
     is_bearish = (latest_close < latest_ema) and dual_ema_bear and (slope < 0) and is_trending
 
+    # Session VWAP alignment
+    if getattr(config, "require_vwap_alignment", True) and len(completed_candles) >= 3:
+        target_date = completed_candles[-1].timestamp.date()
+        today_candles = [c for c in completed_candles if c.timestamp.date() == target_date]
+        if today_candles:
+            tot_vol = sum(c.volume for c in today_candles)
+            if tot_vol > 0:
+                from apex3.indicators.vwap import compute_session_vwap
+                vwap_val = compute_session_vwap(
+                    [c.high for c in today_candles],
+                    [c.low for c in today_candles],
+                    [c.close for c in today_candles],
+                    [c.volume for c in today_candles],
+                )
+                if vwap_val > 0:
+                    if is_bullish and latest_close <= vwap_val:
+                        is_bullish = False
+                    if is_bearish and latest_close >= vwap_val:
+                        is_bearish = False
+
     details = {
         "close": latest_close,
         "ema": round(latest_ema, 2),
