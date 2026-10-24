@@ -706,8 +706,9 @@ def evaluate_candidate_signal(
         if or_width_pct > 0.0105:
             return None
 
-    # Gate 9B: Minimum Volatility Floor (ATR14 / Price >= 0.0022)
-    if bar.close > 0 and (bar.atr14 / bar.close) < 0.0022:
+    # Gate 9B: Minimum Volatility Floor (ATR14 / Price >= min_atr_pct, default 0.0022)
+    min_atr_pct = float(gates.get("min_atr_pct", 0.0022))
+    if bar.close > 0 and (bar.atr14 / bar.close) < min_atr_pct:
         return None
 
     # Gate 9C: ADR Exhaustion Filter (Today's range consumed <= 60% of ADR14)
