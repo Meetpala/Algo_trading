@@ -30,6 +30,7 @@ from apex3.models import (
     PositionState,
     Product,
     Side,
+    make_broker_tag,
 )
 from apex3.reconciliation.state_machine import PositionPhase, StateMachine
 
@@ -135,6 +136,22 @@ class Reconciler:
                     else:
                         pos.phase = PositionPhase.OPEN_UNPROTECTED
                         logger.warning("Restored strategy position %s (qty=%d) on restart, but resting SL order was not found", bp.symbol, bp.quantity)
+
+                    # Fix 7: Restore initial_stop_price, r_value, and target_price on restart recovery
+                    if pos.initial_stop_price <= 0 and pos.current_stop_price > 0:
+                        pos.initial_stop_price = pos.current_stop_price
+                    if pos.initial_stop_price > 0 and pos.average_entry > 0:
+                        pos.r_value = abs(pos.average_entry - pos.initial_stop_price)
+                    if pos.r_value > 0 and pos.target_price <= 0:
+                        from apex3.strategy.trail import calculate_target_price
+                        pos.target_price = calculate_target_price(
+                            side=pos.side,
+                            entry_price=pos.average_entry,
+                            initial_stop=pos.initial_stop_price,
+                            target_r=2.0,
+                            tick_size=0.05,
+                        )
+
                     open_strategy_count += 1
                 else:
                     # Foreign / manual position
@@ -274,7 +291,7 @@ class Reconciler:
                 quantity=exit_qty,
                 product=Product.MIS,
                 order_type=OrderType.MARKET,
-                tag=f"{self.session_tag}_EXIT",
+                tag=make_broker_tag(self.session_tag, managed.symbol, "FLT"),
                 strategy_id=self.session_tag,
             )
 

@@ -46,6 +46,7 @@ from apex3.models import (
     Quote,
     Side,
     StrategyDecision,
+    make_broker_tag,
 )
 from apex3.reconciliation.reconciler import Reconciler
 from apex3.reconciliation.state_machine import PositionPhase, StateMachine
@@ -316,7 +317,7 @@ class StrategyEngine:
                         order_type=OrderType.SL,
                         price=limit,
                         trigger_price=trigger,
-                        tag=f"{ent_pos.strategy_tag}_SL",
+                        tag=make_broker_tag(self.session_tag, ent_pos.symbol, "SL"),
                         strategy_id=self.session_tag,
                     )
                     sl_confirmed = False
@@ -357,7 +358,7 @@ class StrategyEngine:
                                 quantity=ent_pos.quantity,
                                 product=Product.MIS,
                                 order_type=OrderType.MARKET,
-                                tag=f"{ent_pos.strategy_tag}_EMERGENCY_FLATTEN",
+                                tag=make_broker_tag(self.session_tag, ent_pos.symbol, "FLT"),
                                 strategy_id=self.session_tag,
                             )
                             emer_id = self.broker.place_order(emer_exit)
@@ -405,7 +406,7 @@ class StrategyEngine:
                                 order_type=OrderType.SL,
                                 price=limit,
                                 trigger_price=trigger,
-                                tag=f"{ent_pos.strategy_tag}_SL",
+                                tag=make_broker_tag(self.session_tag, ent_pos.symbol, "SL"),
                                 strategy_id=self.session_tag,
                             )
                             sl_confirmed = False
@@ -429,7 +430,7 @@ class StrategyEngine:
                                         quantity=ent_pos.quantity,
                                         product=Product.MIS,
                                         order_type=OrderType.MARKET,
-                                        tag=f"{ent_pos.strategy_tag}_EMERGENCY_FLATTEN",
+                                        tag=make_broker_tag(self.session_tag, ent_pos.symbol, "FLT"),
                                         strategy_id=self.session_tag,
                                     )
                                     emer_id = self.broker.place_order(emer_exit)
@@ -468,11 +469,17 @@ class StrategyEngine:
                                     explanation=f"Exit order {pos.exit_order_id} filled for {pos.symbol}",
                                 )
                                 continue
-                            elif exit_state.filled_quantity > 0:
-                                pos.quantity = max(0, pos.quantity - exit_state.filled_quantity)
+                            elif exit_state.pending_quantity > 0:
+                                pos.quantity = exit_state.pending_quantity
+                                pos.phase = PositionPhase.EXITING
+                            elif hasattr(exit_state, "request") and exit_state.request and exit_state.request.quantity > 0:
+                                rem = max(0, exit_state.request.quantity - exit_state.filled_quantity)
+                                pos.quantity = rem
                                 if pos.quantity == 0:
                                     pos.phase = PositionPhase.CLOSED
                                     continue
+                                else:
+                                    pos.phase = PositionPhase.EXITING
                             elif exit_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
                                 logger.warning(
                                     "Exit order %s for %s was %s; clearing exit_order_id for retry",
@@ -543,7 +550,7 @@ class StrategyEngine:
                                 quantity=pos.quantity,
                                 product=Product.MIS,
                                 order_type=OrderType.MARKET,
-                                tag=f"{pos.strategy_tag}_EMERGENCY_GAP_EXIT",
+                                tag=make_broker_tag(self.session_tag, pos.symbol, "EMG"),
                                 strategy_id=self.session_tag,
                             )
                             emer_id = self.broker.place_order(emer_exit)
@@ -579,7 +586,7 @@ class StrategyEngine:
                         quantity=pos.quantity,
                         product=Product.MIS,
                         order_type=OrderType.MARKET,
-                        tag=f"{pos.strategy_tag}_EMERGENCY_UNPROTECTED_EXIT",
+                        tag=make_broker_tag(self.session_tag, pos.symbol, "EMG"),
                         strategy_id=self.session_tag,
                     )
                     flat_id = self.broker.place_order(flat_req)
@@ -608,24 +615,17 @@ class StrategyEngine:
 
                     if target_reached:
                         exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
-                        exit_req = OrderRequest(
-                            symbol=pos.symbol,
-                            side=exit_side,
-                            quantity=pos.quantity,
-                            product=Product.MIS,
-                            order_type=OrderType.MARKET,
-                            price=0.0,
-                            tag=f"{pos.strategy_tag}_TARGET",
-                            strategy_id=self.session_tag,
-                        )
                         # Confirm stop cancellation first before sending market exit
                         stop_filled_during_cancel = False
+                        sl_filled = 0
                         if pos.protective_order_id:
                             try:
                                 self.broker.cancel_order(pos.protective_order_id)
                                 sl_st = self.broker.get_order_status(pos.protective_order_id)
                                 if sl_st and sl_st.status == OrderStatus.COMPLETE:
                                     stop_filled_during_cancel = True
+                                elif sl_st:
+                                    sl_filled = getattr(sl_st, "filled_quantity", 0)
                             except Exception as c_err:
                                 logger.warning("Error cancelling stop before target exit %s: %s", pos.symbol, c_err)
 
@@ -634,6 +634,22 @@ class StrategyEngine:
                             pos.quantity = 0
                             continue
 
+                        remaining_qty = max(0, pos.quantity - int(sl_filled if isinstance(sl_filled, (int, float)) else 0))
+                        if remaining_qty <= 0:
+                            pos.phase = PositionPhase.CLOSED
+                            pos.quantity = 0
+                            continue
+
+                        exit_req = OrderRequest(
+                            symbol=pos.symbol,
+                            side=exit_side,
+                            quantity=remaining_qty,
+                            product=Product.MIS,
+                            order_type=OrderType.MARKET,
+                            price=0.0,
+                            tag=make_broker_tag(self.session_tag, pos.symbol, "TGT"),
+                            strategy_id=self.session_tag,
+                        )
                         exit_order_id = self.broker.place_order(exit_req)
                         pos.exit_order_id = exit_order_id
                         pos.phase = PositionPhase.EXITING
@@ -643,10 +659,16 @@ class StrategyEngine:
                         if exit_state and exit_state.status == OrderStatus.COMPLETE:
                             pos.phase = PositionPhase.CLOSED
                             pos.quantity = 0
-                        elif exit_state and exit_state.filled_quantity > 0:
-                            pos.quantity = max(0, pos.quantity - exit_state.filled_quantity)
+                        elif exit_state and exit_state.pending_quantity > 0:
+                            pos.quantity = exit_state.pending_quantity
+                            pos.phase = PositionPhase.EXITING
+                        elif exit_state and hasattr(exit_state, "request") and exit_state.request and exit_state.request.quantity > 0:
+                            rem = max(0, exit_state.request.quantity - exit_state.filled_quantity)
+                            pos.quantity = rem
                             if pos.quantity == 0:
                                 pos.phase = PositionPhase.CLOSED
+                            else:
+                                pos.phase = PositionPhase.EXITING
                         else:
                             pos.phase = PositionPhase.EXITING
 
@@ -783,6 +805,7 @@ class StrategyEngine:
 
                     broker_action = "NONE"
                     reason_code = "HOLDING_FOR_TARGET"
+                    reason_codes = [reason_code]
                     explanation = f"Holding with structural SL ({pos.current_stop_price:.2f}) towards 2.0R target ({pos.target_price:.2f})"
 
                     if target_lock_r is not None:
@@ -809,8 +832,34 @@ class StrategyEngine:
                                     )
                                     if mod_ok:
                                         mod_st = self.broker.get_order_status(pos.protective_order_id)
-                                        if mod_st and mod_st.status == OrderStatus.TRIGGER_PENDING:
+                                        if mod_st and mod_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
                                             mod_confirmed = True
+                                        elif mod_st and mod_st.status == OrderStatus.COMPLETE:
+                                            # Stop filled during modification
+                                            self.journal.log_event(
+                                                event_type="STOP_LOSS_HIT",
+                                                symbol=pos.symbol,
+                                                side=pos.side.value,
+                                                data={
+                                                    "stop_price": pos.current_stop_price,
+                                                    "sl_order_id": pos.protective_order_id,
+                                                    "fill_price": mod_st.average_price or pos.current_stop_price,
+                                                },
+                                            )
+                                            pos.phase = PositionPhase.CLOSED
+                                            pos.quantity = 0
+                                            decisions.append(
+                                                StrategyDecision(
+                                                    decision=Decision.EXIT,
+                                                    symbol=pos.symbol,
+                                                    side=pos.side,
+                                                    timestamp_ist=now,
+                                                    reason_codes=["STOP_LOSS_FILLED_DURING_MODIFICATION"],
+                                                    explanation=f"Protective SL order {pos.protective_order_id} filled at broker during modification",
+                                                    broker_action="STOP_LOSS_FILLED",
+                                                )
+                                            )
+                                            continue
                                 except Exception as m_err:
                                     logger.error("Failed to modify stop order %s for %s: %s", pos.protective_order_id, pos.symbol, m_err)
                             else:
@@ -842,7 +891,7 @@ class StrategyEngine:
                             symbol=pos.symbol,
                             side=pos.side,
                             timestamp_ist=now,
-                            reason_codes=reason_codes if target_lock_r is not None and valid_move else [reason_code],
+                            reason_codes=reason_codes if (target_lock_r is not None and valid_move and mod_confirmed) else [reason_code],
                             explanation=explanation,
                             open_r=round(open_r, 2),
                             best_favorable_price=pos.best_favorable_price,
@@ -1032,7 +1081,10 @@ class StrategyEngine:
             return decisions
 
         # If already at max simultaneous positions, cannot take new entries
-        active_managed_count = sum(1 for position in open_managed if position.quantity > 0)
+        active_managed_count = sum(
+            1 for p in self.state_machine.positions.values()
+            if p.quantity > 0 or p.phase in (PositionPhase.ENTERING, PositionPhase.OPEN_UNPROTECTED, PositionPhase.EXITING)
+        )
         if active_managed_count >= self.config.limits.max_symbols:
             if not decisions:
                 decisions.append(
@@ -1136,8 +1188,11 @@ class StrategyEngine:
             core_mult = float(radar_cfg.get("core_conviction_multiplier", 1.35))
 
         for sym in symbols:
-            # Skip if already open
-            if any(p.symbol == sym and p.quantity > 0 for p in open_managed):
+            # Skip if already open or in flight
+            if any(
+                p.symbol == sym and (p.quantity > 0 or p.phase in (PositionPhase.ENTERING, PositionPhase.OPEN_UNPROTECTED, PositionPhase.EXITING))
+                for p in self.state_machine.positions.values()
+            ):
                 continue
 
             inst = self.broker.get_instrument_info(sym)
@@ -1207,12 +1262,14 @@ class StrategyEngine:
         max_new = 1
         if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
             max_new = int(self.config.raw_dict.get("risk_management", {}).get("max_new_entries_per_bar", 1))
-        qualified_candidates = qualified_candidates[:max_new]
 
         # Sizing and Risk for qualified candidates
         num_qualified = len(qualified_candidates)
+        entries_submitted = 0
 
         for sym in qualified_candidates:
+            if entries_submitted >= max_new:
+                break
             if len(risk_positions) >= self.config.limits.max_symbols:
                 break
             sig, inst, stock_candles, _ = evaluated_signals[sym]
@@ -1340,7 +1397,7 @@ class StrategyEngine:
             # -------------------------------------------------------------
             # STEP 9 & 10: Proposal Ready & Execution
             # -------------------------------------------------------------
-            tag = f"{self.session_tag}_{sym}_{int(now.timestamp())}"
+            tag = make_broker_tag(self.session_tag, sym, f"E{now.strftime('%H%M')}")
             broker_action = "PLACE_ENTRY_AND_PROTECTION"
 
             entry_req = OrderRequest(
@@ -1440,7 +1497,7 @@ class StrategyEngine:
                         order_type=OrderType.SL,
                         price=limit,
                         trigger_price=trigger,
-                        tag=f"{tag}_SL",
+                        tag=make_broker_tag(self.session_tag, sym, "SL"),
                         strategy_id=self.session_tag,
                     )
                     sl_confirmed = False
@@ -1473,7 +1530,7 @@ class StrategyEngine:
                                 quantity=actual_qty,
                                 product=Product.MIS,
                                 order_type=OrderType.MARKET,
-                                tag=f"{tag}_EMERGENCY_FLATTEN",
+                                tag=make_broker_tag(self.session_tag, sym, "FLT"),
                                 strategy_id=self.session_tag,
                             )
                             emer_flat_id = self.broker.place_order(flat_req)
@@ -1570,6 +1627,9 @@ class StrategyEngine:
                         broker_action=broker_action,
                     )
                 )
+                entries_submitted += 1
+                if entries_submitted >= max_new:
+                    break
             except Exception as e:
                 logger.error("Failed to place order for %s: %s", sym, e)
                 decisions.append(

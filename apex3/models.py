@@ -107,6 +107,24 @@ class OrderRequest:
     strategy_id: str = ""
 
 
+def make_broker_tag(session_tag: str, symbol: str = "", suffix: str = "") -> str:
+    """Generate a Zerodha Kite Connect compliant order tag (strictly <= 20 chars).
+
+    Structure:
+    - session_tag prefix (up to 5 chars, e.g. 'APEX3')
+    - symbol (up to 6 chars, e.g. 'SUNPHA')
+    - suffix (up to 6 chars, e.g. 'E0935', 'SL', 'TGT', 'EMG', 'FLT')
+    Joined by '_' and truncated to at most 20 characters total.
+    Ensures tag.startswith(session_tag_prefix) always matches.
+    """
+    prefix = (session_tag or "APEX3")[:5]
+    sym_short = (symbol or "")[:6]
+    sfx = (suffix or "")[:6]
+    parts = [p for p in (prefix, sym_short, sfx) if p]
+    tag = "_".join(parts)
+    return tag[:20]
+
+
 @dataclass
 class OrderState:
     """Tracked state of an order through its lifecycle.
