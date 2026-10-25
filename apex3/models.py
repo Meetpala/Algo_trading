@@ -95,7 +95,7 @@ class OpeningRange:
 @dataclass
 class OrderRequest:
     """Request to place an order. Not yet sent to broker."""
-    symbol: str
+    symbol: str = ""
     exchange: str = "NSE"
     side: Side = Side.BUY
     quantity: int = 0

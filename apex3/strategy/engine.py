@@ -324,8 +324,9 @@ class StrategyEngine:
                         sl_order_id = self.broker.place_order(sl_req)
                         ent_pos.protective_order_id = sl_order_id
                         sl_check = self.broker.get_order_status(sl_order_id)
+                        sl_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
                         # Treat ONLY TRIGGER_PENDING with exact matching quantity as protective
-                        if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_check.quantity == ent_pos.quantity:
+                        if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_qty == ent_pos.quantity:
                             ent_pos.phase = PositionPhase.OPEN_PROTECTED
                             sl_confirmed = True
                     except Exception as sl_err:
@@ -412,7 +413,8 @@ class StrategyEngine:
                                 sl_order_id = self.broker.place_order(sl_req)
                                 ent_pos.protective_order_id = sl_order_id
                                 sl_check = self.broker.get_order_status(sl_order_id)
-                                if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_check.quantity == ent_pos.quantity:
+                                sl_check_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
+                                if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_check_qty == ent_pos.quantity:
                                     ent_pos.phase = PositionPhase.OPEN_PROTECTED
                                     sl_confirmed = True
                             except Exception as sl_err:
@@ -1447,7 +1449,8 @@ class StrategyEngine:
                         sl_order_id = self.broker.place_order(sl_req)
                         managed.protective_order_id = sl_order_id
                         sl_state = self.broker.get_order_status(sl_order_id)
-                        if sl_state and sl_state.status == OrderStatus.TRIGGER_PENDING and sl_state.quantity == actual_qty:
+                        sl_qty = getattr(sl_state, "quantity", None) or getattr(getattr(sl_state, "request", None), "quantity", 0) or getattr(sl_state, "pending_quantity", 0)
+                        if sl_state and sl_state.status == OrderStatus.TRIGGER_PENDING and sl_qty == actual_qty:
                             managed.phase = PositionPhase.OPEN_PROTECTED
                             sl_confirmed = True
                         else:
