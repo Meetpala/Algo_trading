@@ -627,11 +627,8 @@ def test_target_and_gap_exit_wait_for_stop_cancellation_and_deduct_partial_fills
     assert pos_a.quantity == 40
 
     # --- Part B: Gap Exit with partial fill on SL ---
-    engine.state_machine.positions.clear()
-    mock_broker.reset_mock()
-    mock_broker.is_session_valid.return_value = True
-
-    pos_b = engine.state_machine.get_or_create_position("TATASTEEL")
+    engine_b = StrategyEngine(cfg, mock_broker, mock_journal)
+    pos_b = engine_b.state_machine.get_or_create_position("TATASTEEL")
     pos_b.side = Side.BUY
     pos_b.quantity = 50
     pos_b.average_entry = 155.0
@@ -640,6 +637,9 @@ def test_target_and_gap_exit_wait_for_stop_cancellation_and_deduct_partial_fills
     pos_b.phase = PositionPhase.OPEN_PROTECTED
     pos_b.protective_order_id = "SL_TATA_1"
 
+    mock_broker.reset_mock()
+    mock_broker.is_session_valid.return_value = True
+    mock_broker.cancel_order.return_value = True
     mock_broker.get_positions.return_value = [PositionState(symbol="TATASTEEL", quantity=50, average_entry=155.0)]
     mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TATASTEEL", exchange="NSE", lot_size=1, tick_size=0.05)
     # Market gapped down to 140.0 through limit price 150.0
@@ -657,11 +657,16 @@ def test_target_and_gap_exit_wait_for_stop_cancellation_and_deduct_partial_fills
                 # After cancel, broker reports 12 shares were filled, remaining cancelled
                 return OrderState(order_id="SL_TATA_1", status=OrderStatus.CANCELLED, filled_quantity=12, pending_quantity=0)
             # Before cancel, order triggered and resting OPEN on book
-            return OrderState(order_id="SL_TATA_1", status=OrderStatus.OPEN, price=150.0, pending_quantity=50)
+            return OrderState(
+                order_id="SL_TATA_1",
+                request=OrderRequest(symbol="TATASTEEL", price=150.0, trigger_price=150.0),
+                status=OrderStatus.OPEN,
+                pending_quantity=50,
+            )
         return None
     mock_broker.get_order_status.side_effect = sl_order_status
 
-    decisions_b = engine.evaluate_step(now)
+    decisions_b = engine_b.evaluate_step(now)
     # Gap exit should be dispatched for remaining quantity strictly: 50 - 12 = 38 shares
     assert len(placed_orders) == 1, "Should place emergency gap exit order"
     assert placed_orders[0].quantity == 38, f"Emergency exit quantity should be 38 (50 - 12), got {placed_orders[0].quantity}"
@@ -703,9 +708,8 @@ def test_signal_fails_closed_on_missing_quote_timestamp():
         symbol="TRENT",
         high=1005.0,
         low=995.0,
-        range_size=10.0,
-        session_date=now.date(),
         is_complete=True,
+        candle_count=3,
     )
 
     eval_res = evaluate_signal(

@@ -532,7 +532,11 @@ class StrategyEngine:
                         # Order triggered but resting as unfilled limit order on the book
                         q_now = self.broker.get_quote(pos.symbol)
                         px = q_now.last_price if q_now and q_now.last_price > 0 else 0.0
-                        limit_px = sl_order.price if sl_order.price > 0 else pos.current_stop_price
+                        limit_px = (
+                            sl_order.request.price
+                            if (getattr(sl_order, "request", None) and sl_order.request.price > 0)
+                            else (getattr(sl_order, "price", 0.0) or pos.current_stop_price)
+                        )
                         is_gapped = False
                         if pos.side == Side.BUY and px > 0 and px < limit_px * 0.999:
                             is_gapped = True
