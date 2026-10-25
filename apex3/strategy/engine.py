@@ -1169,7 +1169,10 @@ class StrategyEngine:
             return decisions
 
         # Slot-2 Lock Gate: Only allow a 2nd position if Slot 1 is already in profit >= req_r (if req_r > 0)
-        active_positions = [p for p in open_managed if p.quantity > 0]
+        active_positions = [
+            p for p in self.state_machine.positions.values()
+            if p.quantity > 0 or p.phase in (PositionPhase.ENTERING, PositionPhase.OPEN_UNPROTECTED)
+        ]
         if len(active_positions) == 1:
             risk_raw = self.config.raw_dict.get("risk_management", {}) if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) else {}
             req_r = float(risk_raw.get("second_slot_requires_slot1_profit_r", 0.0))
@@ -1200,7 +1203,7 @@ class StrategyEngine:
             # In opening range build phase - update ranges
             session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
             for sym in symbols:
-                candles_0915_0930 = self.broker.get_historical(sym, "5minute", None, None)
+                candles_0915_0930 = self.broker.get_historical(sym, "5minute", hist_from_5m, now)
                 self.opening_ranges[sym] = build_opening_range(sym, candles_0915_0930, session_date=session_date)
 
             return [
@@ -1228,7 +1231,7 @@ class StrategyEngine:
         # -------------------------------------------------------------
         # STEP 4: Market Regime Filter Gate
         # -------------------------------------------------------------
-        bench_candles = self.broker.get_historical(self.config.regime.benchmark_symbol, "5minute", None, None)
+        bench_candles = self.broker.get_historical(self.config.regime.benchmark_symbol, "5minute", hist_from_5m, now)
         bench_quote = self.broker.get_quote(self.config.regime.benchmark_symbol)
         regime_eval = evaluate_market_regime(bench_candles, self.config.regime, bench_quote)
 
@@ -1268,7 +1271,7 @@ class StrategyEngine:
 
             inst = self.broker.get_instrument_info(sym)
             quote = self.broker.get_quote(sym)
-            stock_candles = self.broker.get_historical(sym, "5minute", None, None)
+            stock_candles = self.broker.get_historical(sym, "5minute", hist_from_5m, now)
 
             # Build/retrieve opening range
             or_range = self.opening_ranges.get(sym)
@@ -1323,12 +1326,16 @@ class StrategyEngine:
         qualified_candidates.sort(key=compute_conviction, reverse=True)
 
         # Completed-bar deduplication: at most 1 entry per 5-minute candle
-        if self._last_entry_bar_timestamp is not None and evaluated_signals:
-            first_sym = next(iter(evaluated_signals))
-            _, _, st_candles, _ = evaluated_signals[first_sym]
-            if st_candles and st_candles[-1].timestamp == self._last_entry_bar_timestamp:
-                logger.debug("Bar %s already has an entry taken. Skipping further entries on this bar.", self._last_entry_bar_timestamp)
-                qualified_candidates = []
+        if self._last_entry_bar_timestamp is not None:
+            qualified_candidates = [
+                sym for sym in qualified_candidates
+                if not (
+                    evaluated_signals.get(sym)
+                    and len(evaluated_signals[sym]) > 2
+                    and evaluated_signals[sym][2]
+                    and evaluated_signals[sym][2][-1].timestamp == self._last_entry_bar_timestamp
+                )
+            ]
 
         max_new = 1
         if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict):
@@ -1344,6 +1351,9 @@ class StrategyEngine:
             if len(risk_positions) >= self.config.limits.max_symbols:
                 break
             sig, inst, stock_candles, _ = evaluated_signals[sym]
+            if self._last_entry_bar_timestamp is not None and stock_candles and stock_candles[-1].timestamp == self._last_entry_bar_timestamp:
+                logger.debug("Bar %s already has an entry taken for %s. Skipping.", self._last_entry_bar_timestamp, sym)
+                continue
             sig_price = sig.signal_price
             side = sig.side
 
@@ -1486,6 +1496,7 @@ class StrategyEngine:
                 entry_order_id = self.broker.place_order(entry_req)
                 entry_state = self.broker.get_order_status(entry_order_id)
                 if entry_state and entry_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
+                    self._last_entry_bar_timestamp = None
                     rej_msg = getattr(entry_state, "rejection_reason", None) or getattr(entry_state, "status_message", "Order rejected")
                     self.journal.log_warning(
                         severity="ERROR",
@@ -1587,6 +1598,7 @@ class StrategyEngine:
                         logger.error("Failed to place protective stop for %s: %s", sym, sl_err)
 
                     if not sl_confirmed:
+                        self._last_entry_bar_timestamp = None
                         # Recovery path: liquidate filled position immediately to prevent naked risk
                         logger.critical("EMERGENCY: Protective stop placement failed/unconfirmed for %s! Liquidating immediately.", sym)
                         self.journal.log_warning(

@@ -22,6 +22,7 @@ from apex3.models import (
     Decision,
     InstrumentInfo,
     MarginInfo,
+    OpeningRange,
     OrderMarginEstimate,
     OrderRequest,
     OrderState,
@@ -36,7 +37,7 @@ from apex3.strategy.regime import MarketRegime
 from apex3.reconciliation.reconciler import Reconciler
 from apex3.reconciliation.state_machine import PositionPhase, StateMachine
 from apex3.strategy.engine import StrategyEngine
-from apex3.strategy.signal import SignalEvaluation, GateResult, GateStatus
+from apex3.strategy.signal import SignalEvaluation, GateResult, GateStatus, evaluate_signal
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -538,4 +539,190 @@ def test_step11_fee_lock_no_unbound_local_error_when_modify_fails():
     assert len(decisions) >= 1
     assert decisions[0].decision == Decision.MANAGE
     assert pos.current_stop_price == 645.0  # Internal stop not moved because modification unconfirmed
+
+
+def test_reconciler_step3_does_not_swallow_stop_loss_event():
+    """When broker position drops to quantity==0 because protective SL filled, Step 3 does not wipe it before Step 11 logs STOP_LOSS_HIT."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 0, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # Position in OPEN_PROTECTED state with resting stop order
+    pos = engine.state_machine.get_or_create_position("TRENT")
+    pos.side = Side.BUY
+    pos.quantity = 20
+    pos.average_entry = 1000.0
+    pos.initial_stop_price = 993.0
+    pos.current_stop_price = 993.0
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.protective_order_id = "SL_TRENT_1"
+
+    # Broker position has dropped to 0 (stop filled at Zerodha)
+    mock_broker.get_positions.return_value = [PositionState(symbol="TRENT", quantity=0)]
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05)
+    mock_broker.get_quote.return_value = Quote(symbol="TRENT", exchange="NSE", last_price=992.5, bid=992.4, ask=992.6, volume=20000, timestamp=now, is_fresh=True)
+
+    # Stop order filled with COMPLETE status
+    mock_broker.get_order_status.return_value = OrderState(
+        order_id="SL_TRENT_1",
+        status=OrderStatus.COMPLETE,
+        filled_quantity=20,
+        average_price=992.8,
+    )
+
+    decisions = engine.evaluate_step(now)
+
+    # Must NOT be swallowed by Step 3; Step 11 must process the fill cleanly
+    sl_decisions = [d for d in decisions if d.decision == Decision.EXIT and "STOP_LOSS_FILLED_AT_BROKER" in d.reason_codes]
+    assert len(sl_decisions) == 1, "Step 11 should return EXIT with STOP_LOSS_FILLED_AT_BROKER"
+
+    # Journal must log STOP_LOSS_HIT event with fill_price
+    sl_hit_logs = [call for call in mock_journal.log_event.call_args_list if call.kwargs.get("event_type") == "STOP_LOSS_HIT"]
+    assert len(sl_hit_logs) == 1, "Journal must log STOP_LOSS_HIT event"
+    assert sl_hit_logs[0].kwargs.get("data", {}).get("fill_price") == 992.8
+
+    # Position is now cleanly closed and flat
+    assert pos.phase == PositionPhase.CLOSED
+    assert pos.quantity == 0
+
+
+def test_target_and_gap_exit_wait_for_stop_cancellation_and_deduct_partial_fills():
+    """Target exit and Gap exit do not place market exit while SL is still TRIGGER_PENDING/OPEN, and Gap exit deducts partial SL fills."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 15, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # --- Part A: Target Exit with cancellation in-flight (TRIGGER_PENDING) ---
+    pos_a = engine.state_machine.get_or_create_position("HINDALCO")
+    pos_a.side = Side.BUY
+    pos_a.quantity = 40
+    pos_a.average_entry = 650.0
+    pos_a.initial_stop_price = 645.0
+    pos_a.current_stop_price = 645.0
+    pos_a.target_price = 660.0
+    pos_a.phase = PositionPhase.OPEN_PROTECTED
+    pos_a.protective_order_id = "SL_HIND_1"
+
+    mock_broker.get_positions.return_value = [PositionState(symbol="HINDALCO", quantity=40, average_entry=650.0)]
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="HINDALCO", exchange="NSE", lot_size=1, tick_size=0.05)
+    mock_broker.get_quote.return_value = Quote(symbol="HINDALCO", exchange="NSE", last_price=662.0, bid=661.9, ask=662.1, volume=50000, timestamp=now, is_fresh=True)
+    # SL cancellation returns TRIGGER_PENDING (exchange cancellation in-flight)
+    mock_broker.get_order_status.return_value = OrderState(order_id="SL_HIND_1", status=OrderStatus.TRIGGER_PENDING, pending_quantity=40)
+    mock_broker.cancel_order.return_value = True
+
+    decisions = engine.evaluate_step(now)
+    # Market exit order must NOT have been placed while SL was TRIGGER_PENDING
+    mock_broker.place_order.assert_not_called()
+    assert pos_a.phase == PositionPhase.OPEN_PROTECTED
+    assert pos_a.quantity == 40
+
+    # --- Part B: Gap Exit with partial fill on SL ---
+    engine.state_machine.positions.clear()
+    mock_broker.reset_mock()
+    mock_broker.is_session_valid.return_value = True
+
+    pos_b = engine.state_machine.get_or_create_position("TATASTEEL")
+    pos_b.side = Side.BUY
+    pos_b.quantity = 50
+    pos_b.average_entry = 155.0
+    pos_b.initial_stop_price = 150.0
+    pos_b.current_stop_price = 150.0
+    pos_b.phase = PositionPhase.OPEN_PROTECTED
+    pos_b.protective_order_id = "SL_TATA_1"
+
+    mock_broker.get_positions.return_value = [PositionState(symbol="TATASTEEL", quantity=50, average_entry=155.0)]
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TATASTEEL", exchange="NSE", lot_size=1, tick_size=0.05)
+    # Market gapped down to 140.0 through limit price 150.0
+    mock_broker.get_quote.return_value = Quote(symbol="TATASTEEL", exchange="NSE", last_price=140.0, bid=139.9, ask=140.1, volume=50000, timestamp=now, is_fresh=True)
+
+    placed_orders = []
+    def on_place(req):
+        placed_orders.append(req)
+        return "EXIT_GAP_1"
+    mock_broker.place_order.side_effect = on_place
+
+    def sl_order_status(ord_id):
+        if ord_id == "SL_TATA_1":
+            if mock_broker.cancel_order.called:
+                # After cancel, broker reports 12 shares were filled, remaining cancelled
+                return OrderState(order_id="SL_TATA_1", status=OrderStatus.CANCELLED, filled_quantity=12, pending_quantity=0)
+            # Before cancel, order triggered and resting OPEN on book
+            return OrderState(order_id="SL_TATA_1", status=OrderStatus.OPEN, price=150.0, pending_quantity=50)
+        return None
+    mock_broker.get_order_status.side_effect = sl_order_status
+
+    decisions_b = engine.evaluate_step(now)
+    # Gap exit should be dispatched for remaining quantity strictly: 50 - 12 = 38 shares
+    assert len(placed_orders) == 1, "Should place emergency gap exit order"
+    assert placed_orders[0].quantity == 38, f"Emergency exit quantity should be 38 (50 - 12), got {placed_orders[0].quantity}"
+    assert placed_orders[0].order_type == OrderType.MARKET
+    gap_decisions = [d for d in decisions_b if "STOP_TRIGGERED_UNFILLED_GAP_EXIT" in d.reason_codes]
+    assert len(gap_decisions) == 1
+
+
+def test_signal_fails_closed_on_missing_quote_timestamp():
+    """evaluate_signal fails closed with Decision.WAIT and ['STALE_QUOTE', 'MISSING_QUOTE_TIMESTAMP'] when quote.timestamp is None."""
+    now = datetime(2026, 3, 20, 10, 0, tzinfo=IST)
+    cfg = AppConfig()
+
+    inst = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05)
+    quote = Quote(
+        symbol="TRENT",
+        exchange="NSE",
+        last_price=1000.0,
+        bid=999.8,
+        ask=1000.2,
+        volume=10000,
+        timestamp=None,  # Missing timestamp!
+        is_fresh=True,
+    )
+
+    candles = [
+        Candle(
+            timestamp=now - timedelta(minutes=5 * (20 - i)),
+            open=1000.0,
+            high=1002.0,
+            low=998.0,
+            close=1000.0,
+            volume=50000,
+            is_complete=True,
+        )
+        for i in range(20)
+    ]
+    or_range = OpeningRange(
+        symbol="TRENT",
+        high=1005.0,
+        low=995.0,
+        range_size=10.0,
+        session_date=now.date(),
+        is_complete=True,
+    )
+
+    eval_res = evaluate_signal(
+        symbol="TRENT",
+        stock_candles_5m=candles,
+        benchmark_candles_5m=candles,
+        opening_range=or_range,
+        market_regime=MarketRegime.BULLISH,
+        instrument=inst,
+        quote=quote,
+        config=cfg.signal,
+        is_entry_window=True,
+    )
+
+    assert eval_res.decision == Decision.WAIT
+    assert "STALE_QUOTE" in eval_res.reason_codes
+    assert "MISSING_QUOTE_TIMESTAMP" in eval_res.reason_codes
+    missing_gates = [g for g in eval_res.gates if g.status == GateStatus.FAIL and g.data.get("code") == "MISSING_QUOTE_TIMESTAMP"]
+    assert len(missing_gates) == 1
+
 
