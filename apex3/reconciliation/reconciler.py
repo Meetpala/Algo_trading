@@ -100,8 +100,13 @@ class Reconciler:
                 # Clear corresponding internal managed position if present
                 managed = self.sm.positions.get(bp.symbol)
                 if managed and managed.quantity > 0:
-                    managed.quantity = 0
-                    managed.phase = PositionPhase.CLOSED
+                    if managed.phase in (PositionPhase.OPEN_PROTECTED, PositionPhase.EXITING) and (managed.protective_order_id or managed.exit_order_id):
+                        # Do not clear prematurely: let Step 11 in engine poll the protective or exit order,
+                        # log STOP_LOSS_HIT or EXIT_ORDER_COMPLETED to journal, and close cleanly.
+                        pass
+                    else:
+                        managed.quantity = 0
+                        managed.phase = PositionPhase.CLOSED
                 continue
 
             # Check if this position is recognized by internal state

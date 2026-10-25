@@ -464,11 +464,31 @@ class PaperBroker(BrokerInterface):
             logger.warning("No fixture data for %s", symbol)
             return []
 
+        def _is_between(c_ts: datetime, f_dt: datetime | None, t_dt: datetime | None) -> bool:
+            if f_dt is not None:
+                ts_cmp = c_ts
+                f_cmp = f_dt
+                if ts_cmp.tzinfo is not None and f_cmp.tzinfo is None:
+                    f_cmp = f_cmp.replace(tzinfo=ts_cmp.tzinfo)
+                elif ts_cmp.tzinfo is None and f_cmp.tzinfo is not None:
+                    ts_cmp = ts_cmp.replace(tzinfo=f_cmp.tzinfo)
+                if f_cmp > ts_cmp:
+                    return False
+            if t_dt is not None:
+                ts_cmp = c_ts
+                t_cmp = t_dt
+                if ts_cmp.tzinfo is not None and t_cmp.tzinfo is None:
+                    t_cmp = t_cmp.replace(tzinfo=ts_cmp.tzinfo)
+                elif ts_cmp.tzinfo is None and t_cmp.tzinfo is not None:
+                    ts_cmp = ts_cmp.replace(tzinfo=t_cmp.tzinfo)
+                if ts_cmp > t_cmp:
+                    return False
+            return True
+
         return [
             c
             for c in self._fixture_candles[symbol]
-            if (from_dt is None or from_dt <= c.timestamp)
-            and (to_dt is None or c.timestamp <= to_dt)
+            if _is_between(c.timestamp, from_dt, to_dt)
         ]
 
     def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:

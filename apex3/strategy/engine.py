@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -159,6 +159,8 @@ class StrategyEngine:
     def _evaluate_step_locked(self, current_time: Optional[datetime] = None) -> list[StrategyDecision]:
         """Internal execution pipeline under execution lock."""
         now = current_time or self.scheduler.now_ist()
+        hist_from_5m = now - timedelta(days=25)
+        hist_from_1m = now - timedelta(days=5)
         session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
         if self._current_session_date != session_date:
             self._current_session_date = session_date
@@ -345,6 +347,7 @@ class StrategyEngine:
                             explanation=f"Entry filled for {ent_pos.symbol} (qty={ent_pos.quantity}); protective SL placed & confirmed",
                         )
                     else:
+                        self._last_entry_bar_timestamp = None
                         logger.critical("EMERGENCY: Protective stop unconfirmed for filled entry in %s. Liquidating immediately.", ent_pos.symbol)
                         self.journal.log_warning(
                             severity="EMERGENCY",
@@ -372,6 +375,7 @@ class StrategyEngine:
                 elif entry_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
                     ent_pos.phase = PositionPhase.FLAT
                     ent_pos.quantity = 0
+                    self._last_entry_bar_timestamp = None
                 else:
                     timeout_sec = getattr(getattr(self.config, "entry", None), "unfilled_timeout_sec", 30)
                     if ent_pos.entry_timestamp and (now - ent_pos.entry_timestamp).total_seconds() > timeout_sec:
@@ -422,6 +426,7 @@ class StrategyEngine:
                                 logger.error("Failed to place stop on timeout fill %s: %s", ent_pos.symbol, sl_err)
 
                             if not sl_confirmed:
+                                self._last_entry_bar_timestamp = None
                                 logger.critical("EMERGENCY: Protective stop unconfirmed for timeout fill in %s. Liquidating immediately.", ent_pos.symbol)
                                 try:
                                     emer_exit = OrderRequest(
@@ -444,6 +449,7 @@ class StrategyEngine:
                         else:
                             ent_pos.phase = PositionPhase.FLAT
                             ent_pos.quantity = 0
+                            self._last_entry_bar_timestamp = None
             except Exception as exc:
                 logger.error("Error reconciling entering position %s: %s", ent_pos.symbol, exc)
 
@@ -539,15 +545,60 @@ class StrategyEngine:
                                 pos.protective_order_id,
                                 px,
                             )
+                            sl_st = None
                             try:
                                 self.broker.cancel_order(pos.protective_order_id)
-                            except Exception:
-                                pass
+                                sl_st = self.broker.get_order_status(pos.protective_order_id)
+                            except Exception as c_err:
+                                logger.warning("Error cancelling stop during gap exit %s: %s", pos.symbol, c_err)
+
+                            if sl_st and sl_st.status == OrderStatus.COMPLETE:
+                                self.journal.log_event(
+                                    event_type="STOP_LOSS_HIT",
+                                    symbol=pos.symbol,
+                                    side=pos.side.value,
+                                    data={
+                                        "stop_price": pos.current_stop_price,
+                                        "sl_order_id": pos.protective_order_id,
+                                        "fill_price": sl_st.average_price or pos.current_stop_price,
+                                    },
+                                )
+                                pos.phase = PositionPhase.CLOSED
+                                pos.quantity = 0
+                                decisions.append(
+                                    StrategyDecision(
+                                        decision=Decision.EXIT,
+                                        symbol=pos.symbol,
+                                        side=pos.side,
+                                        timestamp_ist=now,
+                                        reason_codes=["STOP_LOSS_FILLED_AT_BROKER"],
+                                        explanation=f"Protective SL order {pos.protective_order_id} filled at broker during gap cancel",
+                                        broker_action="STOP_LOSS_FILLED",
+                                    )
+                                )
+                                continue
+
+                            if sl_st and sl_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
+                                logger.warning(
+                                    "Protective SL order %s for %s cancellation still pending (%s); retrying gap exit next tick",
+                                    pos.protective_order_id,
+                                    pos.symbol,
+                                    sl_st.status.value,
+                                )
+                                continue
+
+                            sl_filled = getattr(sl_st, "filled_quantity", 0) if sl_st else 0
+                            rem_qty = max(0, pos.quantity - int(sl_filled if isinstance(sl_filled, (int, float)) else 0))
+                            if rem_qty <= 0:
+                                pos.phase = PositionPhase.CLOSED
+                                pos.quantity = 0
+                                continue
+
                             exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
                             emer_exit = OrderRequest(
                                 symbol=pos.symbol,
                                 side=exit_side,
-                                quantity=pos.quantity,
+                                quantity=rem_qty,
                                 product=Product.MIS,
                                 order_type=OrderType.MARKET,
                                 tag=make_broker_tag(self.session_tag, pos.symbol, "EMG"),
@@ -563,7 +614,7 @@ class StrategyEngine:
                                     side=pos.side,
                                     timestamp_ist=now,
                                     reason_codes=["STOP_TRIGGERED_UNFILLED_GAP_EXIT"],
-                                    explanation=f"Protective SL limit order {pos.protective_order_id} triggered but unfilled as price gapped to {px}. Emergency market exit dispatched.",
+                                    explanation=f"Protective SL limit order {pos.protective_order_id} triggered but unfilled as price gapped to {px}. Emergency market exit dispatched for {rem_qty} shares.",
                                     broker_action="EMERGENCY_GAP_EXIT",
                                 )
                             )
@@ -618,6 +669,7 @@ class StrategyEngine:
                         # Confirm stop cancellation first before sending market exit
                         stop_filled_during_cancel = False
                         sl_filled = 0
+                        sl_st = None
                         if pos.protective_order_id:
                             try:
                                 self.broker.cancel_order(pos.protective_order_id)
@@ -630,8 +682,27 @@ class StrategyEngine:
                                 logger.warning("Error cancelling stop before target exit %s: %s", pos.symbol, c_err)
 
                         if stop_filled_during_cancel:
+                            self.journal.log_event(
+                                event_type="STOP_LOSS_HIT",
+                                symbol=pos.symbol,
+                                side=pos.side.value,
+                                data={
+                                    "stop_price": pos.current_stop_price,
+                                    "sl_order_id": pos.protective_order_id,
+                                    "fill_price": sl_st.average_price or pos.current_stop_price if sl_st else pos.current_stop_price,
+                                },
+                            )
                             pos.phase = PositionPhase.CLOSED
                             pos.quantity = 0
+                            continue
+
+                        if sl_st and sl_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
+                            logger.warning(
+                                "Protective SL order %s for %s cancellation still pending (%s); deferring target exit to next cycle",
+                                pos.protective_order_id,
+                                pos.symbol,
+                                sl_st.status.value,
+                            )
                             continue
 
                         remaining_qty = max(0, pos.quantity - int(sl_filled if isinstance(sl_filled, (int, float)) else 0))
@@ -699,8 +770,8 @@ class StrategyEngine:
 
                 # 2. Trailing Stop Management (active only when trail_enabled is True)
                 if self.config.stops.trail_enabled:
-                    candles_5m = self.broker.get_historical(pos.symbol, "5minute", None, None)
-                    candles_1m = self.broker.get_historical(pos.symbol, "minute", None, None)
+                    candles_5m = self.broker.get_historical(pos.symbol, "5minute", hist_from_5m, now)
+                    candles_1m = self.broker.get_historical(pos.symbol, "minute", hist_from_1m, now)
 
                     atr_series = compute_atr(
                         [c.high for c in candles_5m],

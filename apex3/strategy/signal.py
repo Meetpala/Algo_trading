@@ -258,9 +258,26 @@ def evaluate_signal(
             explanation="Quote data exceeds staleness threshold or lacks depth",
         )
 
+    if quote.timestamp is None:
+        gates.append(
+            GateResult(
+                name="QUOTE_FRESHNESS",
+                status=GateStatus.FAIL,
+                reason="Quote source timestamp is missing; failing closed",
+                data={"code": "MISSING_QUOTE_TIMESTAMP"},
+            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["STALE_QUOTE", "MISSING_QUOTE_TIMESTAMP"],
+            explanation="Live quote timestamp required for exchange clock validation",
+        )
+
     # Validate source quote timestamp age against exchange clock
     now_ist = datetime.now(IST)
-    q_ts = (quote.timestamp if quote.timestamp.tzinfo else quote.timestamp.replace(tzinfo=IST)) if quote.timestamp else now_ist
+    q_ts = quote.timestamp if quote.timestamp.tzinfo else quote.timestamp.replace(tzinfo=IST)
     eval_clock = now_ist if (now_ist.date() == q_ts.date()) else (latest_bar.timestamp if latest_bar.timestamp.tzinfo else latest_bar.timestamp.replace(tzinfo=IST))
     age_sec = abs((eval_clock - q_ts).total_seconds())
     if age_sec > 15.0:
