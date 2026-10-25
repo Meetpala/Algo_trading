@@ -317,7 +317,7 @@ def size_position(
         while q_final > 0:
             stop_exit_charges = calculate_zerodha_intraday_charges(entry_price, stop_price, q_final)
             total_realized_loss = (q_final * per_share_risk) + stop_exit_charges
-            if total_realized_loss <= trade_risk_rupees or q_final <= lot_size:
+            if total_realized_loss <= trade_risk_rupees:
                 break
             q_final -= lot_size
 
@@ -341,11 +341,11 @@ def size_position(
             gate=GateResult(
                 name="SIZING_QUANTITY",
                 status=GateStatus.FAIL,
-                reason=f"Calculated share quantity is 0 (q_notional={q_notional}, q_risk={q_risk})",
+                reason=f"Risk constraints (stop-loss + statutory friction) exceed risk cap ₹{trade_risk_rupees:.2f} even at minimum lot {lot_size}",
                 data={"q_notional": q_notional, "q_risk": q_risk, "q_margin": q_margin},
             ),
-            rejection_code="ZERO_QUANTITY",
-            rejection_reason="Risk or margin constraints resulted in 0 shares",
+            rejection_code="EXCEEDED_NET_RISK_CAP",
+            rejection_reason=f"Total stop-loss risk with statutory charges exceeds ₹{trade_risk_rupees:.2f}",
         )
 
     # Gate: Reject trade if Zerodha charges consume > 18% of expected 2.0R gross profit
@@ -381,7 +381,8 @@ def size_position(
         )
 
     notional_value = q_final * entry_price
-    actual_trade_risk = q_final * per_share_risk
+    stop_exit_charges = calculate_zerodha_intraday_charges(entry_price, stop_price, q_final)
+    actual_trade_risk = (q_final * per_share_risk) + stop_exit_charges
 
     return SizingResult(
         symbol=symbol,
@@ -402,7 +403,7 @@ def size_position(
         gate=GateResult(
             name="SIZING_QUANTITY",
             status=GateStatus.PASS,
-            reason=f"Sized {q_final} shares (Notional: ₹{notional_value:,.2f}, Risk: ₹{actual_trade_risk:,.2f})",
+            reason=f"Sized {q_final} shares (Notional: ₹{notional_value:,.2f}, Realized Stop Risk: ₹{actual_trade_risk:,.2f})",
             data={"quantity": q_final, "notional": notional_value, "risk": actual_trade_risk},
         ),
     )

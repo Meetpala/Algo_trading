@@ -88,15 +88,57 @@ class Reconciler:
         unknown_symbols: list[str] = []
         open_strategy_count = 0
 
+        # Query broker orders to support restart recovery of strategy positions
+        try:
+            broker_orders = self.broker.get_orders()
+        except Exception:
+            broker_orders = []
+
         for bp in broker_positions:
             if bp.quantity == 0:
+                # Clear corresponding internal managed position if present
+                managed = self.sm.positions.get(bp.symbol)
+                if managed and managed.quantity > 0:
+                    managed.quantity = 0
+                    managed.phase = PositionPhase.CLOSED
                 continue
 
             # Check if this position is recognized by internal state
             pos = self.sm.positions.get(bp.symbol)
-            if pos is None or pos.phase == PositionPhase.FLAT:
-                # This is an unknown / manual position
-                unknown_symbols.append(bp.symbol)
+            if pos is None or pos.phase in (PositionPhase.FLAT, PositionPhase.CLOSED):
+                # Attempt restart recovery: check if broker orders match this strategy session
+                matching_orders = [
+                    o for o in broker_orders
+                    if getattr(o, "request", None) and o.request.symbol == bp.symbol
+                    and self.sm.is_strategy_order(o.request.tag)
+                ]
+                if matching_orders:
+                    # Restore strategy position
+                    pos = self.sm.get_or_create_position(bp.symbol)
+                    pos.symbol = bp.symbol
+                    pos.quantity = bp.quantity
+                    pos.side = getattr(bp, "side", Side.BUY)
+                    pos.average_entry = bp.average_entry
+                    pos.current_stop_price = bp.protective_stop_price or 0.0
+
+                    # Reconnect resting protective stop order if present
+                    matching_stops = [
+                        o for o in matching_orders
+                        if o.request.order_type == OrderType.SL
+                        and o.status == OrderStatus.TRIGGER_PENDING
+                    ]
+                    if matching_stops:
+                        pos.protective_order_id = matching_stops[0].order_id
+                        pos.current_stop_price = matching_stops[0].request.trigger_price or matching_stops[0].request.price
+                        pos.phase = PositionPhase.OPEN_PROTECTED
+                        logger.info("Restored active strategy position %s (qty=%d) with stop %s on restart", bp.symbol, bp.quantity, pos.protective_order_id)
+                    else:
+                        pos.phase = PositionPhase.OPEN_UNPROTECTED
+                        logger.warning("Restored strategy position %s (qty=%d) on restart, but resting SL order was not found", bp.symbol, bp.quantity)
+                    open_strategy_count += 1
+                else:
+                    # Foreign / manual position
+                    unknown_symbols.append(bp.symbol)
             else:
                 if pos.quantity != bp.quantity:
                     pos.quantity = bp.quantity
@@ -130,83 +172,98 @@ class Reconciler:
         )
 
     def verify_protective_stops(self) -> list[str]:
-        """Verify that every open strategy position has an active protective stop.
-
-        Returns list of symbols that are OPEN but UNPROTECTED.
-        """
+        """Verify that every open strategy position has an active broker-confirmed protective stop."""
         unprotected: list[str] = []
+        try:
+            orders = {o.order_id: o for o in self.broker.get_orders()}
+        except Exception as e:
+            logger.error("Could not fetch orders to verify protective stops: %s", e)
+            orders = {}
+
         for symbol, pos in self.sm.positions.items():
             if pos.quantity > 0:
-                if not pos.protective_order_id or pos.phase != PositionPhase.OPEN_PROTECTED:
+                is_covered = False
+                if pos.protective_order_id and pos.protective_order_id in orders:
+                    broker_sl = orders[pos.protective_order_id]
+                    expected_exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
+                    # Protective stop must be TRIGGER_PENDING, correctly sized, and correct exit side
+                    if (
+                        broker_sl.status == OrderStatus.TRIGGER_PENDING
+                        and broker_sl.request.quantity == pos.quantity
+                        and broker_sl.request.side == expected_exit_side
+                    ):
+                        is_covered = True
+                        pos.phase = PositionPhase.OPEN_PROTECTED
+
+                if not is_covered:
                     unprotected.append(symbol)
                     self.journal.log_warning(
                         severity="EMERGENCY",
                         code="UNPROTECTED_POSITION",
-                        message=f"Position in {symbol} (qty={pos.quantity}) lacks verified protective stop!",
-                        data={"symbol": symbol, "quantity": pos.quantity},
+                        message=f"Position in {symbol} (qty={pos.quantity}) lacks verified broker-confirmed protective stop!",
+                        data={"symbol": symbol, "quantity": pos.quantity, "protective_order_id": pos.protective_order_id},
                     )
         return unprotected
 
-    def execute_flatten_sequence(self) -> tuple[bool, str]:
-        """Execute the controlled MIS square-off sequence.
+    def execute_flatten_sequence(self, timeout_sec: float = 10.0) -> tuple[bool, str]:
+        """Execute the controlled MIS square-off sequence and poll until account is confirmed flat.
 
-        1. Cancel strategy pending entries
-        2. Cancel strategy protective stop orders
-        3. Fetch fresh broker positions
-        4. Place market exits for any remaining strategy MIS exposure
-        5. Verify flat
+        1. Cancel strategy pending entries and stop orders
+        2. Submit market exit orders for all open strategy exposure
+        3. Poll order statuses and broker positions until zero exposure or timeout
+        4. Report success ONLY after confirming flat at broker
         """
+        import time as time_module
+
         logger.info("Starting controlled MIS square-off sequence...")
         self.journal.log_event(
             event_type="FLATTEN_START",
             explanation="Beginning controlled MIS square-off sequence",
         )
 
-        # 1. Cancel pending strategy entry orders
+        # 1. Cancel pending strategy orders and stops
         try:
             orders = self.broker.get_orders()
             for o in orders:
                 if o.status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING):
                     if self.sm.is_strategy_order(o.request.tag):
-                        self.broker.cancel_order(o.order_id)
-                        self.journal.log_event(
-                            event_type="CANCEL_PENDING_ORDER",
-                            symbol=o.request.symbol,
-                            data={"order_id": o.order_id},
-                            explanation=f"Cancelled pending strategy order {o.order_id}",
-                        )
+                        try:
+                            self.broker.cancel_order(o.order_id)
+                            self.journal.log_event(
+                                event_type="CANCEL_PENDING_ORDER",
+                                symbol=o.request.symbol,
+                                data={"order_id": o.order_id},
+                                explanation=f"Cancelled pending strategy order {o.order_id}",
+                            )
+                        except Exception as ce:
+                            logger.warning("Could not cancel order %s during flatten: %s", o.order_id, ce)
         except Exception as e:
             logger.error("Error cancelling pending orders during flatten: %s", e)
 
         # 2. Flatten each active strategy position
-        all_flat = True
         residual_errors: list[str] = []
-
         try:
             broker_positions = self.broker.get_positions()
         except Exception as e:
             return False, f"Could not retrieve positions during flatten: {e}"
 
+        exit_orders: dict[str, str] = {}
         for bp in broker_positions:
             if bp.quantity == 0:
                 continue
 
-            # Only touch strategy-owned positions
             managed = self.sm.positions.get(bp.symbol)
             if managed is None:
                 continue
 
-            # Ensure internal state is synchronized with real broker quantity
             managed.quantity = bp.quantity
 
-            # Cancel protective stop first to free up quantity
             if managed.protective_order_id:
                 try:
                     self.broker.cancel_order(managed.protective_order_id)
-                except Exception as e:
-                    logger.warning("Could not cancel protective stop %s: %s", managed.protective_order_id, e)
+                except Exception:
+                    pass
 
-            # Exit side: if BUY, exit is SELL; if SELL, exit is BUY
             side = getattr(bp, "side", None) or managed.side
             exit_side = Side.SELL if side == Side.BUY else Side.BUY
             exit_qty = bp.quantity
@@ -225,6 +282,7 @@ class Reconciler:
                 exit_order_id = self.broker.place_order(exit_req)
                 managed.exit_order_id = exit_order_id
                 managed.phase = PositionPhase.EXITING
+                exit_orders[managed.symbol] = exit_order_id
 
                 self.journal.log_event(
                     event_type="EXIT_ORDER_PLACED",
@@ -234,7 +292,6 @@ class Reconciler:
                     explanation=f"Submitted market exit for {managed.symbol} (qty={exit_qty})",
                 )
             except Exception as e:
-                all_flat = False
                 err_msg = f"Failed to submit exit for {managed.symbol}: {e}"
                 residual_errors.append(err_msg)
                 self.journal.log_warning(
@@ -247,4 +304,47 @@ class Reconciler:
         if residual_errors:
             return False, "; ".join(residual_errors)
 
-        return True, "Flatten orders submitted successfully"
+        # 3. Verification Poll Loop: poll until confirmed flat or timeout
+        start_t = time_module.time()
+        poll_interval = 0.5
+        all_flat = False
+        remaining_symbols: list[str] = []
+
+        while time_module.time() - start_t < timeout_sec:
+            try:
+                fresh_bp = self.broker.get_positions()
+                open_bp = [p for p in fresh_bp if p.quantity > 0 and self.sm.positions.get(p.symbol) is not None]
+                if not open_bp:
+                    all_flat = True
+                    break
+                remaining_symbols = [p.symbol for p in open_bp]
+            except Exception as pe:
+                logger.warning("Error polling positions during flatten verification: %s", pe)
+            time_module.sleep(poll_interval)
+
+        if not all_flat:
+            try:
+                fresh_bp = self.broker.get_positions()
+                open_bp = [p for p in fresh_bp if p.quantity > 0 and self.sm.positions.get(p.symbol) is not None]
+                all_flat = (len(open_bp) == 0)
+                remaining_symbols = [p.symbol for p in open_bp]
+            except Exception:
+                pass
+
+        if all_flat:
+            for p in self.sm.positions.values():
+                p.quantity = 0
+                p.phase = PositionPhase.CLOSED
+            logger.info("Controlled MIS square-off confirmed flat at broker.")
+            self.journal.log_event(event_type="FLATTEN_CONFIRMED", explanation="Account confirmed flat at broker")
+            return True, "Account confirmed flat. All strategy positions closed and verified at broker."
+        else:
+            msg = f"Flatten verification timed out after {timeout_sec:.1f}s. Residual open exposure: {remaining_symbols}"
+            logger.critical("FLATTEN INCOMPLETE: %s", msg)
+            self.journal.log_warning(
+                severity="EMERGENCY",
+                code="FLATTEN_INCOMPLETE",
+                message=msg,
+                data={"remaining": remaining_symbols},
+            )
+            return False, msg

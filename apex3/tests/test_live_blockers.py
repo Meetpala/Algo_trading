@@ -68,19 +68,19 @@ def test_partial_fill_cancels_remainder_and_sizes_stop_exactly():
         if "ORD_1" in ord_id:
             return OrderState(
                 order_id="ORD_1",
-                request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=50, price=1000.5),
+                request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=14, price=1000.05),
                 status=OrderStatus.PENDING,  # partial fill, still pending
-                filled_quantity=20,
-                pending_quantity=30,
+                filled_quantity=6,
+                pending_quantity=8,
                 average_price=1001.0,
             )
         elif "ORD_2" in ord_id:
             # Protective SL
             return OrderState(
                 order_id="ORD_2",
-                request=OrderRequest(symbol="TRENT", side=Side.SELL, quantity=20, order_type=OrderType.SL),
+                request=OrderRequest(symbol="TRENT", side=Side.SELL, quantity=6, order_type=OrderType.SL),
                 status=OrderStatus.TRIGGER_PENDING,
-                pending_quantity=20,
+                pending_quantity=6,
                 filled_quantity=0,
             )
         return None
@@ -91,8 +91,9 @@ def test_partial_fill_cancels_remainder_and_sizes_stop_exactly():
     object.__setattr__(cfg.watchlist, "scanner_enabled", False)
     engine = StrategyEngine(cfg, mock_broker, mock_journal)
 
-    # Use low=993.0 so stop distance is 7.05 (0.705%), passing Gate 9 [0.55%, 0.90%]
-    candles = [Candle(timestamp=now - timedelta(minutes=5 * i), open=998.0, high=1001.0, low=993.0, close=1000.0, volume=10000, is_complete=True) for i in range(15)]
+    # 20 candles with ATR ~ 2.0 and last candle low=996.0 -> stop distance ~ 7.05 (0.705%), passing Gate 9 [0.55%, 0.90%]
+    candles = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=1000.0, high=1001.0, low=999.0, close=1000.0, volume=10000, is_complete=True) for i in range(20)]
+    candles[-1] = Candle(timestamp=now, open=1000.0, high=1001.0, low=996.0, close=1000.0, volume=10000, is_complete=True)
     mock_broker.get_historical.return_value = candles
 
     fake_sig = SignalEvaluation(
@@ -118,16 +119,16 @@ def test_partial_fill_cancels_remainder_and_sizes_stop_exactly():
         assert mock_broker.cancel_order.call_count >= 1
         assert mock_broker.cancel_order.call_args[0][0] == "ORD_1"
 
-        # 2. SL placed for exact filled quantity (20, not 50)
+        # 2. SL placed for exact filled quantity (6, not 14)
         assert len(placed_orders) == 2
         sl_req = placed_orders[1][1]
         assert sl_req.order_type == OrderType.SL
-        assert sl_req.quantity == 20
+        assert sl_req.quantity == 6
 
-        # 3. Position protected for 20 shares and target recalculated from actual fill 1001.0
+        # 3. Position protected for 6 shares and target recalculated from actual fill 1001.0
         pos = engine.state_machine.positions["TRENT"]
         assert pos.phase == PositionPhase.OPEN_PROTECTED
-        assert pos.quantity == 20
+        assert pos.quantity == 6
         assert pos.average_entry == 1001.0
         assert pos.target_price > 1001.0
     finally:
@@ -260,7 +261,16 @@ def test_daily_loss_limit_breach_forces_immediate_flatten():
 
     broker_positions = [PositionState(symbol="TCS", side=Side.BUY, quantity=50, average_entry=3000.0, current_price=2990.0)]
     mock_broker.get_positions.side_effect = lambda: list(broker_positions)
-    mock_broker.get_quote.return_value = Quote(symbol="TCS", exchange="NSE", last_price=2990.0, is_fresh=True)
+    mock_broker.get_quote.return_value = Quote(
+        symbol="TCS",
+        exchange="NSE",
+        last_price=2990.0,
+        bid=2989.5,
+        ask=2990.5,
+        volume=5000,
+        timestamp=now,
+        is_fresh=True,
+    )
     mock_broker.get_orders.return_value = []
     mock_broker.get_trades.return_value = []
     mock_broker.get_margins.return_value = MarginInfo(equity_available=14500.0, net_value=14500.0)
@@ -355,7 +365,7 @@ def test_dashboard_csrf_protection_rejects_external_origin():
     mock_broker = MagicMock()
     mock_journal = MagicMock()
     engine = StrategyEngine(cfg, mock_broker, mock_journal)
-    app = create_app(engine, cfg)
+    app = create_app(engine, cfg, mock_journal)
     client = app.test_client()
 
     # Valid loopback origin

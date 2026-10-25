@@ -151,16 +151,17 @@ class AngelDataProvider:
                             timestamp=datetime.now(IST),
                             is_fresh=False,
                         )
-                    # Use actual LTP touch; do not manufacture synthetic 10-cent bid/ask spreads
+                    # Angel ltpData provides only last traded price without depth.
+                    # Mark is_fresh=False to indicate lack of actual top-of-book bid/ask depth.
                     return Quote(
                         symbol=clean,
                         exchange=exchange,
                         last_price=ltp,
-                        bid=ltp,
-                        ask=ltp,
+                        bid=0.0,
+                        ask=0.0,
                         volume=int(data.get("volume", 0)),
                         timestamp=datetime.now(IST),
-                        is_fresh=True,
+                        is_fresh=False,
                     )
             except Exception as e:
                 logger.error("Angel One get_quote error for %s: %s", clean, e)
@@ -170,8 +171,8 @@ class AngelDataProvider:
             symbol=clean,
             exchange=exchange,
             last_price=100.0,
-            bid=100.0,
-            ask=100.0,
+            bid=0.0,
+            ask=0.0,
             volume=0,
             timestamp=datetime.now(IST),
             is_fresh=False,
@@ -237,20 +238,18 @@ class AngelDataProvider:
         return []
 
     def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
-        """Fetch instrument info with circuit limits."""
+        """Fetch instrument info with verified circuit limits."""
         clean = symbol.replace("-EQ", "").upper()
         token = self.resolve_token(clean, exchange)
-        q = self.get_quote(clean, exchange)
-        last_p = q.last_price if q.last_price > 0 else 100.0
 
-        # Standard 10% circuit limit fallback for F&O liquid universe
+        # Do not fabricate synthetic 10% circuit limits; report 0.0 if not verified from exchange
         return InstrumentInfo(
             symbol=clean,
             exchange=exchange,
             tick_size=0.05,
             lot_size=1,
             instrument_token=token,
-            upper_circuit=round(last_p * 1.10, 2),
-            lower_circuit=round(last_p * 0.90, 2),
+            upper_circuit=0.0,
+            lower_circuit=0.0,
             mis_available=True,
         )

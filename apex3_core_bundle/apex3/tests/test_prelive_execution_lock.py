@@ -328,15 +328,30 @@ def test_bar_deduplication_prevents_multiple_entries_on_same_bar():
     mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="HINDALCO", exchange="NSE", lot_size=1, tick_size=0.05)
     mock_broker.get_quote.return_value = Quote(symbol="HINDALCO", exchange="NSE", last_price=650.0, bid=649.95, ask=650.05, volume=10000, timestamp=now1)
 
-    mock_broker.place_order.return_value = "ORD_1"
+    def on_place_order(req):
+        if "_SL" in req.tag or req.order_type == OrderType.SL:
+            return "ORD_SL"
+        return "ORD_ENTRY"
+    mock_broker.place_order.side_effect = on_place_order
+
     dummy_req = OrderRequest(symbol="HINDALCO", side=Side.BUY, quantity=40, price=650.0)
-    mock_broker.get_order_status.return_value = OrderState(
-        order_id="ORD_1",
-        request=dummy_req,
-        status=OrderStatus.COMPLETE,
-        filled_quantity=40,
-        average_price=650.0,
-    )
+    def on_get_order_status(ord_id):
+        if ord_id == "ORD_SL":
+            return OrderState(
+                order_id="ORD_SL",
+                request=OrderRequest(symbol="HINDALCO", side=Side.SELL, quantity=40, order_type=OrderType.SL),
+                status=OrderStatus.TRIGGER_PENDING,
+                pending_quantity=40,
+                filled_quantity=0,
+            )
+        return OrderState(
+            order_id="ORD_ENTRY",
+            request=dummy_req,
+            status=OrderStatus.COMPLETE,
+            filled_quantity=40,
+            average_price=650.0,
+        )
+    mock_broker.get_order_status.side_effect = on_get_order_status
 
     cfg = AppConfig()
     object.__setattr__(cfg.watchlist, "symbols", ["HINDALCO"])
@@ -395,12 +410,16 @@ def test_reconciler_flattens_residual_broker_quantity():
     pos.quantity = 0
     pos.phase = PositionPhase.EXITING
 
-    # Broker still has 15 shares open!
-    mock_broker.get_positions.return_value = [
+    # Broker still has 15 shares open initially; clears once exit is placed
+    broker_positions = [
         PositionState(symbol="TCS", side=Side.BUY, quantity=15, average_entry=3000.0, current_price=3050.0)
     ]
+    mock_broker.get_positions.side_effect = lambda: list(broker_positions)
     mock_broker.get_orders.return_value = []
-    mock_broker.place_order.return_value = "EXIT_FLATTEN_ORD"
+    def on_exit_order(req):
+        broker_positions.clear()
+        return "EXIT_FLATTEN_ORD"
+    mock_broker.place_order.side_effect = on_exit_order
 
     reconciler = Reconciler(mock_broker, sm, mock_journal)
     success, msg = reconciler.execute_flatten_sequence()

@@ -133,6 +133,7 @@ class ScheduleConfig:
     hard_deadline: str = "15:00"
     stale_threshold_sec: int = 2
     holidays: list[str] = field(default_factory=list)
+    special_sessions: dict[str, str] = field(default_factory=dict)
 
     def get_time(self, field_name: str) -> time:
         """Parse an HH:MM time string from the config."""
@@ -144,6 +145,13 @@ class ScheduleConfig:
         """Check if a date is in the configured holiday list."""
         date_str = check_date.isoformat()
         return date_str in self.holidays
+
+    def is_special_session(self, check_date: date) -> tuple[bool, str]:
+        """Check if a date has a special trading session (e.g. Muhurat Trading)."""
+        date_str = check_date.isoformat()
+        if date_str in self.special_sessions:
+            return True, self.special_sessions[date_str]
+        return False, ""
 
 
 @dataclass(frozen=True)
@@ -258,6 +266,7 @@ def _parse_schedule(raw: dict, fallback_raw: Optional[dict] = None) -> ScheduleC
     merged.update(raw)
 
     holidays: list[str] = []
+    special_sessions: dict[str, str] = {}
     sources = [raw, fallback_raw or {}, merged]
     for s in sources:
         if isinstance(s, dict):
@@ -267,6 +276,8 @@ def _parse_schedule(raw: dict, fallback_raw: Optional[dict] = None) -> ScheduleC
                         v_str = str(v)
                         if v_str not in holidays:
                             holidays.append(v_str)
+                elif "special_sessions" in key and isinstance(value, dict):
+                    special_sessions.update({str(k): str(v) for k, v in value.items()})
 
     return ScheduleConfig(
         market_open=str(merged.get("or_start_time", merged.get("market_open", "09:15"))),
@@ -279,6 +290,7 @@ def _parse_schedule(raw: dict, fallback_raw: Optional[dict] = None) -> ScheduleC
         hard_deadline=str(merged.get("hard_deadline", "15:00")),
         stale_threshold_sec=int(merged.get("stale_threshold_sec", 2)),
         holidays=sorted(holidays),
+        special_sessions=special_sessions,
     )
 
 

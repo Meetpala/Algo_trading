@@ -120,6 +120,7 @@ class StrategyEngine:
         self.pause_reason = ""
         self._daily_loss_halt_date: Optional[date] = None
         self._current_session_date: Optional[date] = None
+        self._flatten_completed: bool = False
         self._last_entry_bar_timestamp: Optional[datetime] = None
         self._execution_lock = threading.Lock()
         self.last_decisions: list[StrategyDecision] = []
@@ -162,6 +163,7 @@ class StrategyEngine:
             self._current_session_date = session_date
             self.opening_ranges.clear()
             self._last_entry_bar_timestamp = None
+            self._flatten_completed = False
         if self._daily_loss_halt_date is not None and self._daily_loss_halt_date != session_date:
             self._daily_loss_halt_date = None
             if self.pause_reason in ("DAILY_LOSS_LIMIT_BREACHED", "DAILY_PNL_ACCOUNTING_FAILED"):
@@ -174,36 +176,6 @@ class StrategyEngine:
         # -------------------------------------------------------------
         session_state = self.scheduler.get_session_state(now)
 
-        if self.config.mode == "live":
-            # Live mode validation checks
-            if not self.config.secrets.live_trading_enabled:
-                return [
-                    StrategyDecision(
-                        decision=Decision.HALT,
-                        timestamp_ist=now,
-                        reason_codes=["LIVE_TRADING_FLAG_DISABLED"],
-                        explanation="Live trading is configured in config.yaml but LIVE_TRADING_ENABLED env var is false",
-                    )
-                ]
-            if not self.config.secrets.static_ip_configured:
-                return [
-                    StrategyDecision(
-                        decision=Decision.HALT,
-                        timestamp_ist=now,
-                        reason_codes=["STATIC_IP_NOT_CONFIGURED"],
-                        explanation="Live trading requires static IP confirmation (effective 1 April 2026)",
-                    )
-                ]
-            if not self.config.secrets.sebi_compliance_acknowledged:
-                return [
-                    StrategyDecision(
-                        decision=Decision.HALT,
-                        timestamp_ist=now,
-                        reason_codes=["SEBI_COMPLIANCE_NOT_ACKNOWLEDGED"],
-                        explanation="SEBI retail algo compliance acknowledgement required for live trading",
-                    )
-                ]
-
         if session_state in (SessionState.HOLIDAY, SessionState.WEEKEND):
             return [
                 StrategyDecision(
@@ -215,46 +187,35 @@ class StrategyEngine:
             ]
 
         # -------------------------------------------------------------
-        # STEP 12 (Priority): End of Day / Flatten Window
+        # STEP 12 (Priority): End of Day / Flatten Window (Tracked One-Shot)
         # -------------------------------------------------------------
         if self.scheduler.should_flatten(now):
-            success, msg = self.reconciler.execute_flatten_sequence()
-            decision_type = Decision.EXIT
-            if not success:
-                self.journal.log_warning("EMERGENCY", "FLATTEN_FAILED", msg)
+            if not self._flatten_completed:
+                success, msg = self.reconciler.execute_flatten_sequence()
+                decision_type = Decision.EXIT
+                if success:
+                    self._flatten_completed = True
+                else:
+                    self.journal.log_warning("EMERGENCY", "FLATTEN_FAILED", msg)
 
-            return [
-                StrategyDecision(
-                    decision=decision_type,
-                    timestamp_ist=now,
-                    reason_codes=["FLATTEN_WINDOW_ACTIVE"],
-                    explanation=f"Flattening active: {msg}",
-                    broker_action="EXIT_ALL_MIS",
-                )
-            ]
-
-        # Operator Pause check: if paused and no open positions, halt immediately
-        if self.is_paused:
-            open_count = sum(1 for p in self.state_machine.positions.values() if p.quantity > 0)
-            if open_count == 0:
+                return [
+                    StrategyDecision(
+                        decision=decision_type,
+                        timestamp_ist=now,
+                        reason_codes=["FLATTEN_WINDOW_ACTIVE"],
+                        explanation=f"Flattening active: {msg}",
+                        broker_action="EXIT_ALL_MIS",
+                    )
+                ]
+            else:
                 return [
                     StrategyDecision(
                         decision=Decision.WAIT,
                         timestamp_ist=now,
-                        reason_codes=["ENGINE_PAUSED"],
-                        explanation=f"Strategy engine is paused: {self.pause_reason or 'Operator pause'}",
+                        reason_codes=["FLATTEN_COMPLETED"],
+                        explanation="Account confirmed flat for the session; no further actions.",
                     )
                 ]
-
-        if session_state == SessionState.PRE_OPEN:
-            return [
-                StrategyDecision(
-                    decision=Decision.WAIT,
-                    timestamp_ist=now,
-                    reason_codes=["PRE_OPEN_SESSION"],
-                    explanation="Pre-open session (before 09:15 IST). Observing and validating data.",
-                )
-            ]
 
         # -------------------------------------------------------------
         # STEP 2: Connectivity and Quote Freshness Gate
@@ -284,6 +245,21 @@ class StrategyEngine:
                 )
             ]
 
+        # Operator Pause check: if paused and no open positions, wait immediately
+        if self.is_paused:
+            open_count = sum(1 for p in self.state_machine.positions.values() if p.quantity > 0) + len(
+                [p for p in self.state_machine.positions.values() if p.phase == PositionPhase.ENTERING]
+            )
+            if open_count == 0:
+                return [
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        timestamp_ist=now,
+                        reason_codes=["ENGINE_PAUSED"],
+                        explanation=f"Strategy engine is paused: {self.pause_reason or 'Operator pause'}",
+                    )
+                ]
+
         # -------------------------------------------------------------
         # STEP 11 (Priority): Manage Open Positions
         # -------------------------------------------------------------
@@ -301,13 +277,33 @@ class StrategyEngine:
                     continue
 
                 if entry_state.status == OrderStatus.COMPLETE or entry_state.filled_quantity > 0:
+                    # On partial fill, cancel the unfilled remainder immediately and confirm cancellation
+                    if entry_state.status != OrderStatus.COMPLETE:
+                        try:
+                            self.broker.cancel_order(ent_pos.entry_order_id)
+                        except Exception as cancel_err:
+                            logger.warning("Failed to cancel remaining entry for %s: %s", ent_pos.symbol, cancel_err)
+                        refreshed_entry = self.broker.get_order_status(ent_pos.entry_order_id)
+                        if refreshed_entry:
+                            entry_state = refreshed_entry
+
                     ent_pos.quantity = entry_state.filled_quantity
                     if entry_state.average_price > 0:
                         ent_pos.average_entry = entry_state.average_price
                     ent_pos.phase = PositionPhase.OPEN_UNPROTECTED
 
+                    # Recalculate target and R-value from actual confirmed fill price
+                    ent_pos.r_value = abs(ent_pos.average_entry - ent_pos.initial_stop_price)
                     inst = self.broker.get_instrument_info(ent_pos.symbol)
                     tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+                    ent_pos.target_price = calculate_target_price(
+                        side=ent_pos.side,
+                        entry_price=ent_pos.average_entry,
+                        initial_stop=ent_pos.initial_stop_price,
+                        target_r=self.config.stops.target_r,
+                        tick_size=tick,
+                    )
+
                     exit_side = Side.SELL if ent_pos.side == Side.BUY else Side.BUY
                     trigger, limit = calculate_stop_limit_prices(
                         ent_pos.side, ent_pos.initial_stop_price, self.config.stops, tick
@@ -328,7 +324,9 @@ class StrategyEngine:
                         sl_order_id = self.broker.place_order(sl_req)
                         ent_pos.protective_order_id = sl_order_id
                         sl_check = self.broker.get_order_status(sl_order_id)
-                        if sl_check and sl_check.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN, OrderStatus.COMPLETE):
+                        sl_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
+                        # Treat ONLY TRIGGER_PENDING with exact matching quantity as protective
+                        if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_qty == ent_pos.quantity:
                             ent_pos.phase = PositionPhase.OPEN_PROTECTED
                             sl_confirmed = True
                     except Exception as sl_err:
@@ -362,7 +360,8 @@ class StrategyEngine:
                                 tag=f"{ent_pos.strategy_tag}_EMERGENCY_FLATTEN",
                                 strategy_id=self.session_tag,
                             )
-                            self.broker.place_order(emer_exit)
+                            emer_id = self.broker.place_order(emer_exit)
+                            ent_pos.exit_order_id = emer_id
                             ent_pos.phase = PositionPhase.EXITING
                         except Exception as em_err:
                             logger.critical("FATAL: Failed to execute emergency liquidation for %s: %s", ent_pos.symbol, em_err)
@@ -381,9 +380,19 @@ class StrategyEngine:
                             ent_pos.quantity = refreshed.filled_quantity
                             if refreshed.average_price > 0:
                                 ent_pos.average_entry = refreshed.average_price
-                            ent_pos.phase = PositionPhase.OPEN_PROTECTED
+                            ent_pos.phase = PositionPhase.OPEN_UNPROTECTED
+                            ent_pos.r_value = abs(ent_pos.average_entry - ent_pos.initial_stop_price)
+
                             inst = self.broker.get_instrument_info(ent_pos.symbol)
                             tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+                            ent_pos.target_price = calculate_target_price(
+                                side=ent_pos.side,
+                                entry_price=ent_pos.average_entry,
+                                initial_stop=ent_pos.initial_stop_price,
+                                target_r=self.config.stops.target_r,
+                                tick_size=tick,
+                            )
+
                             exit_side = Side.SELL if ent_pos.side == Side.BUY else Side.BUY
                             trigger, limit = calculate_stop_limit_prices(
                                 ent_pos.side, ent_pos.initial_stop_price, self.config.stops, tick
@@ -399,8 +408,38 @@ class StrategyEngine:
                                 tag=f"{ent_pos.strategy_tag}_SL",
                                 strategy_id=self.session_tag,
                             )
-                            sl_order_id = self.broker.place_order(sl_req)
-                            ent_pos.protective_order_id = sl_order_id
+                            sl_confirmed = False
+                            try:
+                                sl_order_id = self.broker.place_order(sl_req)
+                                ent_pos.protective_order_id = sl_order_id
+                                sl_check = self.broker.get_order_status(sl_order_id)
+                                sl_check_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
+                                if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_check_qty == ent_pos.quantity:
+                                    ent_pos.phase = PositionPhase.OPEN_PROTECTED
+                                    sl_confirmed = True
+                            except Exception as sl_err:
+                                logger.error("Failed to place stop on timeout fill %s: %s", ent_pos.symbol, sl_err)
+
+                            if not sl_confirmed:
+                                logger.critical("EMERGENCY: Protective stop unconfirmed for timeout fill in %s. Liquidating immediately.", ent_pos.symbol)
+                                try:
+                                    emer_exit = OrderRequest(
+                                        symbol=ent_pos.symbol,
+                                        side=exit_side,
+                                        quantity=ent_pos.quantity,
+                                        product=Product.MIS,
+                                        order_type=OrderType.MARKET,
+                                        tag=f"{ent_pos.strategy_tag}_EMERGENCY_FLATTEN",
+                                        strategy_id=self.session_tag,
+                                    )
+                                    emer_id = self.broker.place_order(emer_exit)
+                                    ent_pos.exit_order_id = emer_id
+                                    ent_pos.phase = PositionPhase.EXITING
+                                except Exception as em_err:
+                                    logger.critical("FATAL: Failed emergency liquidation for %s: %s", ent_pos.symbol, em_err)
+                                    ent_pos.phase = PositionPhase.ERROR
+                                self.is_paused = True
+                                self.pause_reason = f"PROTECTIVE_STOP_FAILED_{ent_pos.symbol}"
                         else:
                             ent_pos.phase = PositionPhase.FLAT
                             ent_pos.quantity = 0
@@ -410,6 +449,43 @@ class StrategyEngine:
         open_managed = [p for p in self.state_machine.positions.values() if p.quantity > 0]
 
         for pos in open_managed:
+            # If position is already in EXITING phase, poll existing exit order and reconcile
+            if pos.phase == PositionPhase.EXITING:
+                if pos.exit_order_id:
+                    try:
+                        exit_state = self.broker.get_order_status(pos.exit_order_id)
+                        if exit_state:
+                            if exit_state.status == OrderStatus.COMPLETE:
+                                pos.phase = PositionPhase.CLOSED
+                                pos.quantity = 0
+                                self.journal.log_event(
+                                    event_type="EXIT_ORDER_COMPLETED",
+                                    symbol=pos.symbol,
+                                    data={
+                                        "exit_order_id": pos.exit_order_id,
+                                        "fill_price": exit_state.average_price,
+                                    },
+                                    explanation=f"Exit order {pos.exit_order_id} filled for {pos.symbol}",
+                                )
+                                continue
+                            elif exit_state.filled_quantity > 0:
+                                pos.quantity = max(0, pos.quantity - exit_state.filled_quantity)
+                                if pos.quantity == 0:
+                                    pos.phase = PositionPhase.CLOSED
+                                    continue
+                            elif exit_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
+                                logger.warning(
+                                    "Exit order %s for %s was %s; clearing exit_order_id for retry",
+                                    pos.exit_order_id,
+                                    pos.symbol,
+                                    exit_state.status.value,
+                                )
+                                pos.exit_order_id = ""
+                    except Exception as e_poll:
+                        logger.error("Error polling exit order %s for %s: %s", pos.exit_order_id, pos.symbol, e_poll)
+                # Do not submit a second exit order while an exit order is pending or in-flight
+                continue
+
             # Step 11.0: Reconcile broker stop-loss order status before target / manage checks
             if pos.protective_order_id:
                 try:
@@ -470,7 +546,8 @@ class StrategyEngine:
                                 tag=f"{pos.strategy_tag}_EMERGENCY_GAP_EXIT",
                                 strategy_id=self.session_tag,
                             )
-                            self.broker.place_order(emer_exit)
+                            emer_id = self.broker.place_order(emer_exit)
+                            pos.exit_order_id = emer_id
                             pos.phase = PositionPhase.EXITING
                             decisions.append(
                                 StrategyDecision(
@@ -505,7 +582,8 @@ class StrategyEngine:
                         tag=f"{pos.strategy_tag}_EMERGENCY_UNPROTECTED_EXIT",
                         strategy_id=self.session_tag,
                     )
-                    self.broker.place_order(flat_req)
+                    flat_id = self.broker.place_order(flat_req)
+                    pos.exit_order_id = flat_id
                     pos.phase = PositionPhase.EXITING
                 except Exception as unprot_err:
                     logger.critical("FATAL: Failed to liquidate unprotected position in %s: %s", pos.symbol, unprot_err)
@@ -514,6 +592,9 @@ class StrategyEngine:
             # Manage existing position stop or take profit
             try:
                 quote = self.broker.get_quote(pos.symbol)
+                if not quote or not quote.is_fresh or quote.last_price <= 0:
+                    logger.warning("Skipping stop/target management for %s: quote is missing or stale", pos.symbol)
+                    continue
                 current_price = quote.last_price
                 inst_info = self.broker.get_instrument_info(pos.symbol)
 
@@ -537,9 +618,25 @@ class StrategyEngine:
                             tag=f"{pos.strategy_tag}_TARGET",
                             strategy_id=self.session_tag,
                         )
+                        # Confirm stop cancellation first before sending market exit
+                        stop_filled_during_cancel = False
                         if pos.protective_order_id:
-                            self.broker.cancel_order(pos.protective_order_id)
+                            try:
+                                self.broker.cancel_order(pos.protective_order_id)
+                                sl_st = self.broker.get_order_status(pos.protective_order_id)
+                                if sl_st and sl_st.status == OrderStatus.COMPLETE:
+                                    stop_filled_during_cancel = True
+                            except Exception as c_err:
+                                logger.warning("Error cancelling stop before target exit %s: %s", pos.symbol, c_err)
+
+                        if stop_filled_during_cancel:
+                            pos.phase = PositionPhase.CLOSED
+                            pos.quantity = 0
+                            continue
+
                         exit_order_id = self.broker.place_order(exit_req)
+                        pos.exit_order_id = exit_order_id
+                        pos.phase = PositionPhase.EXITING
 
                         # Confirm exit fill status before zeroing position quantity
                         exit_state = self.broker.get_order_status(exit_order_id)
@@ -548,10 +645,10 @@ class StrategyEngine:
                             pos.quantity = 0
                         elif exit_state and exit_state.filled_quantity > 0:
                             pos.quantity = max(0, pos.quantity - exit_state.filled_quantity)
-                            pos.phase = PositionPhase.CLOSED if pos.quantity == 0 else PositionPhase.EXITING
+                            if pos.quantity == 0:
+                                pos.phase = PositionPhase.CLOSED
                         else:
                             pos.phase = PositionPhase.EXITING
-                        pos.exit_order_id = exit_order_id
 
                         self.journal.log_event(
                             event_type="TARGET_HIT_EXIT",
@@ -702,28 +799,42 @@ class StrategyEngine:
                         if valid_move:
                             prev_stop = pos.current_stop_price
                             trigger, limit = calculate_stop_limit_prices(pos.side, protected_stop, self.config.stops, tick)
+                            mod_confirmed = False
                             if pos.protective_order_id:
-                                self.broker.modify_order(
-                                    order_id=pos.protective_order_id,
-                                    price=limit,
-                                    trigger_price=trigger,
+                                try:
+                                    mod_ok = self.broker.modify_order(
+                                        order_id=pos.protective_order_id,
+                                        price=limit,
+                                        trigger_price=trigger,
+                                    )
+                                    if mod_ok:
+                                        mod_st = self.broker.get_order_status(pos.protective_order_id)
+                                        if mod_st and mod_st.status == OrderStatus.TRIGGER_PENDING:
+                                            mod_confirmed = True
+                                except Exception as m_err:
+                                    logger.error("Failed to modify stop order %s for %s: %s", pos.protective_order_id, pos.symbol, m_err)
+                            else:
+                                mod_confirmed = True
+
+                            if mod_confirmed:
+                                pos.current_stop_price = protected_stop
+                                pos.fee_lock_applied = True
+                                pos.stop_modification_count += 1
+                                broker_action = f"MODIFIED_STOP_FEE_LOCK_{protected_stop}"
+                                reason_codes = ["PROFIT_PRESERVING_STEP", "FEE_PROTECTED_BREAKEVEN_STEP"]
+                                explanation = f"Moved stop to profit-preserving level ({protected_stop:.2f}, +{target_lock_r:.2f}R) at {open_r:.2f}R"
+                                self.journal.log_stop_change(
+                                    symbol=pos.symbol,
+                                    side=pos.side.value,
+                                    previous_stop=prev_stop,
+                                    new_stop=protected_stop,
+                                    reason="PROFIT_PRESERVING_STEP",
+                                    r_multiple=round(open_r, 2),
+                                    best_favorable_price=pos.best_favorable_price,
+                                    modification_number=pos.stop_modification_count,
                                 )
-                            pos.current_stop_price = protected_stop
-                            pos.fee_lock_applied = True
-                            pos.stop_modification_count += 1
-                            broker_action = f"MODIFIED_STOP_FEE_LOCK_{protected_stop}"
-                            reason_codes = ["PROFIT_PRESERVING_STEP", "FEE_PROTECTED_BREAKEVEN_STEP"]
-                            explanation = f"Moved stop to profit-preserving level ({protected_stop:.2f}, +{target_lock_r:.2f}R) at {open_r:.2f}R"
-                            self.journal.log_stop_change(
-                                symbol=pos.symbol,
-                                side=pos.side.value,
-                                previous_stop=prev_stop,
-                                new_stop=protected_stop,
-                                reason="PROFIT_PRESERVING_STEP",
-                                r_multiple=round(open_r, 2),
-                                best_favorable_price=pos.best_favorable_price,
-                                modification_number=pos.stop_modification_count,
-                            )
+                            else:
+                                logger.warning("Stop modification unconfirmed by broker for %s; internal stop not moved", pos.symbol)
 
                     decisions.append(
                         StrategyDecision(
@@ -822,10 +933,16 @@ class StrategyEngine:
             self._daily_loss_halt_date = session_date
             self.is_paused = True
             self.pause_reason = "DAILY_LOSS_LIMIT_BREACHED"
+            has_open = any(p.quantity > 0 for p in self.state_machine.positions.values())
+            flatten_msg = ""
+            if has_open:
+                logger.critical("Daily loss limit breached with open positions! Squaring off immediately.")
+                _, flatten_msg = self.reconciler.execute_flatten_sequence()
+
             self.journal.log_warning(
                 severity="CRITICAL",
                 code="DAILY_LOSS_LIMIT_BREACHED",
-                message=daily_risk_status.gate.reason,
+                message=f"{daily_risk_status.gate.reason}. {flatten_msg}".strip(),
                 data={
                     "net_day_pnl": session_pnl.net_pnl,
                     "realized_pnl": session_pnl.realized_pnl,
@@ -839,8 +956,9 @@ class StrategyEngine:
                     decision=Decision.HALT,
                     timestamp_ist=now,
                     reason_codes=["DAILY_LOSS_LIMIT_BREACHED"],
-                    explanation=daily_risk_status.gate.reason,
+                    explanation=f"{daily_risk_status.gate.reason}. {flatten_msg}".strip(),
                     gates=[daily_risk_status.gate],
+                    broker_action="DAILY_LOSS_BREACH_FLATTEN" if has_open else "",
                 )
             ]
 
@@ -856,6 +974,61 @@ class StrategyEngine:
                         explanation=f"New entries blocked because engine is paused: {self.pause_reason or 'Operator pause'}",
                     )
                 )
+            return decisions
+
+        # Live mode compliance checks for NEW entries
+        if self.config.mode == "live":
+            if not self.config.secrets.live_trading_enabled:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.HALT,
+                        timestamp_ist=now,
+                        reason_codes=["LIVE_TRADING_FLAG_DISABLED"],
+                        explanation="Live trading is configured in config.yaml but LIVE_TRADING_ENABLED env var is false",
+                    )
+                )
+                return decisions
+            if not self.config.secrets.static_ip_configured:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.HALT,
+                        timestamp_ist=now,
+                        reason_codes=["STATIC_IP_NOT_CONFIGURED"],
+                        explanation="Live trading requires static IP confirmation (effective 1 April 2026)",
+                    )
+                )
+                return decisions
+            if not self.config.secrets.sebi_compliance_acknowledged:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.HALT,
+                        timestamp_ist=now,
+                        reason_codes=["SEBI_COMPLIANCE_NOT_ACKNOWLEDGED"],
+                        explanation="SEBI retail algo compliance acknowledgement required for live trading",
+                    )
+                )
+                return decisions
+
+        if session_state == SessionState.SPECIAL_SESSION:
+            decisions.append(
+                StrategyDecision(
+                    decision=Decision.WAIT,
+                    timestamp_ist=now,
+                    reason_codes=["SPECIAL_SESSION_NO_MIS"],
+                    explanation="Special session active (e.g. Muhurat Trading). Intraday MIS trading blocked by policy.",
+                )
+            )
+            return decisions
+
+        if session_state == SessionState.PRE_OPEN:
+            decisions.append(
+                StrategyDecision(
+                    decision=Decision.WAIT,
+                    timestamp_ist=now,
+                    reason_codes=["PRE_OPEN_SESSION"],
+                    explanation="Pre-open session (before 09:15 IST). Observing and validating data.",
+                )
+            )
             return decisions
 
         # If already at max simultaneous positions, cannot take new entries
@@ -1227,6 +1400,17 @@ class StrategyEngine:
                 is_complete = getattr(entry_state, "status", None) == OrderStatus.COMPLETE
 
                 if entry_state and (is_complete or is_filled_qty_positive):
+                    # On partial fill, cancel the unfilled remainder immediately and confirm cancellation
+                    if is_filled_qty_positive and not is_complete:
+                        try:
+                            self.broker.cancel_order(entry_order_id)
+                        except Exception as cancel_err:
+                            logger.warning("Failed to cancel remaining entry for %s: %s", sym, cancel_err)
+                        refreshed_st = self.broker.get_order_status(entry_order_id)
+                        if refreshed_st:
+                            entry_state = refreshed_st
+                            entry_filled_qty = getattr(entry_state, "filled_quantity", entry_filled_qty)
+
                     actual_qty = int(entry_filled_qty) if is_filled_qty_positive else sizing.quantity
                     entry_avg_px = getattr(entry_state, "average_price", 0.0)
                     is_avg_px_positive = isinstance(entry_avg_px, (int, float)) and entry_avg_px > 0
@@ -1235,6 +1419,13 @@ class StrategyEngine:
                     managed.average_entry = actual_entry
                     managed.best_favorable_price = actual_entry
                     managed.r_value = abs(actual_entry - initial_stop)
+                    managed.target_price = calculate_target_price(
+                        side=side,
+                        entry_price=actual_entry,
+                        initial_stop=initial_stop,
+                        target_r=self.config.stops.target_r,
+                        tick_size=inst.tick_size,
+                    )
                     managed.phase = PositionPhase.OPEN_UNPROTECTED
 
                     # Step 10: Place protective stop immediately for filled quantity
@@ -1258,7 +1449,8 @@ class StrategyEngine:
                         sl_order_id = self.broker.place_order(sl_req)
                         managed.protective_order_id = sl_order_id
                         sl_state = self.broker.get_order_status(sl_order_id)
-                        if sl_state and sl_state.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN, OrderStatus.COMPLETE):
+                        sl_qty = getattr(sl_state, "quantity", None) or getattr(getattr(sl_state, "request", None), "quantity", 0) or getattr(sl_state, "pending_quantity", 0)
+                        if sl_state and sl_state.status == OrderStatus.TRIGGER_PENDING and sl_qty == actual_qty:
                             managed.phase = PositionPhase.OPEN_PROTECTED
                             sl_confirmed = True
                         else:
@@ -1284,7 +1476,8 @@ class StrategyEngine:
                                 tag=f"{tag}_EMERGENCY_FLATTEN",
                                 strategy_id=self.session_tag,
                             )
-                            self.broker.place_order(flat_req)
+                            emer_flat_id = self.broker.place_order(flat_req)
+                            managed.exit_order_id = emer_flat_id
                             managed.phase = PositionPhase.EXITING
                         except Exception as flat_err:
                             logger.critical("FATAL: Emergency liquidation order failed for %s: %s", sym, flat_err)

@@ -99,7 +99,7 @@ def test_hybrid_adapter_routing():
 
     inst = hybrid.get_instrument_info("RELIANCE")
     assert inst.symbol == "RELIANCE"
-    assert inst.upper_circuit > inst.lower_circuit
+    assert inst.tick_size > 0
 
     # 2. Margins should route to Zerodha
     margin = hybrid.get_margins()

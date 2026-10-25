@@ -36,6 +36,7 @@ class SessionState(Enum):
     POST_CLOSE = auto()
     HOLIDAY = auto()
     WEEKEND = auto()
+    SPECIAL_SESSION = auto()
 
 
 class SessionScheduler:
@@ -108,6 +109,11 @@ class SessionScheduler:
         now = at_time or self.now_ist()
         now_date = now.date()
         now_time = now.timetz().replace(tzinfo=None)
+
+        # Special session (e.g. Muhurat Trading)
+        is_special, _ = self._config.is_special_session(now_date)
+        if is_special:
+            return SessionState.SPECIAL_SESSION
 
         # Weekend
         if now_date.weekday() >= 5:

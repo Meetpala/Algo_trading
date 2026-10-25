@@ -223,47 +223,102 @@ def evaluate_signal(
     latest_bar = completed_candles[-1]
     signal_price = latest_bar.close
 
-    # Check Quote Freshness & Spread
-    if quote is not None:
-        if not quote.is_fresh:
-            gates.append(
-                GateResult(
-                    name="QUOTE_FRESHNESS",
-                    status=GateStatus.FAIL,
-                    reason="Quote data is stale",
-                    data={"code": "STALE_QUOTE"},
-                )
+    # Check Quote Freshness, Source Timestamp, and Spread
+    if quote is None:
+        gates.append(
+            GateResult(
+                name="QUOTE_FRESHNESS",
+                status=GateStatus.FAIL,
+                reason="Live quote is missing; failing closed",
+                data={"code": "MISSING_QUOTE"},
             )
-            return SignalEvaluation(
-                symbol=symbol,
-                decision=Decision.WAIT,
-                gates=gates,
-                reason_codes=["STALE_QUOTE"],
-                explanation="Quote data exceeds staleness threshold",
-            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["MISSING_QUOTE"],
+            explanation="Live quote required for signal evaluation",
+        )
 
-        # Spread check
-        if quote.bid > 0 and quote.ask > 0:
-            mid = (quote.bid + quote.ask) / 2.0
-            spread_bps = ((quote.ask - quote.bid) / mid) * 10000.0
-            if spread_bps > config.max_spread_bps:
-                gates.append(
-                    GateResult(
-                        name="SPREAD",
-                        status=GateStatus.FAIL,
-                        reason=f"Spread {spread_bps:.1f} bps > max {config.max_spread_bps} bps",
-                        data={"spread_bps": spread_bps, "max_bps": config.max_spread_bps},
-                    )
-                )
-                return SignalEvaluation(
-                    symbol=symbol,
-                    decision=Decision.WAIT,
-                    gates=gates,
-                    reason_codes=["EXCESSIVE_SPREAD"],
-                    explanation=f"Spread {spread_bps:.1f} bps exceeds limit {config.max_spread_bps} bps",
-                )
-            gates.append(GateResult(name="SPREAD", status=GateStatus.PASS, reason=f"Spread {spread_bps:.1f} bps acceptable"))
-    gates.append(GateResult(name="QUOTE_FRESHNESS", status=GateStatus.PASS, reason="Quote data fresh"))
+    if not quote.is_fresh:
+        gates.append(
+            GateResult(
+                name="QUOTE_FRESHNESS",
+                status=GateStatus.FAIL,
+                reason="Quote data is marked stale or lacks depth",
+                data={"code": "STALE_QUOTE"},
+            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["STALE_QUOTE"],
+            explanation="Quote data exceeds staleness threshold or lacks depth",
+        )
+
+    # Validate source quote timestamp age against exchange clock
+    now_ist = datetime.now(IST)
+    q_ts = (quote.timestamp if quote.timestamp.tzinfo else quote.timestamp.replace(tzinfo=IST)) if quote.timestamp else now_ist
+    eval_clock = now_ist if (now_ist.date() == q_ts.date()) else (latest_bar.timestamp if latest_bar.timestamp.tzinfo else latest_bar.timestamp.replace(tzinfo=IST))
+    age_sec = abs((eval_clock - q_ts).total_seconds())
+    if age_sec > 15.0:
+        gates.append(
+            GateResult(
+                name="QUOTE_FRESHNESS",
+                status=GateStatus.FAIL,
+                reason=f"Quote timestamp age ({age_sec:.1f}s) exceeds max threshold (15s)",
+                data={"code": "STALE_QUOTE", "age_sec": age_sec},
+            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["STALE_QUOTE"],
+            explanation=f"Quote timestamp is {age_sec:.1f}s old",
+        )
+
+    # Spread and market depth check
+    if quote.bid <= 0 or quote.ask <= 0 or quote.ask < quote.bid:
+        gates.append(
+            GateResult(
+                name="SPREAD",
+                status=GateStatus.FAIL,
+                reason=f"Invalid market depth: bid={quote.bid:.2f}, ask={quote.ask:.2f}",
+                data={"bid": quote.bid, "ask": quote.ask},
+            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["INVALID_DEPTH"],
+            explanation=f"Invalid quote depth: bid={quote.bid:.2f}, ask={quote.ask:.2f}",
+        )
+
+    mid = (quote.bid + quote.ask) / 2.0
+    spread_bps = ((quote.ask - quote.bid) / mid) * 10000.0
+    if spread_bps > config.max_spread_bps:
+        gates.append(
+            GateResult(
+                name="SPREAD",
+                status=GateStatus.FAIL,
+                reason=f"Spread {spread_bps:.1f} bps > max {config.max_spread_bps} bps",
+                data={"spread_bps": spread_bps, "max_bps": config.max_spread_bps},
+            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["EXCESSIVE_SPREAD"],
+            explanation=f"Spread {spread_bps:.1f} bps exceeds limit {config.max_spread_bps} bps",
+        )
+
+    gates.append(GateResult(name="SPREAD", status=GateStatus.PASS, reason=f"Spread {spread_bps:.1f} bps acceptable"))
+    gates.append(GateResult(name="QUOTE_FRESHNESS", status=GateStatus.PASS, reason=f"Quote data fresh ({age_sec:.1f}s age)"))
 
     # 3. Market Regime Alignment Gate
     if market_regime == MarketRegime.NEUTRAL:

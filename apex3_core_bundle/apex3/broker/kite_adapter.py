@@ -420,7 +420,7 @@ class KiteAdapter(BrokerInterface):
     # ── Market Data ──────────────────────────────────────────────
 
     def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
-        """Fetch a live quote snapshot from Kite."""
+        """Fetch a live quote snapshot from Kite with verified source timestamp and depth."""
         self._require_kite()
         instrument_key = f"{exchange}:{symbol}"
         data = self._kite.quote(instrument_key)
@@ -430,18 +430,43 @@ class KiteAdapter(BrokerInterface):
         buys = depth.get("buy", [])
         sells = depth.get("sell", [])
 
-        bid = float(buys[0]["price"]) if buys and buys[0]["price"] > 0 else float(q.get("last_price", 0.0))
-        ask = float(sells[0]["price"]) if sells and sells[0]["price"] > 0 else float(q.get("last_price", 0.0))
+        has_depth = bool(buys and sells and buys[0].get("price", 0) > 0 and sells[0].get("price", 0) > 0)
+        last_price = float(q.get("last_price", 0.0))
+
+        if has_depth:
+            bid = float(buys[0]["price"])
+            ask = float(sells[0]["price"])
+        else:
+            # Reject missing depth; do NOT fabricate zero spread by substituting LTP
+            bid = 0.0
+            ask = 0.0
+
+        # Extract verified broker/source timestamp if present
+        source_ts = q.get("timestamp") or q.get("last_trade_time")
+        if isinstance(source_ts, datetime):
+            quote_ts = source_ts.astimezone(IST) if source_ts.tzinfo else source_ts.replace(tzinfo=IST)
+        elif isinstance(source_ts, str):
+            try:
+                quote_ts = datetime.fromisoformat(source_ts).astimezone(IST)
+            except Exception:
+                quote_ts = datetime.now(IST)
+        else:
+            quote_ts = datetime.now(IST)
+
+        now_ist = datetime.now(IST)
+        age_sec = (now_ist - quote_ts).total_seconds()
+        stale_limit = getattr(self.config.schedule, "stale_threshold_sec", 5) if hasattr(self, "config") and hasattr(self.config, "schedule") else 5
+        is_fresh = bool(has_depth and last_price > 0.0 and age_sec <= max(stale_limit, 5))
 
         return Quote(
             symbol=symbol,
             exchange=exchange,
-            last_price=float(q.get("last_price", 0.0)),
+            last_price=last_price,
             bid=bid,
             ask=ask,
             volume=int(q.get("volume", 0)),
-            timestamp=datetime.now(IST),
-            is_fresh=True,
+            timestamp=quote_ts,
+            is_fresh=is_fresh,
         )
 
     def get_historical(
