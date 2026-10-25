@@ -166,12 +166,13 @@ def test_target_exit_idempotence_prevents_duplicate_exits():
     # Price reaches target 1520.0
     mock_broker.get_quote.return_value = Quote(symbol="INFY", exchange="NSE", last_price=1521.0, bid=1520.95, ask=1521.05, volume=50000, timestamp=now, is_fresh=True)
 
-    # Stop is resting as TRIGGER_PENDING, then cancelled
-    mock_broker.get_order_status.side_effect = lambda ord_id: OrderState(
-        order_id=ord_id,
-        status=OrderStatus.TRIGGER_PENDING if ord_id == "SL_RESTING_123" else OrderStatus.PENDING,
-        pending_quantity=25,
-    )
+    def on_status_infy(ord_id):
+        if ord_id == "SL_RESTING_123":
+            if mock_broker.cancel_order.called:
+                return OrderState(order_id=ord_id, status=OrderStatus.CANCELLED, pending_quantity=0)
+            return OrderState(order_id=ord_id, status=OrderStatus.TRIGGER_PENDING, pending_quantity=25)
+        return OrderState(order_id=ord_id, status=OrderStatus.PENDING, pending_quantity=25)
+    mock_broker.get_order_status.side_effect = on_status_infy
     mock_broker.place_order.return_value = "EXIT_MKT_999"
 
     # Cycle 1: Reaches target -> cancels stop -> places exit order -> enters EXITING phase
