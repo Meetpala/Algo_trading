@@ -391,7 +391,7 @@ def test_restart_recovery_reconciles_strategy_orders_without_unknown_positions_h
     mock_broker.get_orders.return_value = [
         OrderState(
             order_id="SL_RECOVERED_1",
-            request=OrderRequest(symbol="INFY", side=Side.SELL, quantity=10, order_type=OrderType.SL, tag="APEX3_INFY_SL"),
+            request=OrderRequest(symbol="INFY", side=Side.SELL, quantity=10, order_type=OrderType.SL, price=1485.0, trigger_price=1485.0, tag="APEX3_INFY_SL"),
             status=OrderStatus.TRIGGER_PENDING,
             pending_quantity=10,
         )
@@ -401,6 +401,141 @@ def test_restart_recovery_reconciles_strategy_orders_without_unknown_positions_h
     assert audit.is_clean is True
     assert audit.has_unknown_positions is False
     assert "INFY" in sm.positions
-    assert sm.positions["INFY"].phase == PositionPhase.OPEN_PROTECTED
-    assert sm.positions["INFY"].quantity == 10
-    assert sm.positions["INFY"].protective_order_id == "SL_RECOVERED_1"
+    recovered_pos = sm.positions["INFY"]
+    assert recovered_pos.phase == PositionPhase.OPEN_PROTECTED
+    assert recovered_pos.quantity == 10
+    assert recovered_pos.protective_order_id == "SL_RECOVERED_1"
+    # Fix 7 verification: initial_stop_price, r_value, and target_price are populated
+    assert recovered_pos.initial_stop_price > 0
+    assert recovered_pos.r_value > 0
+    assert recovered_pos.target_price > 1500.0
+
+
+def test_broker_tags_strictly_within_20_chars():
+    """All broker tags must be strictly <= 20 chars to comply with Zerodha Kite Connect v3."""
+    from apex3.models import make_broker_tag
+    session_tag = "APEX3"
+
+    tags = [
+        make_broker_tag(session_tag, "SUNPHARMA", "E0935"),
+        make_broker_tag(session_tag, "SUNPHARMA", "SL"),
+        make_broker_tag(session_tag, "SUNPHARMA", "TGT"),
+        make_broker_tag(session_tag, "SUNPHARMA", "EMG"),
+        make_broker_tag(session_tag, "SUNPHARMA", "FLT"),
+        make_broker_tag("APEX3_PROD", "BHARTIARTL", "EMERGENCY_FLATTEN"),
+    ]
+    for tag in tags:
+        assert len(tag) <= 20, f"Tag '{tag}' exceeds 20 characters ({len(tag)})"
+        assert tag.startswith(session_tag[:5]), f"Tag '{tag}' does not start with session prefix"
+
+
+def test_candidate_ranking_evaluates_next_candidate_if_first_fails_gate9():
+    """If Candidate #1 fails Gate 9 (stop-width bounds), engine proceeds to evaluate Candidate #2."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.get_positions.return_value = []
+    mock_broker.estimate_order_margin.return_value = OrderMarginEstimate(required_margin=3000.0, leverage_available=4.0)
+
+    now = datetime(2026, 3, 20, 9, 35, tzinfo=IST)
+    cfg = AppConfig()
+    object.__setattr__(cfg.watchlist, "symbols", ["STOCK_A", "STOCK_B"])
+    object.__setattr__(cfg.watchlist, "scanner_enabled", False)
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # STOCK_A has stop width outside bounds (e.g. 2.2% > 0.90%)
+    # STOCK_B has stop width inside bounds (~0.70%)
+    inst_a = InstrumentInfo(symbol="STOCK_A", exchange="NSE", lot_size=1, tick_size=0.05)
+    inst_b = InstrumentInfo(symbol="STOCK_B", exchange="NSE", lot_size=1, tick_size=0.05)
+    mock_broker.get_instrument_info.side_effect = lambda sym: inst_a if sym == "STOCK_A" else inst_b
+
+    quote_a = Quote(symbol="STOCK_A", exchange="NSE", last_price=1000.0, bid=999.8, ask=1000.2, volume=10000, timestamp=now)
+    quote_b = Quote(symbol="STOCK_B", exchange="NSE", last_price=500.0, bid=499.9, ask=500.1, volume=10000, timestamp=now)
+    mock_broker.get_quote.side_effect = lambda sym: quote_a if sym == "STOCK_A" else quote_b
+
+    # STOCK_A swing low 970 (wide stop ~3%), STOCK_B swing low 497 (stop ~0.7%)
+    candles_a = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=1000.0, high=1005.0, low=970.0, close=1000.0, volume=10000, is_complete=True) for i in range(20)]
+    candles_b = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=500.0, high=500.5, low=499.5, close=500.0, volume=10000, is_complete=True) for i in range(20)]
+    candles_b[-1] = Candle(timestamp=now, open=500.0, high=500.5, low=498.0, close=500.0, volume=10000, is_complete=True)
+    mock_broker.get_historical.side_effect = lambda sym, *args, **kwargs: candles_a if sym == "STOCK_A" else candles_b
+
+    sig_a = SignalEvaluation(symbol="STOCK_A", decision=Decision.PROPOSED_LONG, signal_price=1000.0, side=Side.BUY, gates=[], relative_strength=0.08, relative_volume=4.0)
+    sig_b = SignalEvaluation(symbol="STOCK_B", decision=Decision.PROPOSED_LONG, signal_price=500.0, side=Side.BUY, gates=[], relative_strength=0.05, relative_volume=3.0)
+
+    import apex3.strategy.engine as eng_module
+    orig_eval = eng_module.evaluate_signal
+    orig_regime = eng_module.evaluate_market_regime
+    try:
+        eng_module.evaluate_signal = lambda symbol, **kwargs: sig_a if symbol == "STOCK_A" else sig_b
+        eng_module.evaluate_market_regime = MagicMock(return_value=MagicMock(regime=MarketRegime.BULLISH, is_valid=True))
+
+        mock_broker.place_order.return_value = "ORD_B_1"
+        mock_broker.get_order_status.return_value = OrderState(
+            order_id="ORD_B_1",
+            request=OrderRequest(symbol="STOCK_B", side=Side.BUY, quantity=20, price=500.05),
+            status=OrderStatus.PENDING,
+            filled_quantity=0,
+            pending_quantity=20,
+        )
+
+        decisions = engine.evaluate_step(now)
+        # STOCK_A is rejected on STOP_WIDTH_OUT_OF_BOUNDS
+        # But STOCK_B is successfully evaluated and proposed!
+        submitted = [d for d in decisions if d.decision == Decision.PROPOSED_LONG and d.symbol == "STOCK_B"]
+        assert len(submitted) == 1, "Candidate #2 (STOCK_B) should be proposed after Candidate #1 failed Gate 9"
+    finally:
+        eng_module.evaluate_signal = orig_eval
+        eng_module.evaluate_market_regime = orig_regime
+
+
+def test_step11_fee_lock_no_unbound_local_error_when_modify_fails():
+    """In Step 11, when fee-lock triggers but broker modify_order fails, no UnboundLocalError is raised."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 11, 0, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # Position in profit >= +1.60R
+    pos = engine.state_machine.get_or_create_position("HINDALCO")
+    pos.side = Side.BUY
+    pos.quantity = 40
+    pos.average_entry = 650.0
+    pos.initial_stop_price = 645.0
+    pos.current_stop_price = 645.0
+    pos.target_price = 660.0
+    pos.r_value = 5.0
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.protective_order_id = "SL_HINDALCO_1"
+
+    # Current price 658.5 -> +1.70R
+    mock_broker.get_quote.return_value = Quote(
+        symbol="HINDALCO",
+        exchange="NSE",
+        last_price=658.5,
+        bid=658.4,
+        ask=658.6,
+        volume=50000,
+        timestamp=now,
+        is_fresh=True,
+    )
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="HINDALCO", exchange="NSE", lot_size=1, tick_size=0.05)
+    mock_broker.get_order_status.return_value = OrderState(
+        order_id="SL_HINDALCO_1",
+        status=OrderStatus.TRIGGER_PENDING,
+        pending_quantity=40,
+    )
+    # modify_order fails!
+    mock_broker.modify_order.return_value = False
+
+    # Must execute cleanly without UnboundLocalError
+    decisions = engine.evaluate_step(now)
+    assert len(decisions) >= 1
+    assert decisions[0].decision == Decision.MANAGE
+    assert pos.current_stop_price == 645.0  # Internal stop not moved because modification unconfirmed
+
