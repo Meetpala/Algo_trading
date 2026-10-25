@@ -46,6 +46,16 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         if remote not in ("127.0.0.1", "localhost", "::1", "testclient"):
             return jsonify({"error": "Forbidden: APEX-3 Dashboard is strictly bound to localhost (127.0.0.1)"}), 403
 
+        # CSRF Protection: For mutating requests, verify Origin or Referer is strictly from loopback
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            origin = request.headers.get("Origin") or ""
+            referer = request.headers.get("Referer") or ""
+            valid_origins = ("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost")
+            if origin and not any(origin.startswith(vo) for vo in valid_origins):
+                return jsonify({"error": "Forbidden: Cross-site request rejected (invalid Origin)"}), 403
+            if not origin and referer and not any(referer.startswith(vo) for vo in valid_origins):
+                return jsonify({"error": "Forbidden: Cross-site request rejected (invalid Referer)"}), 403
+
     @app.route("/")
     def index():
         return render_template("dashboard.html", mode=config.mode)

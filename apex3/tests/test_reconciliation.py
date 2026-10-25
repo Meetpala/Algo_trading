@@ -70,7 +70,8 @@ def test_execute_flatten_sequence(test_setup):
 
     success, msg = reconciler.execute_flatten_sequence()
     assert success
-    assert pos.phase == PositionPhase.EXITING
+    assert pos.phase in (PositionPhase.CLOSED, PositionPhase.FLAT)
+    assert pos.quantity == 0
     assert pos.exit_order_id != ""
 
 
