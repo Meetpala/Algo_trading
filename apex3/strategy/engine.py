@@ -386,6 +386,7 @@ class StrategyEngine:
                             ent_pos.quantity = refreshed.filled_quantity
                             if refreshed.average_price > 0:
                                 ent_pos.average_entry = refreshed.average_price
+                            ent_pos.best_favorable_price = ent_pos.average_entry
                             ent_pos.phase = PositionPhase.OPEN_UNPROTECTED
                             ent_pos.r_value = abs(ent_pos.average_entry - ent_pos.initial_stop_price)
 
@@ -1041,20 +1042,37 @@ class StrategyEngine:
             broker_positions = self.broker.get_positions()
             risk_positions: list[PositionState] = []
             for position in broker_positions:
-                if position.quantity <= 0:
+                qty = abs(position.quantity)
+                if qty <= 0:
                     continue
+                pos_side = Side.SELL if position.quantity < 0 else position.side
                 mark = self.broker.get_quote(position.symbol)
                 if not mark.is_fresh or mark.last_price <= 0:
                     raise ValueError(f"Missing or stale mark for {position.symbol}")
                 unrealized = (
-                    (mark.last_price - position.average_entry) * position.quantity
-                    if position.side == Side.BUY
-                    else (position.average_entry - mark.last_price) * position.quantity
+                    (mark.last_price - position.average_entry) * qty
+                    if pos_side == Side.BUY
+                    else (position.average_entry - mark.last_price) * qty
+                )
+                managed_pos = self.state_machine.positions.get(position.symbol)
+                prot_stop = (
+                    managed_pos.current_stop_price
+                    if (managed_pos and managed_pos.current_stop_price > 0)
+                    else position.protective_stop_price
+                )
+                init_stop = (
+                    managed_pos.initial_stop_price
+                    if (managed_pos and managed_pos.initial_stop_price > 0)
+                    else position.initial_stop_price
                 )
                 risk_positions.append(
                     replace(
                         position,
+                        side=pos_side,
+                        quantity=qty,
                         current_price=mark.last_price,
+                        protective_stop_price=prot_stop,
+                        initial_stop_price=init_stop,
                         unrealized_pnl=unrealized,
                         realized_pnl=0.0,
                     )
@@ -1100,7 +1118,10 @@ class StrategyEngine:
             self._daily_loss_halt_date = session_date
             self.is_paused = True
             self.pause_reason = "DAILY_LOSS_LIMIT_BREACHED"
-            has_open = any(p.quantity > 0 for p in self.state_machine.positions.values())
+            has_open = any(
+                p.quantity > 0 or p.phase in (PositionPhase.ENTERING, PositionPhase.OPEN_UNPROTECTED, PositionPhase.EXITING)
+                for p in self.state_machine.positions.values()
+            )
             flatten_msg = ""
             if has_open:
                 logger.critical("Daily loss limit breached with open positions! Squaring off immediately.")
@@ -1570,6 +1591,11 @@ class StrategyEngine:
                 managed.requested_quantity = sizing.quantity
                 managed.initial_stop_price = initial_stop
                 managed.current_stop_price = initial_stop
+                managed.protective_order_id = ""
+                managed.exit_order_id = ""
+                managed.fee_lock_applied = False
+                managed.trail_activated = False
+                managed.stop_modification_count = 0
                 managed.target_price = calculate_target_price(
                     side=side,
                     entry_price=marketable_entry_price,

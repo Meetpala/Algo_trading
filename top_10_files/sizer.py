@@ -248,7 +248,7 @@ def size_position(
         broker_leverage = order_margin_estimate.leverage_available
 
     # Check minimum accepted leverage
-    if broker_leverage < limits_config.min_accepted_leverage:
+    if (broker_leverage + 1e-3) < limits_config.min_accepted_leverage:
         return SizingResult(
             symbol=symbol,
             quantity=0,

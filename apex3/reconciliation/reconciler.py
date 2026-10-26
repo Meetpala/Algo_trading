@@ -96,7 +96,9 @@ class Reconciler:
             broker_orders = []
 
         for bp in broker_positions:
-            if bp.quantity == 0:
+            bp_qty = abs(bp.quantity)
+            bp_side = Side.SELL if bp.quantity < 0 else getattr(bp, "side", Side.BUY)
+            if bp_qty == 0:
                 # Clear corresponding internal managed position if present
                 managed = self.sm.positions.get(bp.symbol)
                 if managed and managed.quantity > 0:
@@ -122,8 +124,8 @@ class Reconciler:
                     # Restore strategy position
                     pos = self.sm.get_or_create_position(bp.symbol)
                     pos.symbol = bp.symbol
-                    pos.quantity = bp.quantity
-                    pos.side = getattr(bp, "side", Side.BUY)
+                    pos.quantity = bp_qty
+                    pos.side = bp_side
                     pos.average_entry = bp.average_entry
                     pos.current_stop_price = bp.protective_stop_price or 0.0
 
@@ -137,10 +139,10 @@ class Reconciler:
                         pos.protective_order_id = matching_stops[0].order_id
                         pos.current_stop_price = matching_stops[0].request.trigger_price or matching_stops[0].request.price
                         pos.phase = PositionPhase.OPEN_PROTECTED
-                        logger.info("Restored active strategy position %s (qty=%d) with stop %s on restart", bp.symbol, bp.quantity, pos.protective_order_id)
+                        logger.info("Restored active strategy position %s (qty=%d) with stop %s on restart", bp.symbol, bp_qty, pos.protective_order_id)
                     else:
                         pos.phase = PositionPhase.OPEN_UNPROTECTED
-                        logger.warning("Restored strategy position %s (qty=%d) on restart, but resting SL order was not found", bp.symbol, bp.quantity)
+                        logger.warning("Restored strategy position %s (qty=%d) on restart, but resting SL order was not found", bp.symbol, bp_qty)
 
                     # Fix 7: Restore initial_stop_price, r_value, and target_price on restart recovery
                     if pos.initial_stop_price <= 0 and pos.current_stop_price > 0:
@@ -162,8 +164,9 @@ class Reconciler:
                     # Foreign / manual position
                     unknown_symbols.append(bp.symbol)
             else:
-                if pos.quantity != bp.quantity:
-                    pos.quantity = bp.quantity
+                if pos.quantity != bp_qty:
+                    pos.quantity = bp_qty
+                pos.side = bp_side
                 open_strategy_count += 1
 
         if unknown_symbols:
@@ -271,14 +274,17 @@ class Reconciler:
 
         exit_orders: dict[str, str] = {}
         for bp in broker_positions:
-            if bp.quantity == 0:
+            bp_qty = abs(bp.quantity)
+            if bp_qty == 0:
                 continue
 
             managed = self.sm.positions.get(bp.symbol)
             if managed is None:
                 continue
 
-            managed.quantity = bp.quantity
+            managed.quantity = bp_qty
+            bp_side = Side.SELL if bp.quantity < 0 else (getattr(bp, "side", None) or managed.side)
+            managed.side = bp_side
 
             if managed.protective_order_id:
                 try:
@@ -286,9 +292,8 @@ class Reconciler:
                 except Exception:
                     pass
 
-            side = getattr(bp, "side", None) or managed.side
-            exit_side = Side.SELL if side == Side.BUY else Side.BUY
-            exit_qty = bp.quantity
+            exit_side = Side.SELL if bp_side == Side.BUY else Side.BUY
+            exit_qty = bp_qty
 
             exit_req = OrderRequest(
                 symbol=managed.symbol,
@@ -335,7 +340,7 @@ class Reconciler:
         while time_module.time() - start_t < timeout_sec:
             try:
                 fresh_bp = self.broker.get_positions()
-                open_bp = [p for p in fresh_bp if p.quantity > 0 and self.sm.positions.get(p.symbol) is not None]
+                open_bp = [p for p in fresh_bp if abs(p.quantity) > 0 and self.sm.positions.get(p.symbol) is not None]
                 if not open_bp:
                     all_flat = True
                     break
@@ -347,7 +352,7 @@ class Reconciler:
         if not all_flat:
             try:
                 fresh_bp = self.broker.get_positions()
-                open_bp = [p for p in fresh_bp if p.quantity > 0 and self.sm.positions.get(p.symbol) is not None]
+                open_bp = [p for p in fresh_bp if abs(p.quantity) > 0 and self.sm.positions.get(p.symbol) is not None]
                 all_flat = (len(open_bp) == 0)
                 remaining_symbols = [p.symbol for p in open_bp]
             except Exception:

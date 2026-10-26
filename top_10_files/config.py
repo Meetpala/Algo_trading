@@ -37,7 +37,7 @@ class WatchlistConfig:
 class LimitsConfig:
     max_symbols: int = 2
     max_leverage: float = 4.0
-    min_accepted_leverage: float = 4.0
+    min_accepted_leverage: float = 3.5
     safety_reserve_pct: float = 5.0
 
 
@@ -377,7 +377,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         limits=LimitsConfig(
             max_symbols=int(risk_raw.get("max_concurrent_positions", limits_raw.get("max_symbols", 2))),
             max_leverage=float(acc_raw.get("max_intraday_leverage", limits_raw.get("max_leverage", 4.0))),
-            min_accepted_leverage=float(limits_raw.get("min_accepted_leverage", 4.0)),
+            min_accepted_leverage=float(limits_raw.get("min_accepted_leverage", 3.5)),
             safety_reserve_pct=safety_pct,
         ),
         risk=RiskConfig(

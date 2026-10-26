@@ -835,4 +835,167 @@ def test_step11_detects_cancelled_protective_stop_and_liquidates_immediately():
     assert pos.exit_order_id == "EMER_FLT_1"
 
 
+def test_daily_loss_breach_flattens_even_with_resting_unfilled_entering_order():
+    """When daily loss is breached, flatten sequence executes even if an unfilled order is in ENTERING phase (quantity==0)."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 30, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # Position in ENTERING with quantity == 0
+    pos = engine.state_machine.get_or_create_position("TRENT")
+    pos.side = Side.BUY
+    pos.quantity = 0
+    pos.entry_order_id = "ORD_ENT_1"
+    pos.phase = PositionPhase.ENTERING
+
+    mock_broker.get_positions.return_value = []
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+
+    import apex3.strategy.engine as eng_module
+    orig_eval_risk = eng_module.evaluate_portfolio_risk
+    try:
+        mock_risk = MagicMock(is_daily_loss_breached=True, is_hard_loss_breached=True, gate=MagicMock(reason="Daily loss limit hit"))
+        eng_module.evaluate_portfolio_risk = MagicMock(return_value=mock_risk)
+        mock_reconciler_flatten = MagicMock(return_value=(True, "Flattened"))
+        engine.reconciler.execute_flatten_sequence = mock_reconciler_flatten
+
+        decisions = engine.evaluate_step(now)
+
+        # execute_flatten_sequence must have been called
+        assert mock_reconciler_flatten.called, "execute_flatten_sequence should be called for ENTERING phase"
+        halt_decisions = [d for d in decisions if d.decision == Decision.HALT and "DAILY_LOSS_LIMIT_BREACHED" in d.reason_codes]
+        assert len(halt_decisions) == 1
+    finally:
+        eng_module.evaluate_portfolio_risk = orig_eval_risk
+
+
+def test_risk_positions_populates_protective_stop_and_normalizes_short():
+    """risk_positions correctly normalizes signed short positions and populates protective_stop_price from managed position."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 30, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # Short position registered in state machine with current_stop_price
+    pos = engine.state_machine.get_or_create_position("HINDALCO")
+    pos.side = Side.SELL
+    pos.quantity = 15
+    pos.average_entry = 600.0
+    pos.current_stop_price = 612.0
+    pos.initial_stop_price = 612.0
+    pos.phase = PositionPhase.OPEN_PROTECTED
+
+    # Broker returns signed short quantity (-15) with protective_stop_price = 0.0
+    mock_broker.get_positions.return_value = [
+        PositionState(
+            symbol="HINDALCO",
+            side=Side.SELL,
+            quantity=-15,
+            average_entry=600.0,
+            protective_stop_price=0.0,
+        )
+    ]
+    mock_broker.get_quote.return_value = Quote(symbol="HINDALCO", exchange="NSE", last_price=595.0, bid=594.8, ask=595.2, volume=10000, timestamp=now, is_fresh=True)
+
+    import apex3.strategy.engine as eng_module
+    orig_eval_risk = eng_module.evaluate_portfolio_risk
+    captured_positions = []
+    def capture_risk(open_positions, **kwargs):
+        captured_positions.extend(open_positions)
+        return MagicMock(is_daily_loss_breached=False, is_hard_loss_breached=False, gate=MagicMock(reason="OK"))
+
+    try:
+        eng_module.evaluate_portfolio_risk = MagicMock(side_effect=capture_risk)
+        engine.evaluate_step(now)
+
+        assert len(captured_positions) == 1
+        risk_pos = captured_positions[0]
+        assert risk_pos.quantity == 15, "Quantity must be absolute positive"
+        assert risk_pos.side == Side.SELL
+        assert risk_pos.protective_stop_price == 612.0, "protective_stop_price must be populated from managed_pos"
+        assert risk_pos.unrealized_pnl == (600.0 - 595.0) * 15  # Short profit: (600 - 595) * 15 = +75
+    finally:
+        eng_module.evaluate_portfolio_risk = orig_eval_risk
+
+
+def test_reconciler_handles_negative_short_quantities():
+    """reconciler.audit_startup_state and execute_flatten_sequence handle negative short quantities from broker."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    sm = StateMachine("TEST_SESSION")
+    reconciler = Reconciler(mock_broker, sm, mock_journal, "TEST_SESSION")
+
+    # 1. Startup audit with short position (quantity = -20)
+    broker_positions = [
+        PositionState(symbol="TATASTEEL", quantity=-20, average_entry=150.0, protective_stop_price=153.0)
+    ]
+    mock_broker.get_positions.return_value = broker_positions
+    mock_broker.get_orders.return_value = [
+        OrderState(
+            order_id="SL_TATA_1",
+            request=OrderRequest(symbol="TATASTEEL", side=Side.BUY, quantity=20, order_type=OrderType.SL, tag="TEST_SESSION_TATA_SL"),
+            status=OrderStatus.TRIGGER_PENDING,
+            pending_quantity=20,
+        )
+    ]
+
+    status = reconciler.audit_startup_state(["TATASTEEL"])
+    assert status.is_clean
+    assert "TATASTEEL" in sm.positions
+    managed = sm.positions["TATASTEEL"]
+    assert managed.quantity == 20
+    assert managed.side == Side.SELL
+    assert managed.phase == PositionPhase.OPEN_PROTECTED
+
+    # 2. Flatten sequence dispatches BUY exit for short position
+    placed_orders = []
+    def on_place(req):
+        placed_orders.append(req)
+        return "FLT_ORD_1"
+    mock_broker.place_order.side_effect = on_place
+
+    reconciler.execute_flatten_sequence(timeout_sec=0.1)
+    assert len(placed_orders) == 1
+    assert placed_orders[0].side == Side.BUY, "Exit for short position must be BUY"
+    assert placed_orders[0].quantity == 20
+
+
+def test_sizer_accepts_broker_leverage_within_float_tolerance():
+    """size_position accepts broker leverage within float tolerance (e.g. 3.999x with min_accepted_leverage=4.0)."""
+    from apex3.strategy.sizer import size_position
+    from apex3.config import LimitsConfig, RiskConfig
+
+    limits = LimitsConfig(max_symbols=2, max_leverage=4.0, min_accepted_leverage=4.0)
+    risk = RiskConfig()
+    margin = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    inst = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05)
+    # Estimate has 3.999x leverage
+    est = OrderMarginEstimate(required_margin=3000.0, leverage_available=3.999)
+
+    res = size_position(
+        symbol="TRENT",
+        side=Side.BUY,
+        entry_price=1000.0,
+        stop_price=993.0,
+        num_qualified_symbols=1,
+        margin_info=margin,
+        instrument=inst,
+        limits_config=limits,
+        risk_config=risk,
+        order_margin_estimate=est,
+    )
+    assert res.is_valid, f"Sizing should pass with 3.999x leverage, got {res.rejection_code}: {res.rejection_reason}"
+    assert res.quantity > 0
+
+
+
 
