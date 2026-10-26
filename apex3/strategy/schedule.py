@@ -77,6 +77,20 @@ class SessionScheduler:
         """Get today's date in IST."""
         return self.now_ist().date()
 
+    def validate_calendar_freshness(self, target_year: Optional[int] = None) -> tuple[bool, str]:
+        """Verify that the configured exchange holiday calendar includes holidays for the operating year.
+
+        Prevents running against a live exchange when the static holiday calendar is out of date.
+        """
+        yr = target_year or self.today_ist().year
+        year_str = str(yr)
+        has_year = any(str(h).startswith(year_str) for h in getattr(self._config, "holidays", []))
+        if not has_year:
+            msg = f"Stale holiday calendar: No exchange holidays configured for year {yr}. Annual calendar update required."
+            logger.critical(msg)
+            return False, msg
+        return True, f"Calendar validated for year {yr}"
+
     def is_trading_day(self, check_date: Optional[date] = None) -> bool:
         """Check if a date is a valid trading day.
 

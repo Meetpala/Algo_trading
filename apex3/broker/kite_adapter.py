@@ -412,7 +412,7 @@ class KiteAdapter(BrokerInterface):
                     current_price=float(p.get("last_price", 0.0)),
                     unrealized_pnl=float(p.get("unrealised", 0.0)),
                     realized_pnl=float(p.get("realised", 0.0)),
-                    product=Product[p.get("product", "MIS")],
+                    product=getattr(Product, str(p.get("product", "MIS")).upper(), Product.MIS),
                 )
             )
         return positions
@@ -549,6 +549,7 @@ class KiteAdapter(BrokerInterface):
         if lower_c <= 0.0:
             lower_c = 0.0
 
+        token_str = str(inst.get("instrument_token", "")) if inst else ""
         return InstrumentInfo(
             symbol=symbol,
             exchange=exchange,
@@ -556,7 +557,8 @@ class KiteAdapter(BrokerInterface):
             lower_circuit=lower_c,
             tick_size=tick,
             lot_size=int(inst.get("lot_size", 1)) if inst else 1,
-            instrument_token=int(inst.get("instrument_token", 0)) if inst else 0,
+            instrument_token=token_str,
+            mis_available=bool(inst is not None),
         )
 
     # ── Session ──────────────────────────────────────────────────
