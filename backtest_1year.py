@@ -37,7 +37,7 @@ def compute_drawdown_series(daily_stats: list[dict], starting_capital: float = 1
     curve = []
 
     for d in daily_stats:
-        equity += d.get("net_pnl", 0.0)
+        equity = d.get("closing_capital", equity + d.get("day_pnl", 0.0))
         curve.append((d["date"], equity))
         if equity > peak:
             peak = equity
@@ -59,7 +59,7 @@ def compute_drawdown_series(daily_stats: list[dict], starting_capital: float = 1
 
 def compute_sharpe_ratio(daily_stats: list[dict], risk_free_rate_pct: float = 6.5) -> float:
     """Calculate annualized Sharpe ratio from daily realized returns."""
-    daily_pnls = [d.get("net_pnl", 0.0) for d in daily_stats]
+    daily_pnls = [d.get("day_pnl", 0.0) for d in daily_stats]
     if not daily_pnls or len(daily_pnls) < 10:
         return 0.0
 

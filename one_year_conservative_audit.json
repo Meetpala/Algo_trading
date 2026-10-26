@@ -9,9 +9,9 @@
   "win_rate": 45.95,
   "profit_factor": 1.71,
   "statutory_friction_pct": 31.01,
-  "max_drawdown_inr": 0.0,
-  "max_drawdown_pct": 0.0,
-  "sharpe_ratio": 0.0,
+  "max_drawdown_inr": 782.57,
+  "max_drawdown_pct": 5.1,
+  "sharpe_ratio": -1.12,
   "charges_breakdown": {
     "brokerage": 346.2,
     "stt": 144.36,
