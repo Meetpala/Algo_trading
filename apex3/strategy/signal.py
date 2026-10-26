@@ -279,14 +279,31 @@ def evaluate_signal(
     now_ist = datetime.now(IST)
     q_ts = quote.timestamp if quote.timestamp.tzinfo else quote.timestamp.replace(tzinfo=IST)
     eval_clock = now_ist if (now_ist.date() == q_ts.date()) else (latest_bar.timestamp if latest_bar.timestamp.tzinfo else latest_bar.timestamp.replace(tzinfo=IST))
-    age_sec = abs((eval_clock - q_ts).total_seconds())
-    if age_sec > 15.0:
+    clock_diff = (eval_clock - q_ts).total_seconds()
+    age_sec = clock_diff
+    if clock_diff < -1.0:
         gates.append(
             GateResult(
                 name="QUOTE_FRESHNESS",
                 status=GateStatus.FAIL,
-                reason=f"Quote timestamp age ({age_sec:.1f}s) exceeds max threshold (15s)",
-                data={"code": "STALE_QUOTE", "age_sec": age_sec},
+                reason=f"Quote timestamp ({q_ts}) is in the future relative to exchange clock ({clock_diff:.1f}s)",
+                data={"code": "FUTURE_QUOTE_TIMESTAMP", "diff_sec": clock_diff},
+            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["FUTURE_QUOTE_TIMESTAMP"],
+            explanation=f"Quote timestamp is in the future by {-clock_diff:.1f}s",
+        )
+    if clock_diff > 15.0:
+        gates.append(
+            GateResult(
+                name="QUOTE_FRESHNESS",
+                status=GateStatus.FAIL,
+                reason=f"Quote timestamp age ({clock_diff:.1f}s) exceeds max threshold (15s)",
+                data={"code": "STALE_QUOTE", "age_sec": clock_diff},
             )
         )
         return SignalEvaluation(
@@ -294,7 +311,7 @@ def evaluate_signal(
             decision=Decision.WAIT,
             gates=gates,
             reason_codes=["STALE_QUOTE"],
-            explanation=f"Quote timestamp is {age_sec:.1f}s old",
+            explanation=f"Quote timestamp is {clock_diff:.1f}s old",
         )
 
     # Spread and market depth check

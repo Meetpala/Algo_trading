@@ -77,7 +77,7 @@ def _map_kite_order_status(status_str: str) -> OrderStatus:
         "PUT ORDER REQ RECEIVED": OrderStatus.PENDING,
         "VALIDATION PENDING": OrderStatus.PENDING,
     }
-    return mapping.get(s, OrderStatus.PENDING)
+    return mapping.get(s, OrderStatus.UNKNOWN)
 
 
 def _map_kite_order_type(type_str: str) -> OrderType:
@@ -443,20 +443,26 @@ class KiteAdapter(BrokerInterface):
 
         # Extract verified broker/source timestamp if present
         source_ts = q.get("timestamp") or q.get("last_trade_time")
+        quote_ts = None
+        has_valid_ts = False
         if isinstance(source_ts, datetime):
             quote_ts = source_ts.astimezone(IST) if source_ts.tzinfo else source_ts.replace(tzinfo=IST)
+            has_valid_ts = True
         elif isinstance(source_ts, str):
             try:
                 quote_ts = datetime.fromisoformat(source_ts).astimezone(IST)
+                has_valid_ts = True
             except Exception:
-                quote_ts = datetime.now(IST)
-        else:
-            quote_ts = datetime.now(IST)
+                quote_ts = None
 
         now_ist = datetime.now(IST)
-        age_sec = (now_ist - quote_ts).total_seconds()
-        stale_limit = getattr(self.config.schedule, "stale_threshold_sec", 5) if hasattr(self, "config") and hasattr(self.config, "schedule") else 5
-        is_fresh = bool(has_depth and last_price > 0.0 and age_sec <= max(stale_limit, 5))
+        if has_valid_ts and quote_ts is not None:
+            age_sec = (now_ist - quote_ts).total_seconds()
+            stale_limit = getattr(self.config.schedule, "stale_threshold_sec", 5) if hasattr(self, "config") and hasattr(self.config, "schedule") else 5
+            is_fresh = bool(has_depth and last_price > 0.0 and 0.0 <= age_sec <= max(stale_limit, 5))
+        else:
+            quote_ts = now_ist
+            is_fresh = False
 
         return Quote(
             symbol=symbol,
@@ -501,16 +507,21 @@ class KiteAdapter(BrokerInterface):
         )
 
         candles = []
+        now_ist = datetime.now(IST)
+        tf_minutes = 5 if "5" in interval else (1 if "minute" in interval else 5)
         for row in raw_bars:
+            row_dt = row["date"] if isinstance(row["date"], datetime) else datetime.fromisoformat(str(row["date"]))
+            row_dt = row_dt.astimezone(IST) if row_dt.tzinfo else row_dt.replace(tzinfo=IST)
+            is_done = now_ist >= (row_dt + timedelta(minutes=tf_minutes))
             candles.append(
                 Candle(
-                    timestamp=row["date"],
+                    timestamp=row_dt,
                     open=float(row["open"]),
                     high=float(row["high"]),
                     low=float(row["low"]),
                     close=float(row["close"]),
                     volume=int(row["volume"]),
-                    is_complete=True,
+                    is_complete=is_done,
                 )
             )
         return candles
@@ -532,10 +543,11 @@ class KiteAdapter(BrokerInterface):
             lower_c = 0.0
             last_p = 100.0
 
+        # Do not fabricate synthetic +-10% circuit limits; report 0.0 if not verified from exchange
         if upper_c <= 0.0:
-            upper_c = round(last_p * 1.10, 2)
+            upper_c = 0.0
         if lower_c <= 0.0:
-            lower_c = round(last_p * 0.90, 2)
+            lower_c = 0.0
 
         return InstrumentInfo(
             symbol=symbol,

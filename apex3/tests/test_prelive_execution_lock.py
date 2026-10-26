@@ -161,6 +161,14 @@ def test_target_exit_cancels_protective_sl_first():
     mock_broker.cancel_order.side_effect = lambda oid: call_order.append(f"cancel_{oid}")
     mock_broker.place_order.side_effect = lambda req: call_order.append(f"place_{req.order_type.value}") or "EXIT_ORDER_100"
 
+    def mock_get_order_status(oid):
+        if oid == "SL_ORDER_999":
+            if "cancel_SL_ORDER_999" in call_order:
+                return OrderState(order_id=oid, status=OrderStatus.CANCELLED)
+            return OrderState(order_id=oid, status=OrderStatus.TRIGGER_PENDING)
+        return None
+    mock_broker.get_order_status.side_effect = mock_get_order_status
+
     decisions = engine.evaluate_step(now)
 
     assert "cancel_SL_ORDER_999" in call_order

@@ -151,8 +151,9 @@ class AngelDataProvider:
                             timestamp=datetime.now(IST),
                             is_fresh=False,
                         )
-                    # Angel ltpData provides only last traded price without depth.
-                    # Mark is_fresh=False to indicate lack of actual top-of-book bid/ask depth.
+                    # Angel ltpData provides last traded price.
+                    # Mark is_fresh=True so position management can track targets and fee-locks.
+                    # New entries remain safely gated by Gate 6 (Spread/Depth) because bid=0, ask=0.
                     return Quote(
                         symbol=clean,
                         exchange=exchange,
@@ -161,7 +162,7 @@ class AngelDataProvider:
                         ask=0.0,
                         volume=int(data.get("volume", 0)),
                         timestamp=datetime.now(IST),
-                        is_fresh=False,
+                        is_fresh=True,
                     )
             except Exception as e:
                 logger.error("Angel One get_quote error for %s: %s", clean, e)
@@ -217,9 +218,11 @@ class AngelDataProvider:
                 if res and res.get("status") and "data" in res:
                     candles = []
                     for row in res["data"]:
-                        # format: [timestamp, open, high, low, close, volume]
                         t_str = row[0]
                         dt = datetime.fromisoformat(t_str.replace("Z", "+00:00")).astimezone(IST)
+                        now_ist = datetime.now(IST)
+                        tf_min = 5 if "FIVE" in str(interval).upper() else 5
+                        is_done = now_ist >= (dt + timedelta(minutes=tf_min))
                         candles.append(
                             Candle(
                                 timestamp=dt,
@@ -228,7 +231,7 @@ class AngelDataProvider:
                                 low=float(row[3]),
                                 close=float(row[4]),
                                 volume=int(row[5]),
-                                is_complete=True,
+                                is_complete=is_done,
                             )
                         )
                     return candles

@@ -40,6 +40,7 @@ class OrderStatus(Enum):
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
     ERROR = "ERROR"               # API/network error
+    UNKNOWN = "UNKNOWN"           # Unrecognized broker status
 
 
 class Decision(Enum):
