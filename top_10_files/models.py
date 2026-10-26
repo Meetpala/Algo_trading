@@ -16,7 +16,9 @@ class Side(Enum):
 
 
 class Product(Enum):
-    MIS = "MIS"  # Only product used by APEX-3
+    MIS = "MIS"    # Intraday product used by APEX-3
+    CNC = "CNC"    # Cash & Carry delivery equity
+    NRML = "NRML"  # Normal delivery/F&O product
 
 
 class OrderType(Enum):

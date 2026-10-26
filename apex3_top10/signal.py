@@ -241,6 +241,24 @@ def evaluate_signal(
             explanation="Live quote required for signal evaluation",
         )
 
+    # 0. Product Eligibility & Instrument Metadata Verification
+    if not getattr(instrument, "mis_available", True):
+        gates.append(
+            GateResult(
+                name="PRODUCT_ELIGIBILITY",
+                status=GateStatus.FAIL,
+                reason=f"MIS product is not permitted/available for {symbol}",
+                data={"mis_available": False},
+            )
+        )
+        return SignalEvaluation(
+            symbol=symbol,
+            decision=Decision.WAIT,
+            gates=gates,
+            reason_codes=["MIS_NOT_AVAILABLE"],
+            explanation=f"MIS product is not permitted for {symbol}",
+        )
+
     if not quote.is_fresh:
         gates.append(
             GateResult(
@@ -676,8 +694,23 @@ def evaluate_signal(
     )
 
     # 8. Circuit Limit Distance Gate
-    circuit_dist = 100.0
-    if target_side == Side.BUY and instrument.upper_circuit > 0:
+    if target_side == Side.BUY:
+        if instrument.upper_circuit <= 0.0:
+            gates.append(
+                GateResult(
+                    name="CIRCUIT_DISTANCE",
+                    status=GateStatus.FAIL,
+                    reason=f"Upper circuit limit unavailable (0.0) from exchange for {symbol}",
+                    data={"dist_pct": 0.0, "upper_circuit": instrument.upper_circuit},
+                )
+            )
+            return SignalEvaluation(
+                symbol=symbol,
+                decision=Decision.WAIT,
+                gates=gates,
+                reason_codes=["CIRCUIT_LIMIT_UNAVAILABLE"],
+                explanation=f"Upper circuit limit is unavailable from exchange for {symbol}",
+            )
         circuit_dist = ((instrument.upper_circuit - signal_price) / signal_price) * 100.0
         if circuit_dist < config.min_circuit_distance_pct:
             gates.append(
@@ -695,7 +728,23 @@ def evaluate_signal(
                 reason_codes=["TOO_CLOSE_TO_CIRCUIT"],
                 explanation=f"Upper circuit is only {circuit_dist:.2f}% away",
             )
-    elif target_side == Side.SELL and instrument.lower_circuit > 0:
+    else:
+        if instrument.lower_circuit <= 0.0:
+            gates.append(
+                GateResult(
+                    name="CIRCUIT_DISTANCE",
+                    status=GateStatus.FAIL,
+                    reason=f"Lower circuit limit unavailable (0.0) from exchange for {symbol}",
+                    data={"dist_pct": 0.0, "lower_circuit": instrument.lower_circuit},
+                )
+            )
+            return SignalEvaluation(
+                symbol=symbol,
+                decision=Decision.WAIT,
+                gates=gates,
+                reason_codes=["CIRCUIT_LIMIT_UNAVAILABLE"],
+                explanation=f"Lower circuit limit is unavailable from exchange for {symbol}",
+            )
         circuit_dist = ((signal_price - instrument.lower_circuit) / signal_price) * 100.0
         if circuit_dist < config.min_circuit_distance_pct:
             gates.append(
