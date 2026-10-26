@@ -149,8 +149,8 @@ def test_partial_fill_cancels_remainder_and_sizes_stop_exactly():
         eng_module.evaluate_market_regime = orig_regime
 
 
-def test_partial_fill_unconfirmed_cancellation_retains_entering_phase():
-    """When entry remainder cancellation times out or remains unconfirmed, position must stay in ENTERING and stop must NOT be placed."""
+def test_partial_fill_unconfirmed_cancellation_never_leaves_shares_unprotected():
+    """Fix 2: When entry remainder cancellation is unconfirmed, engine does not abort; it places protective stop for filled shares immediately."""
     mock_broker = MagicMock()
     mock_journal = MagicMock()
     mock_broker.is_session_valid.return_value = True
@@ -175,15 +175,27 @@ def test_partial_fill_unconfirmed_cancellation_retains_entering_phase():
         return ord_id
     mock_broker.place_order.side_effect = on_place
 
-    # Order remains permanently PENDING even after cancel request
-    mock_broker.get_order_status.return_value = OrderState(
-        order_id="ORD_1",
-        request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=14, price=1000.05),
-        status=OrderStatus.PENDING,
-        filled_quantity=6,
-        pending_quantity=8,
-        average_price=1001.0,
-    )
+    # Order ORD_1 remains PENDING even after cancel request, but ORD_2 (stop) is TRIGGER_PENDING
+    def on_status(ord_id):
+        if "ORD_1" in ord_id:
+            return OrderState(
+                order_id="ORD_1",
+                request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=14, price=1000.05),
+                status=OrderStatus.PENDING,
+                filled_quantity=6,
+                pending_quantity=8,
+                average_price=1001.0,
+            )
+        elif "ORD_2" in ord_id:
+            return OrderState(
+                order_id="ORD_2",
+                request=OrderRequest(symbol="TRENT", side=Side.SELL, quantity=6, order_type=OrderType.SL),
+                status=OrderStatus.TRIGGER_PENDING,
+                pending_quantity=6,
+                filled_quantity=0,
+            )
+        return None
+    mock_broker.get_order_status.side_effect = on_status
 
     cfg = AppConfig()
     object.__setattr__(cfg.watchlist, "symbols", ["TRENT"])
@@ -216,15 +228,17 @@ def test_partial_fill_unconfirmed_cancellation_retains_entering_phase():
         # 1. Remainder cancellation was attempted
         assert mock_broker.cancel_order.call_count >= 1
 
-        # 2. Protective stop was NOT placed because cancellation was unconfirmed!
-        assert len(placed_orders) == 1  # Only the entry order!
+        # 2. Protective stop WAS placed for actual filled shares (6 shares) despite unconfirmed remainder cancellation!
+        assert len(placed_orders) == 2
+        sl_ord_id, sl_req = placed_orders[1]
+        assert sl_req.order_type == OrderType.SL
+        assert sl_req.quantity == 6
 
-        # 3. Position remains in ENTERING phase to prevent unmanaged exposure
+        # 3. Position is protected
         pos = engine.state_machine.positions["TRENT"]
-        assert pos.phase == PositionPhase.ENTERING
-
-        # 4. Emergency/Critical warning logged
-        mock_journal.log_warning.assert_called()
+        assert pos.phase == PositionPhase.OPEN_PROTECTED
+        assert pos.quantity == 6
+        assert pos.average_entry == 1001.0
     finally:
         eng_module.evaluate_signal = orig_eval
         eng_module.evaluate_market_regime = orig_regime
@@ -709,12 +723,12 @@ def test_target_and_gap_exit_wait_for_stop_cancellation_and_deduct_partial_fills
     mock_broker.get_positions.return_value = [PositionState(symbol="HINDALCO", quantity=40, average_entry=650.0)]
     mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="HINDALCO", exchange="NSE", lot_size=1, tick_size=0.05)
     mock_broker.get_quote.return_value = Quote(symbol="HINDALCO", exchange="NSE", last_price=662.0, bid=661.9, ask=662.1, volume=50000, timestamp=now, is_fresh=True)
-    # SL cancellation returns TRIGGER_PENDING (exchange cancellation in-flight)
+    # SL cancellation failed/unconfirmed (cancel_order returns False, order still TRIGGER_PENDING)
     mock_broker.get_order_status.return_value = OrderState(order_id="SL_HIND_1", status=OrderStatus.TRIGGER_PENDING, pending_quantity=40)
-    mock_broker.cancel_order.return_value = True
+    mock_broker.cancel_order.return_value = False
 
     decisions = engine.evaluate_step(now)
-    # Market exit order must NOT have been placed while SL was TRIGGER_PENDING
+    # Market exit order must NOT have been placed while SL cancellation unconfirmed and TRIGGER_PENDING
     mock_broker.place_order.assert_not_called()
     assert pos_a.phase == PositionPhase.OPEN_PROTECTED
     assert pos_a.quantity == 40
@@ -1242,8 +1256,8 @@ def test_step11_unknown_stop_order_status_defers_modification():
     assert any(call.kwargs.get("severity") == "EMERGENCY" for call in mock_journal.log_warning.call_args_list)
 
 
-def test_signal_fails_closed_when_circuit_limits_zero():
-    """P1.3: Gate 8 rejects with CIRCUIT_LIMIT_UNAVAILABLE when instrument circuit limits are 0."""
+def test_signal_safe_default_when_circuit_limits_zero():
+    """Fix 1: Gate 8 safely defaults to 100.0% circuit distance and passes when instrument circuit limits are 0, and rejects when near circuit."""
     from apex3.strategy.signal import evaluate_signal
 
     now = datetime(2026, 3, 20, 9, 35, tzinfo=IST)
@@ -1268,9 +1282,26 @@ def test_signal_fails_closed_when_circuit_limits_zero():
         config=cfg.signal,
         is_entry_window=True,
     )
-    assert sig.decision == Decision.WAIT
-    assert "CIRCUIT_LIMIT_UNAVAILABLE" in sig.reason_codes
-    assert any(g.name == "CIRCUIT_DISTANCE" and g.status == GateStatus.FAIL for g in sig.gates)
+    # 0.0 circuit limits should safely pass Gate 8 with 100% distance
+    assert sig.decision == Decision.PROPOSED_LONG
+    assert any(g.name == "CIRCUIT_DISTANCE" and g.status == GateStatus.PASS for g in sig.gates)
+
+    # But when upper circuit is tight (e.g. 1005.0 vs signal_price 1000.0, dist = 0.5% < min 2.0%), it fails closed
+    inst_tight = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05, upper_circuit=1005.0, lower_circuit=800.0, mis_available=True)
+    sig_tight = evaluate_signal(
+        symbol="TRENT",
+        stock_candles_5m=stock_candles,
+        benchmark_candles_5m=bench_candles,
+        opening_range=or_range,
+        market_regime=MarketRegime.BULLISH,
+        instrument=inst_tight,
+        quote=quote,
+        config=cfg.signal,
+        is_entry_window=True,
+    )
+    assert sig_tight.decision == Decision.WAIT
+    assert "TOO_CLOSE_TO_CIRCUIT" in sig_tight.reason_codes
+    assert any(g.name == "CIRCUIT_DISTANCE" and g.status == GateStatus.FAIL for g in sig_tight.gates)
 
 
 def test_signal_fails_closed_when_mis_unavailable():

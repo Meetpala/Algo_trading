@@ -346,38 +346,27 @@ class StrategyEngine:
                     continue
 
                 if entry_state.status == OrderStatus.COMPLETE or entry_state.filled_quantity > 0:
-                    # On partial fill, cancel the unfilled remainder immediately and confirm cancellation
+                    entry_filled_qty = entry_state.filled_quantity
+                    # On partial fill, cancel the unfilled remainder immediately and fetch refreshed status once
                     if entry_state.status != OrderStatus.COMPLETE:
                         try:
                             self.broker.cancel_order(ent_pos.entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", ent_pos.symbol, cancel_err)
-                        term_entry = self._confirm_order_terminal(ent_pos.entry_order_id)
-                        if not term_entry or term_entry.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
-                            logger.critical(
-                                "Partial entry cancellation unconfirmed for %s (order %s, status=%s); retaining ENTERING phase to prevent unmanaged exposure.",
-                                ent_pos.symbol,
-                                ent_pos.entry_order_id,
-                                getattr(term_entry, "status", "UNKNOWN"),
-                            )
-                            self.journal.log_warning(
-                                severity="CRITICAL",
-                                code="PARTIAL_ENTRY_CANCELLATION_UNCONFIRMED",
-                                message=f"Partial entry cancellation unconfirmed for {ent_pos.symbol} (order {ent_pos.entry_order_id}). Retaining ENTERING phase.",
-                            )
-                            continue
-                        entry_state = term_entry
+                        refreshed = self.broker.get_order_status(ent_pos.entry_order_id)
+                        if refreshed:
+                            entry_state = refreshed
 
                     # Reconcile confirmed fill quantity against live broker positions
-                    confirmed_qty = entry_state.filled_quantity
+                    actual_qty = max(int(entry_filled_qty), int(getattr(entry_state, "filled_quantity", 0) or 0))
                     try:
                         fresh_pos = [p for p in self.broker.get_positions() if p.symbol == ent_pos.symbol and p.product == Product.MIS]
                         if fresh_pos:
-                            confirmed_qty = abs(fresh_pos[0].quantity)
+                            actual_qty = max(actual_qty, abs(fresh_pos[0].quantity))
                     except Exception as pe:
                         logger.warning("Error fetching broker positions for %s fill reconciliation: %s", ent_pos.symbol, pe)
 
-                    ent_pos.quantity = confirmed_qty
+                    ent_pos.quantity = actual_qty
                     if entry_state.average_price > 0:
                         ent_pos.average_entry = entry_state.average_price
                     ent_pos.best_favorable_price = ent_pos.average_entry
@@ -571,8 +560,8 @@ class StrategyEngine:
                                     explanation=f"Exit order {pos.exit_order_id} filled for {pos.symbol}",
                                 )
                                 continue
-                            elif exit_state.status == OrderStatus.UNKNOWN or exit_state.status == OrderStatus.ERROR:
-                                logger.critical("Exit order %s for %s in UNKNOWN/ERROR state. Flagging reconciliation alert.", pos.exit_order_id, pos.symbol)
+                            elif exit_state.status == OrderStatus.UNKNOWN:
+                                logger.critical("Exit order %s for %s in UNKNOWN state. Flagging reconciliation alert.", pos.exit_order_id, pos.symbol)
                                 self.journal.log_warning(
                                     severity="EMERGENCY",
                                     code="EXIT_ORDER_STATUS_UNKNOWN",
@@ -581,7 +570,7 @@ class StrategyEngine:
                                 )
                                 # Do NOT dispatch a conflicting second exit order while broker state is unknown!
                                 continue
-                            elif exit_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED):
+                            elif exit_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
                                 logger.warning(
                                     "Exit order %s for %s was %s; clearing exit_order_id for retry",
                                     pos.exit_order_id,
@@ -686,10 +675,11 @@ class StrategyEngine:
                                 pos.protective_order_id,
                                 px,
                             )
+                            cancel_ok = False
                             sl_st = None
                             try:
-                                self.broker.cancel_order(pos.protective_order_id)
-                                sl_st = self._confirm_order_terminal(pos.protective_order_id, timeout_sec=2.0)
+                                cancel_ok = bool(self.broker.cancel_order(pos.protective_order_id))
+                                sl_st = self.broker.get_order_status(pos.protective_order_id)
                             except Exception as c_err:
                                 logger.warning("Error cancelling stop during gap exit %s: %s", pos.symbol, c_err)
 
@@ -719,7 +709,7 @@ class StrategyEngine:
                                 )
                                 continue
 
-                            if not sl_st or sl_st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                            if not cancel_ok and sl_st and sl_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
                                 logger.warning(
                                     "Protective SL order %s for %s cancellation unconfirmed (%s); retrying gap exit next tick",
                                     pos.protective_order_id,
@@ -833,37 +823,34 @@ class StrategyEngine:
                     if target_reached:
                         exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
                         # Confirm stop cancellation first before sending market exit
-                        stop_filled_during_cancel = False
+                        cancel_ok = False
                         sl_filled = 0
                         sl_st = None
                         if pos.protective_order_id:
                             try:
-                                self.broker.cancel_order(pos.protective_order_id)
-                                sl_st = self._confirm_order_terminal(pos.protective_order_id, timeout_sec=1.5)
+                                cancel_ok = bool(self.broker.cancel_order(pos.protective_order_id))
+                                sl_st = self.broker.get_order_status(pos.protective_order_id)
                                 if sl_st and sl_st.status == OrderStatus.COMPLETE:
-                                    stop_filled_during_cancel = True
+                                    self.journal.log_event(
+                                        event_type="STOP_LOSS_HIT",
+                                        symbol=pos.symbol,
+                                        side=pos.side.value,
+                                        data={
+                                            "stop_price": pos.current_stop_price,
+                                            "sl_order_id": pos.protective_order_id,
+                                            "fill_price": sl_st.average_price or pos.current_stop_price if sl_st else pos.current_stop_price,
+                                        },
+                                    )
+                                    pos.phase = PositionPhase.CLOSED
+                                    pos.quantity = 0
+                                    continue
                                 elif sl_st:
                                     sl_filled = getattr(sl_st, "filled_quantity", 0)
                             except Exception as c_err:
                                 logger.warning("Error cancelling stop before target exit %s: %s", pos.symbol, c_err)
 
-                        if stop_filled_during_cancel:
-                            self.journal.log_event(
-                                event_type="STOP_LOSS_HIT",
-                                symbol=pos.symbol,
-                                side=pos.side.value,
-                                data={
-                                    "stop_price": pos.current_stop_price,
-                                    "sl_order_id": pos.protective_order_id,
-                                    "fill_price": sl_st.average_price or pos.current_stop_price if sl_st else pos.current_stop_price,
-                                },
-                            )
-                            pos.phase = PositionPhase.CLOSED
-                            pos.quantity = 0
-                            continue
-
-                        # Require confirmed terminal cancellation of protective stop before dispatching target exit
-                        if pos.protective_order_id and (not sl_st or sl_st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED)):
+                        # Only defer if cancel_ok is False AND status is still live pending
+                        if pos.protective_order_id and not cancel_ok and sl_st and sl_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
                             logger.warning(
                                 "Protective SL order %s for %s cancellation unconfirmed (%s); deferring target exit to next cycle",
                                 pos.protective_order_id,
@@ -1541,7 +1528,7 @@ class StrategyEngine:
                 break
             if len(risk_positions) >= self.config.limits.max_symbols:
                 break
-            sig, inst, stock_candles, _ = evaluated_signals[sym]
+            sig, inst, stock_candles, quote = evaluated_signals[sym]
             if self._last_entry_bar_timestamp is not None and stock_candles and stock_candles[-1].timestamp == self._last_entry_bar_timestamp:
                 logger.debug("Bar %s already has an entry taken for %s. Skipping.", self._last_entry_bar_timestamp, sym)
                 continue
@@ -1552,26 +1539,14 @@ class StrategyEngine:
             tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
             slip_cfg = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15)
             slip_pct = (slip_cfg / 100.0) if slip_cfg >= 0.01 else (slip_cfg if slip_cfg > 0 else 0.0015)
-            quote = self.broker.get_quote(sym)
-            if not quote or not getattr(quote, "is_fresh", False) or not quote.timestamp:
-                logger.warning("Execution quote for %s is missing, unverified, or stale; skipping entry", sym)
-                continue
 
             if side == Side.BUY:
-                if quote.ask <= 0 or (quote.bid > 0 and quote.ask < quote.bid):
-                    logger.warning("Execution quote ask invalid (%s) for %s; skipping entry", quote.ask, sym)
-                    continue
-                base_ref = quote.ask
-                cand_price = round_to_tick(base_ref + tick, tick_size=tick)
-                cap_price = round_to_tick(base_ref * (1.0 + slip_pct), tick_size=tick)
+                cand_price = round_to_tick(sig_price + tick, tick_size=tick)
+                cap_price = round_to_tick(sig_price * (1.0 + slip_pct), tick_size=tick)
                 marketable_entry_price = min(cand_price, cap_price)
             else:
-                if quote.bid <= 0 or (quote.ask > 0 and quote.ask < quote.bid):
-                    logger.warning("Execution quote bid invalid (%s) for %s; skipping entry", quote.bid, sym)
-                    continue
-                base_ref = quote.bid
-                cand_price = round_to_tick(base_ref - tick, tick_size=tick)
-                cap_price = round_to_tick(base_ref * (1.0 - slip_pct), tick_size=tick)
+                cand_price = round_to_tick(sig_price - tick, tick_size=tick)
+                cap_price = round_to_tick(sig_price * (1.0 - slip_pct), tick_size=tick)
                 marketable_entry_price = max(cand_price, cap_price)
             entry_price = marketable_entry_price
 
@@ -1748,38 +1723,22 @@ class StrategyEngine:
                 is_complete = getattr(entry_state, "status", None) == OrderStatus.COMPLETE
 
                 if entry_state and (is_complete or is_filled_qty_positive):
-                    # On partial fill, cancel the unfilled remainder immediately and confirm cancellation
+                    # On partial fill, cancel the unfilled remainder immediately and fetch refreshed status once
                     if is_filled_qty_positive and not is_complete:
                         try:
                             self.broker.cancel_order(entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", sym, cancel_err)
-                        term_st = self._confirm_order_terminal(entry_order_id)
-                        if not term_st or term_st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
-                            logger.critical(
-                                "Partial entry cancellation unconfirmed for %s (order %s, status=%s); keeping in ENTERING phase to prevent unmanaged exposure.",
-                                sym,
-                                entry_order_id,
-                                getattr(term_st, "status", "UNKNOWN"),
-                            )
-                            self.journal.log_warning(
-                                severity="CRITICAL",
-                                code="PARTIAL_ENTRY_CANCELLATION_UNCONFIRMED",
-                                message=f"Partial entry cancellation unconfirmed for {sym} (order {entry_order_id}). Keeping in ENTERING phase.",
-                            )
-                            managed.phase = PositionPhase.ENTERING
-                            managed.entry_order_id = entry_order_id
-                            managed.quantity = getattr(term_st, "filled_quantity", entry_filled_qty) if term_st else entry_filled_qty
-                            continue
-                        entry_state = term_st
-                        entry_filled_qty = getattr(entry_state, "filled_quantity", entry_filled_qty)
+                        refreshed = self.broker.get_order_status(entry_order_id)
+                        if refreshed:
+                            entry_state = refreshed
 
                     # Reconcile confirmed fill quantity against live broker positions
-                    confirmed_qty = int(entry_filled_qty) if is_filled_qty_positive else sizing.quantity
+                    confirmed_qty = max(int(entry_filled_qty), int(getattr(entry_state, "filled_quantity", 0) or 0)) if is_filled_qty_positive else sizing.quantity
                     try:
                         fresh_pos = [p for p in self.broker.get_positions() if p.symbol == sym and p.product == Product.MIS]
                         if fresh_pos:
-                            confirmed_qty = abs(fresh_pos[0].quantity)
+                            confirmed_qty = max(confirmed_qty, abs(fresh_pos[0].quantity))
                     except Exception as pe:
                         logger.warning("Error fetching broker positions for %s fill reconciliation: %s", sym, pe)
 
