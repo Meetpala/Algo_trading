@@ -86,6 +86,8 @@ class EntryConfig:
     max_slippage_pct: float = 0.15
     unfilled_timeout_sec: int = 30
     max_retries: int = 1
+    exit_order_type: str = "MARKET"
+    marketable_limit_buffer_pct: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -418,6 +420,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             max_slippage_pct=float(entry_raw.get("max_slippage_pct", 0.15)),
             unfilled_timeout_sec=int(entry_raw.get("unfilled_timeout_sec", 30)),
             max_retries=int(entry_raw.get("max_retries", 1)),
+            exit_order_type=str(entry_raw.get("exit_order_type", "MARKET")),
+            marketable_limit_buffer_pct=float(entry_raw.get("marketable_limit_buffer_pct", 0.5)),
         ),
         stops=StopsConfig(
             initial_atr_multiplier=float(stops_raw.get("atr_stop_multiplier", stops_raw.get("initial_atr_multiplier", 1.5))),

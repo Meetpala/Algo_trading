@@ -166,11 +166,30 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                     }
                 )
 
-        # Orders & Fills
+        # Orders & Fills: Live broker orderbook with journal fallback
+        orders = []
         try:
-            orders = engine.journal.get_orders(limit=15) if hasattr(engine.journal, "get_orders") else []
+            broker_orders = engine.broker.get_orders() if hasattr(engine, "broker") and hasattr(engine.broker, "get_orders") else []
+            for bo in broker_orders:
+                orders.append({
+                    "order_id": bo.order_id,
+                    "symbol": bo.request.symbol if bo.request else getattr(bo, "symbol", ""),
+                    "side": bo.request.side.value if (bo.request and hasattr(bo.request.side, "value")) else str(getattr(bo, "side", "")),
+                    "quantity": bo.request.quantity if bo.request else getattr(bo, "quantity", 0),
+                    "order_type": bo.request.order_type.value if (bo.request and hasattr(bo.request.order_type, "value")) else str(getattr(bo, "order_type", "")),
+                    "price": getattr(bo.request, "price", 0.0) if bo.request else getattr(bo, "price", 0.0),
+                    "trigger_price": getattr(bo.request, "trigger_price", 0.0) if bo.request else getattr(bo, "trigger_price", 0.0),
+                    "status": bo.status.value if hasattr(bo.status, "value") else str(bo.status),
+                    "filled_quantity": getattr(bo, "filled_quantity", 0),
+                    "average_price": getattr(bo, "average_price", 0.0),
+                })
         except Exception:
             orders = []
+        if not orders:
+            try:
+                orders = engine.journal.get_orders(limit=15) if hasattr(engine.journal, "get_orders") else []
+            except Exception:
+                orders = []
         try:
             events = engine.journal.get_events(limit=15) if hasattr(engine.journal, "get_events") else []
         except Exception:
@@ -238,8 +257,13 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
     @app.route("/api/emergency_flatten", methods=["POST"])
     def emergency_flatten():
-        """Trigger emergency square-off sequence."""
-        success, msg = engine.reconciler.execute_flatten_sequence()
+        """Trigger emergency square-off sequence serialized with engine execution lock."""
+        lock = getattr(engine, "_execution_lock", None)
+        if lock:
+            with lock:
+                success, msg = engine.reconciler.execute_flatten_sequence()
+        else:
+            success, msg = engine.reconciler.execute_flatten_sequence()
         return jsonify({"status": "success" if success else "error", "message": msg})
 
     return app

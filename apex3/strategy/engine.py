@@ -113,7 +113,7 @@ class StrategyEngine:
 
         self.scheduler = SessionScheduler(config.schedule)
         self.state_machine = StateMachine(session_tag_prefix=session_tag)
-        self.reconciler = Reconciler(broker, self.state_machine, journal, session_tag)
+        self.reconciler = Reconciler(broker, self.state_machine, journal, session_tag, config=self.config)
 
         self.is_halted = False
         self.halt_reason = ""
@@ -128,6 +128,72 @@ class StrategyEngine:
 
         # Opening ranges cache: symbol -> OpeningRange
         self.opening_ranges: dict[str, OpeningRange] = {}
+
+    def _confirm_order_terminal(self, order_id: str, timeout_sec: float = 3.0) -> Optional[OrderState]:
+        """Poll broker until order reaches a terminal state (CANCELLED, REJECTED, COMPLETE)."""
+        import time as time_mod
+        start_t = time_mod.time()
+        last_state = None
+        while time_mod.time() - start_t < timeout_sec:
+            st = self.broker.get_order_status(order_id)
+            if st:
+                last_state = st
+                if st.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                    return st
+            time_mod.sleep(0.05)
+        return last_state
+
+    def _create_exit_order_request(
+        self,
+        symbol: str,
+        side: Side,
+        quantity: int,
+        tag: str,
+        current_price: float = 0.0,
+    ) -> OrderRequest:
+        """Create an exit order request. If exit_order_type is LIMIT, creates aggressive marketable limit."""
+        exit_cfg_type = getattr(getattr(self.config, "entry", None), "exit_order_type", "MARKET")
+        if str(exit_cfg_type).upper() == "LIMIT":
+            inst = self.broker.get_instrument_info(symbol)
+            tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+            buffer_pct = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.5) / 100.0
+            px = current_price
+            if px <= 0.0:
+                q = self.broker.get_quote(symbol)
+                px = q.last_price if q and q.last_price > 0 else 100.0
+
+            if side == Side.SELL:
+                raw_limit = px * (1.0 - buffer_pct)
+                if inst and inst.lower_circuit > 0:
+                    raw_limit = max(raw_limit, inst.lower_circuit)
+                limit_px = floor_to_tick(raw_limit, tick)
+            else:
+                raw_limit = px * (1.0 + buffer_pct)
+                if inst and inst.upper_circuit > 0:
+                    raw_limit = min(raw_limit, inst.upper_circuit)
+                limit_px = ceil_to_tick(raw_limit, tick)
+
+            return OrderRequest(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                product=Product.MIS,
+                order_type=OrderType.LIMIT,
+                price=limit_px,
+                tag=tag,
+                strategy_id=self.session_tag,
+            )
+        else:
+            return OrderRequest(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                product=Product.MIS,
+                order_type=OrderType.MARKET,
+                price=0.0,
+                tag=tag,
+                strategy_id=self.session_tag,
+            )
 
     def get_active_watchlist(self) -> list[str]:
         """Return manual symbols or the full scanner candidate universe."""
@@ -286,9 +352,9 @@ class StrategyEngine:
                             self.broker.cancel_order(ent_pos.entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", ent_pos.symbol, cancel_err)
-                        refreshed_entry = self.broker.get_order_status(ent_pos.entry_order_id)
-                        if refreshed_entry:
-                            entry_state = refreshed_entry
+                        term_entry = self._confirm_order_terminal(ent_pos.entry_order_id)
+                        if term_entry:
+                            entry_state = term_entry
 
                     ent_pos.quantity = entry_state.filled_quantity
                     if entry_state.average_price > 0:
@@ -356,14 +422,12 @@ class StrategyEngine:
                             message=f"Protective stop for filled entry in {ent_pos.symbol} failed. Liquidating immediately.",
                         )
                         try:
-                            emer_exit = OrderRequest(
+                            emer_exit = self._create_exit_order_request(
                                 symbol=ent_pos.symbol,
                                 side=exit_side,
                                 quantity=ent_pos.quantity,
-                                product=Product.MIS,
-                                order_type=OrderType.MARKET,
                                 tag=make_broker_tag(self.session_tag, ent_pos.symbol, "FLT"),
-                                strategy_id=self.session_tag,
+                                current_price=ent_pos.average_entry,
                             )
                             emer_id = self.broker.place_order(emer_exit)
                             ent_pos.exit_order_id = emer_id
@@ -380,12 +444,15 @@ class StrategyEngine:
                 else:
                     timeout_sec = getattr(getattr(self.config, "entry", None), "unfilled_timeout_sec", 30)
                     if ent_pos.entry_timestamp and (now - ent_pos.entry_timestamp).total_seconds() > timeout_sec:
-                        self.broker.cancel_order(ent_pos.entry_order_id)
-                        refreshed = self.broker.get_order_status(ent_pos.entry_order_id)
-                        if refreshed and refreshed.filled_quantity > 0:
-                            ent_pos.quantity = refreshed.filled_quantity
-                            if refreshed.average_price > 0:
-                                ent_pos.average_entry = refreshed.average_price
+                        try:
+                            self.broker.cancel_order(ent_pos.entry_order_id)
+                        except Exception as ce:
+                            logger.warning("Error cancelling timed-out entry %s: %s", ent_pos.symbol, ce)
+                        term_refreshed = self._confirm_order_terminal(ent_pos.entry_order_id)
+                        if term_refreshed and term_refreshed.filled_quantity > 0:
+                            ent_pos.quantity = term_refreshed.filled_quantity
+                            if term_refreshed.average_price > 0:
+                                ent_pos.average_entry = term_refreshed.average_price
                             ent_pos.best_favorable_price = ent_pos.average_entry
                             ent_pos.phase = PositionPhase.OPEN_UNPROTECTED
                             ent_pos.r_value = abs(ent_pos.average_entry - ent_pos.initial_stop_price)
@@ -431,14 +498,12 @@ class StrategyEngine:
                                 self._last_entry_bar_timestamp = None
                                 logger.critical("EMERGENCY: Protective stop unconfirmed for timeout fill in %s. Liquidating immediately.", ent_pos.symbol)
                                 try:
-                                    emer_exit = OrderRequest(
+                                    emer_exit = self._create_exit_order_request(
                                         symbol=ent_pos.symbol,
                                         side=exit_side,
                                         quantity=ent_pos.quantity,
-                                        product=Product.MIS,
-                                        order_type=OrderType.MARKET,
                                         tag=make_broker_tag(self.session_tag, ent_pos.symbol, "FLT"),
-                                        strategy_id=self.session_tag,
+                                        current_price=ent_pos.average_entry,
                                     )
                                     emer_id = self.broker.place_order(emer_exit)
                                     ent_pos.exit_order_id = emer_id
@@ -448,10 +513,18 @@ class StrategyEngine:
                                     ent_pos.phase = PositionPhase.ERROR
                                 self.is_paused = True
                                 self.pause_reason = f"PROTECTIVE_STOP_FAILED_{ent_pos.symbol}"
-                        else:
+                        elif term_refreshed and term_refreshed.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
                             ent_pos.phase = PositionPhase.FLAT
                             ent_pos.quantity = 0
                             self._last_entry_bar_timestamp = None
+                        else:
+                            # Cancellation unconfirmed / non-terminal: do not mark FLAT! Keep ENTERING.
+                            logger.warning(
+                                "Entry cancellation unconfirmed for %s (order %s, status=%s); retaining ENTERING phase to prevent unmanaged exposure.",
+                                ent_pos.symbol,
+                                ent_pos.entry_order_id,
+                                getattr(term_refreshed, "status", "UNKNOWN"),
+                            )
             except Exception as exc:
                 logger.error("Error reconciling entering position %s: %s", ent_pos.symbol, exc)
 
@@ -504,14 +577,12 @@ class StrategyEngine:
                 if not pos.exit_order_id and pos.quantity > 0:
                     exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
                     try:
-                        retry_exit = OrderRequest(
+                        retry_exit = self._create_exit_order_request(
                             symbol=pos.symbol,
                             side=exit_side,
                             quantity=pos.quantity,
-                            product=Product.MIS,
-                            order_type=OrderType.MARKET,
                             tag=make_broker_tag(self.session_tag, pos.symbol, "EXT"),
-                            strategy_id=self.session_tag,
+                            current_price=getattr(pos, "average_entry", 0.0),
                         )
                         retry_id = self.broker.place_order(retry_exit)
                         pos.exit_order_id = retry_id
@@ -520,7 +591,7 @@ class StrategyEngine:
                             symbol=pos.symbol,
                             side=exit_side.value,
                             data={"quantity": pos.quantity, "exit_order_id": retry_id},
-                            explanation=f"Re-dispatched market exit order {retry_id} for {pos.symbol} after exit failure",
+                            explanation=f"Re-dispatched exit order {retry_id} for {pos.symbol} after exit failure",
                         )
                     except Exception as retry_err:
                         logger.critical("Failed to dispatch retry exit order for %s: %s", pos.symbol, retry_err)
@@ -628,14 +699,12 @@ class StrategyEngine:
                                 continue
 
                             exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
-                            emer_exit = OrderRequest(
+                            emer_exit = self._create_exit_order_request(
                                 symbol=pos.symbol,
                                 side=exit_side,
                                 quantity=rem_qty,
-                                product=Product.MIS,
-                                order_type=OrderType.MARKET,
                                 tag=make_broker_tag(self.session_tag, pos.symbol, "EMG"),
-                                strategy_id=self.session_tag,
+                                current_price=px,
                             )
                             emer_id = self.broker.place_order(emer_exit)
                             pos.exit_order_id = emer_id
@@ -647,7 +716,7 @@ class StrategyEngine:
                                     side=pos.side,
                                     timestamp_ist=now,
                                     reason_codes=["STOP_TRIGGERED_UNFILLED_GAP_EXIT"],
-                                    explanation=f"Protective SL limit order {pos.protective_order_id} triggered but unfilled as price gapped to {px}. Emergency market exit dispatched for {rem_qty} shares.",
+                                    explanation=f"Protective SL limit order {pos.protective_order_id} triggered but unfilled as price gapped to {px}. Emergency exit dispatched for {rem_qty} shares.",
                                     broker_action="EMERGENCY_GAP_EXIT",
                                 )
                             )
@@ -679,14 +748,12 @@ class StrategyEngine:
                 logger.critical("EMERGENCY: Open position in %s has no verified protective stop (phase=%s)! Liquidating immediately.", pos.symbol, pos.phase)
                 try:
                     exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
-                    flat_req = OrderRequest(
+                    flat_req = self._create_exit_order_request(
                         symbol=pos.symbol,
                         side=exit_side,
                         quantity=pos.quantity,
-                        product=Product.MIS,
-                        order_type=OrderType.MARKET,
                         tag=make_broker_tag(self.session_tag, pos.symbol, "EMG"),
-                        strategy_id=self.session_tag,
+                        current_price=getattr(pos, "average_entry", 0.0),
                     )
                     flat_id = self.broker.place_order(flat_req)
                     pos.exit_order_id = flat_id
@@ -721,7 +788,7 @@ class StrategyEngine:
                         if pos.protective_order_id:
                             try:
                                 self.broker.cancel_order(pos.protective_order_id)
-                                sl_st = self.broker.get_order_status(pos.protective_order_id)
+                                sl_st = self._confirm_order_terminal(pos.protective_order_id, timeout_sec=1.5)
                                 if sl_st and sl_st.status == OrderStatus.COMPLETE:
                                     stop_filled_during_cancel = True
                                 elif sl_st:
@@ -744,12 +811,13 @@ class StrategyEngine:
                             pos.quantity = 0
                             continue
 
-                        if sl_st and sl_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
+                        # Require confirmed terminal cancellation of protective stop before dispatching target exit
+                        if pos.protective_order_id and (not sl_st or sl_st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED)):
                             logger.warning(
-                                "Protective SL order %s for %s cancellation still pending (%s); deferring target exit to next cycle",
+                                "Protective SL order %s for %s cancellation unconfirmed (%s); deferring target exit to next cycle",
                                 pos.protective_order_id,
                                 pos.symbol,
-                                sl_st.status.value,
+                                getattr(sl_st, "status", "UNKNOWN"),
                             )
                             continue
 
@@ -759,15 +827,12 @@ class StrategyEngine:
                             pos.quantity = 0
                             continue
 
-                        exit_req = OrderRequest(
+                        exit_req = self._create_exit_order_request(
                             symbol=pos.symbol,
                             side=exit_side,
                             quantity=remaining_qty,
-                            product=Product.MIS,
-                            order_type=OrderType.MARKET,
-                            price=0.0,
                             tag=make_broker_tag(self.session_tag, pos.symbol, "TGT"),
-                            strategy_id=self.session_tag,
+                            current_price=current_price,
                         )
                         exit_order_id = self.broker.place_order(exit_req)
                         pos.exit_order_id = exit_order_id
@@ -951,8 +1016,15 @@ class StrategyEngine:
                                     )
                                     if mod_ok:
                                         mod_st = self.broker.get_order_status(pos.protective_order_id)
-                                        if mod_st and mod_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
+                                        if mod_st and mod_st.status == OrderStatus.TRIGGER_PENDING:
                                             mod_confirmed = True
+                                        elif mod_st and mod_st.status == OrderStatus.OPEN:
+                                            logger.warning(
+                                                "Stop order %s for %s triggered (OPEN) during modification; stop is resting unfilled.",
+                                                pos.protective_order_id,
+                                                pos.symbol,
+                                            )
+                                            mod_confirmed = False
                                         elif mod_st and mod_st.status == OrderStatus.COMPLETE:
                                             # Stop filled during modification
                                             self.journal.log_event(
@@ -1428,14 +1500,17 @@ class StrategyEngine:
             # Compute marketable limit entry price up-front before sizing & stops
             tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
             slip_cfg = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15)
-            slip_pct = (slip_cfg / 100.0) if slip_cfg > 0.5 else (slip_cfg if slip_cfg > 0 else 0.0015)
+            slip_pct = (slip_cfg / 100.0) if slip_cfg >= 0.01 else (slip_cfg if slip_cfg > 0 else 0.0015)
+            quote = self.broker.get_quote(sym)
             if side == Side.BUY:
-                cand_price = round_to_tick(sig_price + tick, tick_size=tick)
-                cap_price = round_to_tick(sig_price * (1.0 + slip_pct), tick_size=tick)
+                base_ref = quote.ask if (quote and quote.ask > 0) else sig_price
+                cand_price = round_to_tick(base_ref + tick, tick_size=tick)
+                cap_price = round_to_tick(base_ref * (1.0 + slip_pct), tick_size=tick)
                 marketable_entry_price = min(cand_price, cap_price)
             else:
-                cand_price = round_to_tick(sig_price - tick, tick_size=tick)
-                cap_price = round_to_tick(sig_price * (1.0 - slip_pct), tick_size=tick)
+                base_ref = quote.bid if (quote and quote.bid > 0) else sig_price
+                cand_price = round_to_tick(base_ref - tick, tick_size=tick)
+                cap_price = round_to_tick(base_ref * (1.0 - slip_pct), tick_size=tick)
                 marketable_entry_price = max(cand_price, cap_price)
             entry_price = marketable_entry_price
 
@@ -1618,9 +1693,9 @@ class StrategyEngine:
                             self.broker.cancel_order(entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", sym, cancel_err)
-                        refreshed_st = self.broker.get_order_status(entry_order_id)
-                        if refreshed_st:
-                            entry_state = refreshed_st
+                        term_st = self._confirm_order_terminal(entry_order_id)
+                        if term_st:
+                            entry_state = term_st
                             entry_filled_qty = getattr(entry_state, "filled_quantity", entry_filled_qty)
 
                     actual_qty = int(entry_filled_qty) if is_filled_qty_positive else sizing.quantity
@@ -1680,14 +1755,12 @@ class StrategyEngine:
                             message=f"Protective stop for {sym} failed or unconfirmed. Executing immediate market liquidation.",
                         )
                         try:
-                            flat_req = OrderRequest(
+                            flat_req = self._create_exit_order_request(
                                 symbol=sym,
                                 side=exit_side,
                                 quantity=actual_qty,
-                                product=Product.MIS,
-                                order_type=OrderType.MARKET,
                                 tag=make_broker_tag(self.session_tag, sym, "FLT"),
-                                strategy_id=self.session_tag,
+                                current_price=actual_entry,
                             )
                             emer_flat_id = self.broker.place_order(flat_req)
                             managed.exit_order_id = emer_flat_id

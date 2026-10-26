@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
+import time as time_module
 
 from apex3.broker.interface import BrokerInterface
 from apex3.journal.sqlite_journal import Journal
@@ -33,6 +34,7 @@ from apex3.models import (
     make_broker_tag,
 )
 from apex3.reconciliation.state_machine import PositionPhase, StateMachine
+from apex3.strategy.trail import ceil_to_tick, floor_to_tick
 
 logger = logging.getLogger("apex3.reconciler")
 
@@ -57,11 +59,78 @@ class Reconciler:
         state_machine: StateMachine,
         journal: Journal,
         session_tag: str = "APEX3",
+        config: Optional[Any] = None,
     ):
         self.broker = broker
         self.sm = state_machine
         self.journal = journal
         self.session_tag = session_tag
+        self.config = config
+
+    def _confirm_order_terminal(self, order_id: str, timeout_sec: float = 3.0) -> Optional[Any]:
+        """Poll broker until order reaches a terminal state (CANCELLED, REJECTED, COMPLETE)."""
+        start_t = time_module.time()
+        last_state = None
+        while time_module.time() - start_t < timeout_sec:
+            st = self.broker.get_order_status(order_id)
+            if st:
+                last_state = st
+                if st.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                    return st
+            time_module.sleep(0.05)
+        return last_state
+
+    def _create_exit_order_request(
+        self,
+        symbol: str,
+        side: Side,
+        quantity: int,
+        tag: str,
+        current_price: float = 0.0,
+    ) -> OrderRequest:
+        """Create an exit order request. If exit_order_type is LIMIT, creates aggressive marketable limit."""
+        exit_cfg_type = getattr(getattr(self.config, "entry", None), "exit_order_type", "MARKET") if self.config else "MARKET"
+        if str(exit_cfg_type).upper() == "LIMIT":
+            inst = self.broker.get_instrument_info(symbol)
+            tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+            buffer_pct = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.5) / 100.0 if self.config else 0.005
+            px = current_price
+            if px <= 0.0:
+                q = self.broker.get_quote(symbol)
+                px = q.last_price if q and q.last_price > 0 else 100.0
+
+            if side == Side.SELL:
+                raw_limit = px * (1.0 - buffer_pct)
+                if inst and inst.lower_circuit > 0:
+                    raw_limit = max(raw_limit, inst.lower_circuit)
+                limit_px = floor_to_tick(raw_limit, tick)
+            else:
+                raw_limit = px * (1.0 + buffer_pct)
+                if inst and inst.upper_circuit > 0:
+                    raw_limit = min(raw_limit, inst.upper_circuit)
+                limit_px = ceil_to_tick(raw_limit, tick)
+
+            return OrderRequest(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                product=Product.MIS,
+                order_type=OrderType.LIMIT,
+                price=limit_px,
+                tag=tag,
+                strategy_id=self.session_tag,
+            )
+        else:
+            return OrderRequest(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                product=Product.MIS,
+                order_type=OrderType.MARKET,
+                price=0.0,
+                tag=tag,
+                strategy_id=self.session_tag,
+            )
 
     def audit_startup_state(self, watched_symbols: list[str]) -> ReconciliationStatus:
         """Run on startup and reconnect to verify position state against broker.
@@ -144,12 +213,39 @@ class Reconciler:
                         pos.phase = PositionPhase.OPEN_UNPROTECTED
                         logger.warning("Restored strategy position %s (qty=%d) on restart, but resting SL order was not found", bp.symbol, bp_qty)
 
-                    # Fix 7: Restore initial_stop_price, r_value, and target_price on restart recovery
-                    if pos.initial_stop_price <= 0 and pos.current_stop_price > 0:
+                    # Restore initial_stop_price, r_value, and target_price on restart recovery
+                    orig_stop = 0.0
+                    orig_target = 0.0
+                    if hasattr(self.journal, "get_events"):
+                        try:
+                            events = self.journal.get_events(symbol=bp.symbol, limit=20)
+                            for ev in events:
+                                ev_data = ev.get("data") if isinstance(ev, dict) else getattr(ev, "data", {})
+                                if isinstance(ev_data, str):
+                                    import json
+                                    try:
+                                        ev_data = json.loads(ev_data)
+                                    except Exception:
+                                        ev_data = {}
+                                if isinstance(ev_data, dict):
+                                    if float(ev_data.get("initial_stop", 0) or 0) > 0:
+                                        orig_stop = float(ev_data["initial_stop"])
+                                        orig_target = float(ev_data.get("target_price", 0) or 0)
+                                        break
+                        except Exception as je:
+                            logger.debug("Could not inspect journal for initial stop recovery: %s", je)
+
+                    if orig_stop > 0:
+                        pos.initial_stop_price = orig_stop
+                    elif pos.initial_stop_price <= 0 and pos.current_stop_price > 0:
                         pos.initial_stop_price = pos.current_stop_price
+
                     if pos.initial_stop_price > 0 and pos.average_entry > 0:
                         pos.r_value = abs(pos.average_entry - pos.initial_stop_price)
-                    if pos.r_value > 0 and pos.target_price <= 0:
+
+                    if orig_target > 0:
+                        pos.target_price = orig_target
+                    elif pos.r_value > 0 and pos.target_price <= 0:
                         from apex3.strategy.trail import calculate_target_price
                         pos.target_price = calculate_target_price(
                             side=pos.side,
@@ -168,6 +264,22 @@ class Reconciler:
                     pos.quantity = bp_qty
                 pos.side = bp_side
                 open_strategy_count += 1
+
+        # Check for pending strategy entry orders in broker orderbook (PositionPhase.ENTERING)
+        for o in broker_orders:
+            if getattr(o, "request", None) and self.sm.is_strategy_order(o.request.tag):
+                if o.status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING) and o.request.order_type in (OrderType.LIMIT, OrderType.MARKET):
+                    sym = o.request.symbol
+                    pos = self.sm.positions.get(sym)
+                    if pos is None or pos.phase in (PositionPhase.FLAT, PositionPhase.CLOSED):
+                        pos = self.sm.get_or_create_position(sym)
+                        pos.symbol = sym
+                        pos.phase = PositionPhase.ENTERING
+                        pos.entry_order_id = o.order_id
+                        pos.side = o.request.side
+                        pos.requested_quantity = o.request.quantity
+                        pos.strategy_tag = o.request.tag
+                        logger.info("Restored pending entry order %s for %s in PositionPhase.ENTERING on restart", o.order_id, sym)
 
         if unknown_symbols:
             msg = f"Unknown manual positions detected on broker: {unknown_symbols}. Strategy paused."
@@ -254,6 +366,7 @@ class Reconciler:
                     if self.sm.is_strategy_order(o.request.tag):
                         try:
                             self.broker.cancel_order(o.order_id)
+                            self._confirm_order_terminal(o.order_id, timeout_sec=1.5)
                             self.journal.log_event(
                                 event_type="CANCEL_PENDING_ORDER",
                                 symbol=o.request.symbol,
@@ -280,29 +393,40 @@ class Reconciler:
 
             managed = self.sm.positions.get(bp.symbol)
             if managed is None:
-                continue
+                managed = self.sm.get_or_create_position(bp.symbol)
+                logger.warning("Adopted unmanaged broker position %s (qty=%d) for square-off during flatten", bp.symbol, bp_qty)
 
             managed.quantity = bp_qty
-            bp_side = Side.SELL if bp.quantity < 0 else (getattr(bp, "side", None) or managed.side)
+            bp_side = Side.SELL if bp.quantity < 0 else (getattr(bp, "side", None) or managed.side or Side.BUY)
             managed.side = bp_side
+
+            # Idempotence: check if existing exit order is already placed and in-flight
+            if managed.phase == PositionPhase.EXITING and managed.exit_order_id:
+                try:
+                    ex_st = self.broker.get_order_status(managed.exit_order_id)
+                    if ex_st and ex_st.status in (OrderStatus.OPEN, OrderStatus.PENDING, OrderStatus.TRIGGER_PENDING):
+                        logger.info("Exit order %s for %s already in-flight; polling fill instead of duplicate exit.", managed.exit_order_id, managed.symbol)
+                        exit_orders[managed.symbol] = managed.exit_order_id
+                        continue
+                except Exception:
+                    pass
 
             if managed.protective_order_id:
                 try:
                     self.broker.cancel_order(managed.protective_order_id)
+                    self._confirm_order_terminal(managed.protective_order_id, timeout_sec=1.5)
                 except Exception:
                     pass
 
             exit_side = Side.SELL if bp_side == Side.BUY else Side.BUY
             exit_qty = bp_qty
 
-            exit_req = OrderRequest(
+            exit_req = self._create_exit_order_request(
                 symbol=managed.symbol,
                 side=exit_side,
                 quantity=exit_qty,
-                product=Product.MIS,
-                order_type=OrderType.MARKET,
                 tag=make_broker_tag(self.session_tag, managed.symbol, "FLT"),
-                strategy_id=self.session_tag,
+                current_price=getattr(bp, "average_entry", 0.0),
             )
 
             try:
@@ -340,7 +464,7 @@ class Reconciler:
         while time_module.time() - start_t < timeout_sec:
             try:
                 fresh_bp = self.broker.get_positions()
-                open_bp = [p for p in fresh_bp if abs(p.quantity) > 0 and self.sm.positions.get(p.symbol) is not None]
+                open_bp = [p for p in fresh_bp if abs(p.quantity) > 0]
                 if not open_bp:
                     all_flat = True
                     break
@@ -352,7 +476,7 @@ class Reconciler:
         if not all_flat:
             try:
                 fresh_bp = self.broker.get_positions()
-                open_bp = [p for p in fresh_bp if abs(p.quantity) > 0 and self.sm.positions.get(p.symbol) is not None]
+                open_bp = [p for p in fresh_bp if abs(p.quantity) > 0]
                 all_flat = (len(open_bp) == 0)
                 remaining_symbols = [p.symbol for p in open_bp]
             except Exception:
