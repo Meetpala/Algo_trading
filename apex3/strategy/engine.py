@@ -475,6 +475,16 @@ class StrategyEngine:
                                     explanation=f"Exit order {pos.exit_order_id} filled for {pos.symbol}",
                                 )
                                 continue
+                            elif exit_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
+                                logger.warning(
+                                    "Exit order %s for %s was %s; clearing exit_order_id for retry",
+                                    pos.exit_order_id,
+                                    pos.symbol,
+                                    exit_state.status.value,
+                                )
+                                if getattr(exit_state, "filled_quantity", 0) > 0:
+                                    pos.quantity = max(0, pos.quantity - exit_state.filled_quantity)
+                                pos.exit_order_id = ""
                             elif exit_state.pending_quantity > 0:
                                 pos.quantity = exit_state.pending_quantity
                                 pos.phase = PositionPhase.EXITING
@@ -486,16 +496,33 @@ class StrategyEngine:
                                     continue
                                 else:
                                     pos.phase = PositionPhase.EXITING
-                            elif exit_state.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED, OrderStatus.ERROR):
-                                logger.warning(
-                                    "Exit order %s for %s was %s; clearing exit_order_id for retry",
-                                    pos.exit_order_id,
-                                    pos.symbol,
-                                    exit_state.status.value,
-                                )
-                                pos.exit_order_id = ""
                     except Exception as e_poll:
                         logger.error("Error polling exit order %s for %s: %s", pos.exit_order_id, pos.symbol, e_poll)
+
+                if not pos.exit_order_id and pos.quantity > 0:
+                    exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
+                    try:
+                        retry_exit = OrderRequest(
+                            symbol=pos.symbol,
+                            side=exit_side,
+                            quantity=pos.quantity,
+                            product=Product.MIS,
+                            order_type=OrderType.MARKET,
+                            tag=make_broker_tag(self.session_tag, pos.symbol, "EXT"),
+                            strategy_id=self.session_tag,
+                        )
+                        retry_id = self.broker.place_order(retry_exit)
+                        pos.exit_order_id = retry_id
+                        self.journal.log_event(
+                            event_type="EXIT_ORDER_RETRY",
+                            symbol=pos.symbol,
+                            side=exit_side.value,
+                            data={"quantity": pos.quantity, "exit_order_id": retry_id},
+                            explanation=f"Re-dispatched market exit order {retry_id} for {pos.symbol} after exit failure",
+                        )
+                    except Exception as retry_err:
+                        logger.critical("Failed to dispatch retry exit order for %s: %s", pos.symbol, retry_err)
+
                 # Do not submit a second exit order while an exit order is pending or in-flight
                 continue
 
@@ -623,6 +650,21 @@ class StrategyEngine:
                                 )
                             )
                             continue
+                    elif sl_order and sl_order.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.ERROR):
+                        sl_filled = getattr(sl_order, "filled_quantity", 0)
+                        if isinstance(sl_filled, (int, float)) and sl_filled > 0:
+                            pos.quantity = max(0, pos.quantity - int(sl_filled))
+                        if pos.quantity <= 0:
+                            pos.phase = PositionPhase.CLOSED
+                            pos.quantity = 0
+                            continue
+                        logger.critical(
+                            "EMERGENCY: Protective SL order %s for %s is %s! Marking OPEN_UNPROTECTED for immediate liquidation.",
+                            pos.protective_order_id,
+                            pos.symbol,
+                            sl_order.status.value,
+                        )
+                        pos.phase = PositionPhase.OPEN_UNPROTECTED
                 except Exception as exc:
                     self.journal.log_warning(
                         severity="WARNING",

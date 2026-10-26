@@ -731,3 +731,108 @@ def test_signal_fails_closed_on_missing_quote_timestamp():
     assert len(missing_gates) == 1
 
 
+def test_exiting_phase_rejected_order_clears_and_auto_retries():
+    """In EXITING phase, a REJECTED exit order is not swallowed by hasattr(request); it clears exit_order_id and retries immediately."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 15, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    pos = engine.state_machine.get_or_create_position("RELIANCE")
+    pos.side = Side.BUY
+    pos.quantity = 25
+    pos.average_entry = 2500.0
+    pos.initial_stop_price = 2480.0
+    pos.current_stop_price = 2480.0
+    pos.phase = PositionPhase.EXITING
+    pos.exit_order_id = "EXIT_REJ_1"
+
+    mock_broker.get_positions.return_value = [PositionState(symbol="RELIANCE", quantity=25, average_entry=2500.0)]
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="RELIANCE", exchange="NSE", lot_size=1, tick_size=0.05)
+    mock_broker.get_quote.return_value = Quote(symbol="RELIANCE", exchange="NSE", last_price=2520.0, bid=2519.8, ask=2520.2, volume=50000, timestamp=now, is_fresh=True)
+
+    # Broker returns REJECTED with request.quantity > 0 and filled_quantity = 0
+    rej_order = OrderState(
+        order_id="EXIT_REJ_1",
+        request=OrderRequest(symbol="RELIANCE", side=Side.SELL, quantity=25),
+        status=OrderStatus.REJECTED,
+        filled_quantity=0,
+        pending_quantity=25,
+    )
+    mock_broker.get_order_status.return_value = rej_order
+
+    placed_orders = []
+    def on_place(req):
+        ord_id = f"RETRY_EXT_{len(placed_orders) + 1}"
+        placed_orders.append((ord_id, req))
+        return ord_id
+    mock_broker.place_order.side_effect = on_place
+
+    engine.evaluate_step(now)
+
+    # 1. New retry order must have been dispatched on this cycle
+    assert len(placed_orders) == 1, "Should immediately dispatch retry market exit order"
+    retry_id, retry_req = placed_orders[0]
+    assert retry_req.order_type == OrderType.MARKET
+    assert retry_req.quantity == 25
+    assert retry_req.side == Side.SELL
+
+    # 2. Position's exit_order_id must be updated to the new retry ID
+    assert pos.exit_order_id == retry_id
+    assert pos.phase == PositionPhase.EXITING
+
+
+def test_step11_detects_cancelled_protective_stop_and_liquidates_immediately():
+    """In Step 11.0, a CANCELLED/REJECTED protective stop marks pos OPEN_UNPROTECTED and immediately fires emergency market liquidation."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 20, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    pos = engine.state_machine.get_or_create_position("JSWSTEEL")
+    pos.side = Side.BUY
+    pos.quantity = 30
+    pos.average_entry = 800.0
+    pos.initial_stop_price = 794.0
+    pos.current_stop_price = 794.0
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.protective_order_id = "SL_JSW_1"
+
+    mock_broker.get_positions.return_value = [PositionState(symbol="JSWSTEEL", quantity=30, average_entry=800.0)]
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="JSWSTEEL", exchange="NSE", lot_size=1, tick_size=0.05)
+    mock_broker.get_quote.return_value = Quote(symbol="JSWSTEEL", exchange="NSE", last_price=805.0, bid=804.8, ask=805.2, volume=30000, timestamp=now, is_fresh=True)
+
+    # Stop order was cancelled externally
+    cancelled_sl = OrderState(
+        order_id="SL_JSW_1",
+        request=OrderRequest(symbol="JSWSTEEL", side=Side.SELL, quantity=30, order_type=OrderType.SL),
+        status=OrderStatus.CANCELLED,
+        filled_quantity=0,
+        pending_quantity=0,
+    )
+    mock_broker.get_order_status.return_value = cancelled_sl
+
+    placed_orders = []
+    def on_place(req):
+        placed_orders.append(req)
+        return "EMER_FLT_1"
+    mock_broker.place_order.side_effect = on_place
+
+    engine.evaluate_step(now)
+
+    # Emergency liquidation order must have been placed
+    assert len(placed_orders) == 1, "Should fire emergency market liquidation"
+    assert placed_orders[0].order_type == OrderType.MARKET
+    assert placed_orders[0].quantity == 30
+    assert placed_orders[0].side == Side.SELL
+    assert pos.phase == PositionPhase.EXITING
+    assert pos.exit_order_id == "EMER_FLT_1"
+
+
+
