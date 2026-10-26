@@ -16,12 +16,15 @@ Session states:
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timedelta
 from enum import Enum, auto
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 from apex3.config import ScheduleConfig
+
+logger = logging.getLogger(__name__)
 
 IST = ZoneInfo("Asia/Kolkata")
 

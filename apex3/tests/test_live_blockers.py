@@ -1090,5 +1090,228 @@ def test_sizer_accepts_broker_leverage_within_float_tolerance():
     assert res.quantity > 0
 
 
+def test_flatten_reports_incomplete_if_strategy_order_remains_pending():
+    """P0.2: Flatten reports incomplete and logs EMERGENCY if a strategy order remains unconfirmed/pending."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    sm = StateMachine("APEX3")
+    reconciler = Reconciler(mock_broker, sm, mock_journal, "APEX3")
+
+    pos = sm.get_or_create_position("INFY")
+    pos.side = Side.BUY
+    pos.quantity = 10
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.protective_order_id = "SL_INFY_1"
+
+    # Broker has 10 shares open initially
+    broker_positions = [PositionState(symbol="INFY", side=Side.BUY, quantity=10, average_entry=1500.0, product=Product.MIS)]
+    mock_broker.get_positions.side_effect = lambda: list(broker_positions)
+    mock_broker.get_orders.return_value = [
+        OrderState(
+            order_id="SL_INFY_1",
+            request=OrderRequest(symbol="INFY", side=Side.SELL, quantity=10, tag="APEX3_INFY_SL"),
+            status=OrderStatus.TRIGGER_PENDING,
+            pending_quantity=10,
+        )
+    ]
+
+    # When exit order placed, position clears at broker
+    def on_exit(req):
+        broker_positions.clear()
+        return "EXIT_INFY_ORD"
+    mock_broker.place_order.side_effect = on_exit
+
+    # But SL order cancellation never confirms (remains TRIGGER_PENDING)
+    def on_status(oid):
+        if oid == "SL_INFY_1":
+            return OrderState(order_id="SL_INFY_1", status=OrderStatus.TRIGGER_PENDING, pending_quantity=10)
+        return OrderState(order_id=oid, status=OrderStatus.COMPLETE, filled_quantity=10)
+    mock_broker.get_order_status.side_effect = on_status
+
+    success, msg = reconciler.execute_flatten_sequence(timeout_sec=0.2)
+    assert success is False
+    assert "Residual open exposure" in msg or "unconfirmed orders" in msg
+    assert "SL_INFY_1" in msg
+    # Verify emergency warning logged
+    mock_journal.log_warning.assert_called()
+    assert any(call.kwargs.get("severity") == "EMERGENCY" for call in mock_journal.log_warning.call_args_list)
+
+
+def test_flatten_ignores_non_mis_delivery_holdings():
+    """P1.4 / P0.2: Flatten sequence must never liquidate non-MIS (CNC/NRML) delivery holdings."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    sm = StateMachine("APEX3")
+    reconciler = Reconciler(mock_broker, sm, mock_journal, "APEX3")
+
+    # Long-term CNC delivery holding in account, but no MIS positions
+    cnc_holding = PositionState(symbol="RELIANCE", side=Side.BUY, quantity=50, average_entry=2000.0, product=Product.CNC)
+    mock_broker.get_positions.return_value = [cnc_holding]
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_order_status.return_value = OrderState(status=OrderStatus.COMPLETE)
+
+    success, msg = reconciler.execute_flatten_sequence(timeout_sec=0.1)
+    assert success is True
+    # Crucially: place_order was never called to dump CNC holdings!
+    assert mock_broker.place_order.call_count == 0
+
+
+def test_reconciler_startup_audit_ignores_cnc_positions():
+    """P1.4: Startup audit must not crash with KeyError or flag CNC delivery holdings as unauthorized MIS."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    sm = StateMachine("APEX3")
+    reconciler = Reconciler(mock_broker, sm, mock_journal, "APEX3")
+
+    cnc_pos = PositionState(symbol="TCS", side=Side.BUY, quantity=100, average_entry=3500.0, product=Product.CNC)
+    mock_broker.get_positions.return_value = [cnc_pos]
+    mock_broker.get_orders.return_value = []
+
+    status = reconciler.audit_startup_state(["INFY", "TRENT"])
+    assert status.is_clean is True
+    assert "TCS" not in sm.positions
+
+
+def test_exiting_phase_unknown_status_blocks_new_entries_and_defers():
+    """P0.3: When exit order status is UNKNOWN, engine treats it as reconciliation failure and defers duplicate exit."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 30, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    pos = engine.state_machine.get_or_create_position("INFY")
+    pos.side = Side.BUY
+    pos.quantity = 25
+    pos.phase = PositionPhase.EXITING
+    pos.exit_order_id = "EXIT_ORD_1"
+
+    # Status returns UNKNOWN
+    mock_broker.get_order_status.return_value = OrderState(order_id="EXIT_ORD_1", status=OrderStatus.UNKNOWN)
+    mock_broker.get_positions.return_value = [
+        PositionState(symbol="INFY", side=Side.BUY, quantity=25, product=Product.MIS)
+    ]
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+
+    decisions = engine.evaluate_step(now)
+    # Must NOT place a duplicate exit order while status is unknown!
+    assert mock_broker.place_order.call_count == 0
+    assert pos.phase == PositionPhase.EXITING
+    # Emergency warning logged
+    assert any(call.kwargs.get("severity") == "EMERGENCY" for call in mock_journal.log_warning.call_args_list)
+
+
+def test_step11_unknown_stop_order_status_defers_modification():
+    """P0.3: When protective stop status returns UNKNOWN, engine defers modification and alerts."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 30, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    pos = engine.state_machine.get_or_create_position("TRENT")
+    pos.side = Side.BUY
+    pos.quantity = 10
+    pos.average_entry = 1000.0
+    pos.current_stop_price = 990.0
+    pos.initial_stop_price = 990.0
+    pos.target_price = 1020.0
+    pos.r_value = 10.0
+    pos.protective_order_id = "SL_TRENT_1"
+    pos.phase = PositionPhase.OPEN_PROTECTED
+
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05)
+    mock_broker.get_quote.return_value = Quote(symbol="TRENT", exchange="NSE", last_price=1010.5, bid=1010.4, ask=1010.6, volume=5000, timestamp=now, is_fresh=True)
+    mock_broker.get_positions.return_value = [
+        PositionState(symbol="TRENT", side=Side.BUY, quantity=10, product=Product.MIS)
+    ]
+    mock_broker.get_order_status.return_value = OrderState(order_id="SL_TRENT_1", status=OrderStatus.UNKNOWN)
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+
+    engine.evaluate_step(now)
+    # Stop modification must be deferred when stop status is unknown
+    assert mock_broker.modify_order.call_count == 0
+    assert any(call.kwargs.get("severity") == "EMERGENCY" for call in mock_journal.log_warning.call_args_list)
+
+
+def test_signal_fails_closed_when_circuit_limits_zero():
+    """P1.3: Gate 8 rejects with CIRCUIT_LIMIT_UNAVAILABLE when instrument circuit limits are 0."""
+    from apex3.strategy.signal import evaluate_signal
+
+    now = datetime(2026, 3, 20, 9, 35, tzinfo=IST)
+    inst = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05, upper_circuit=0.0, lower_circuit=0.0, mis_available=True)
+    quote = Quote(symbol="TRENT", exchange="NSE", last_price=1000.0, bid=999.8, ask=1000.2, volume=10000, timestamp=now, is_fresh=True)
+    candles = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=1000.0, high=1001.0, low=999.0, close=1000.0, volume=10000, is_complete=True) for i in range(20)]
+    or_range = OpeningRange(symbol="TRENT", high=995.0, low=990.0, is_complete=True, candle_count=3)
+
+    cfg = AppConfig()
+    sig = evaluate_signal(
+        symbol="TRENT",
+        stock_candles_5m=candles,
+        benchmark_candles_5m=candles,
+        opening_range=or_range,
+        market_regime=MarketRegime.BULLISH,
+        instrument=inst,
+        quote=quote,
+        config=cfg.signal,
+        is_entry_window=True,
+    )
+    assert sig.decision == Decision.WAIT
+    assert any(g.code == "CIRCUIT_LIMIT_UNAVAILABLE" and g.status == GateStatus.FAIL for g in sig.gates)
+
+
+def test_signal_fails_closed_when_mis_unavailable():
+    """P1.3: Signal rejects immediately when mis_available is False."""
+    from apex3.strategy.signal import evaluate_signal
+
+    now = datetime(2026, 3, 20, 9, 35, tzinfo=IST)
+    inst = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05, upper_circuit=1200.0, lower_circuit=800.0, mis_available=False)
+    quote = Quote(symbol="TRENT", exchange="NSE", last_price=1000.0, bid=999.8, ask=1000.2, volume=10000, timestamp=now, is_fresh=True)
+    candles = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=1000.0, high=1001.0, low=999.0, close=1000.0, volume=10000, is_complete=True) for i in range(20)]
+    or_range = OpeningRange(symbol="TRENT", high=995.0, low=990.0, is_complete=True, candle_count=3)
+
+    cfg = AppConfig()
+    sig = evaluate_signal(
+        symbol="TRENT",
+        stock_candles_5m=candles,
+        benchmark_candles_5m=candles,
+        opening_range=or_range,
+        market_regime=MarketRegime.BULLISH,
+        instrument=inst,
+        quote=quote,
+        config=cfg.signal,
+        is_entry_window=True,
+    )
+    assert sig.decision == Decision.WAIT
+    assert any(g.code == "MIS_PRODUCT_UNAVAILABLE" and g.status == GateStatus.FAIL for g in sig.gates)
+
+
+def test_calendar_freshness_validation():
+    """P1.6: 2026-01-15 is included in holidays, and validate_calendar_freshness guards against stale calendars."""
+    from apex3.strategy.schedule import SessionScheduler
+    from apex3.config import load_config
+    import os
+
+    cfg = load_config(os.path.join(os.path.dirname(__file__), "..", "config.yaml"))
+    assert "2026-01-15" in cfg.schedule.holidays
+
+    sched = SessionScheduler(cfg.schedule)
+    is_valid, msg = sched.validate_calendar_freshness(2026)
+    assert is_valid is True
+
+    # 2027 calendar is unconfigured and must fail
+    is_valid_2027, msg_2027 = sched.validate_calendar_freshness(2027)
+    assert is_valid_2027 is False
+    assert "No exchange holidays configured for year 2027" in msg_2027
+
+
 
 
