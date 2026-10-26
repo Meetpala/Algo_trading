@@ -293,6 +293,7 @@ class StrategyEngine:
                     ent_pos.quantity = entry_state.filled_quantity
                     if entry_state.average_price > 0:
                         ent_pos.average_entry = entry_state.average_price
+                    ent_pos.best_favorable_price = ent_pos.average_entry
                     ent_pos.phase = PositionPhase.OPEN_UNPROTECTED
 
                     # Recalculate target and R-value from actual confirmed fill price
