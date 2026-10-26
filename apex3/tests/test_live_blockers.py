@@ -1248,15 +1248,19 @@ def test_signal_fails_closed_when_circuit_limits_zero():
 
     now = datetime(2026, 3, 20, 9, 35, tzinfo=IST)
     inst = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05, upper_circuit=0.0, lower_circuit=0.0, mis_available=True)
-    quote = Quote(symbol="TRENT", exchange="NSE", last_price=1000.0, bid=999.8, ask=1000.2, volume=10000, timestamp=now, is_fresh=True)
-    candles = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=1000.0, high=1001.0, low=999.0, close=1000.0, volume=10000, is_complete=True) for i in range(20)]
+    quote = Quote(symbol="TRENT", exchange="NSE", last_price=1000.0, bid=999.8, ask=1000.2, volume=50000, timestamp=now, is_fresh=True)
+
+    # 19 base candles with 10k volume, then 20th candle breaks out above OR high (995) with 50k volume (5x)
+    stock_candles = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=991.0, high=994.0, low=990.0, close=992.0, volume=10000, is_complete=True) for i in range(19)]
+    stock_candles.append(Candle(timestamp=now, open=996.0, high=1001.0, low=995.5, close=1000.0, volume=50000, is_complete=True))
+    bench_candles = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=10000.0, high=10005.0, low=9995.0, close=10000.0, volume=10000, is_complete=True) for i in range(20)]
     or_range = OpeningRange(symbol="TRENT", high=995.0, low=990.0, is_complete=True, candle_count=3)
 
     cfg = AppConfig()
     sig = evaluate_signal(
         symbol="TRENT",
-        stock_candles_5m=candles,
-        benchmark_candles_5m=candles,
+        stock_candles_5m=stock_candles,
+        benchmark_candles_5m=bench_candles,
         opening_range=or_range,
         market_regime=MarketRegime.BULLISH,
         instrument=inst,
@@ -1265,7 +1269,8 @@ def test_signal_fails_closed_when_circuit_limits_zero():
         is_entry_window=True,
     )
     assert sig.decision == Decision.WAIT
-    assert any(g.code == "CIRCUIT_LIMIT_UNAVAILABLE" and g.status == GateStatus.FAIL for g in sig.gates)
+    assert "CIRCUIT_LIMIT_UNAVAILABLE" in sig.reason_codes
+    assert any(g.name == "CIRCUIT_DISTANCE" and g.status == GateStatus.FAIL for g in sig.gates)
 
 
 def test_signal_fails_closed_when_mis_unavailable():
@@ -1291,7 +1296,8 @@ def test_signal_fails_closed_when_mis_unavailable():
         is_entry_window=True,
     )
     assert sig.decision == Decision.WAIT
-    assert any(g.code == "MIS_PRODUCT_UNAVAILABLE" and g.status == GateStatus.FAIL for g in sig.gates)
+    assert "MIS_NOT_AVAILABLE" in sig.reason_codes
+    assert any(g.name == "PRODUCT_ELIGIBILITY" and g.status == GateStatus.FAIL for g in sig.gates)
 
 
 def test_calendar_freshness_validation():
