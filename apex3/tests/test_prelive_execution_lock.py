@@ -73,7 +73,7 @@ def test_session_vwap_today_candles_isolation():
 
     all_candles = hist_candles + today_candles
     or_range = OpeningRange(symbol="TEST", high=100.5, low=100.0, is_complete=True, candle_count=3)
-    inst = InstrumentInfo(symbol="TEST", exchange="NSE", lot_size=1, tick_size=0.05)
+    inst = InstrumentInfo(symbol="TEST", exchange="NSE", lot_size=1, tick_size=0.05, upper_circuit=120.0, lower_circuit=80.0, mis_available=True)
     quote = Quote(symbol="TEST", exchange="NSE", last_price=100.9, bid=100.85, ask=100.95, volume=6000, timestamp=today_candles[-1].timestamp)
 
     cfg = SignalConfig(min_relative_volume=1.0, min_clv_ratio=0.5, max_spread_bps=20.0)

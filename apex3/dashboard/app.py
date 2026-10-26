@@ -166,30 +166,46 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                     }
                 )
 
-        # Orders & Fills: Live broker orderbook with journal fallback
-        orders = []
+        # Orders & Fills: Separate live broker orders from SQLite journal orders
+        live_orders = []
+        live_orders_fetch_status = "OK"
+        live_orders_error = ""
         try:
             broker_orders = engine.broker.get_orders() if hasattr(engine, "broker") and hasattr(engine.broker, "get_orders") else []
             for bo in broker_orders:
-                orders.append({
+                live_orders.append({
                     "order_id": bo.order_id,
                     "symbol": bo.request.symbol if bo.request else getattr(bo, "symbol", ""),
                     "side": bo.request.side.value if (bo.request and hasattr(bo.request.side, "value")) else str(getattr(bo, "side", "")),
                     "quantity": bo.request.quantity if bo.request else getattr(bo, "quantity", 0),
+                    "filled_quantity": getattr(bo, "filled_quantity", 0),
+                    "pending_quantity": getattr(bo, "pending_quantity", 0),
                     "order_type": bo.request.order_type.value if (bo.request and hasattr(bo.request.order_type, "value")) else str(getattr(bo, "order_type", "")),
                     "price": getattr(bo.request, "price", 0.0) if bo.request else getattr(bo, "price", 0.0),
                     "trigger_price": getattr(bo.request, "trigger_price", 0.0) if bo.request else getattr(bo, "trigger_price", 0.0),
                     "status": bo.status.value if hasattr(bo.status, "value") else str(bo.status),
-                    "filled_quantity": getattr(bo, "filled_quantity", 0),
+                    "status_message": getattr(bo, "status_message", ""),
                     "average_price": getattr(bo, "average_price", 0.0),
+                    "source": "live_broker",
+                    "updated_at": bo.last_updated.strftime("%Y-%m-%d %H:%M:%S") if getattr(bo, "last_updated", None) else now.strftime("%Y-%m-%d %H:%M:%S"),
                 })
+        except Exception as bo_err:
+            live_orders_fetch_status = "ERROR"
+            live_orders_error = str(bo_err)
+
+        journal_orders = []
+        try:
+            raw_jo = engine.journal.get_orders(limit=15) if hasattr(engine.journal, "get_orders") else []
+            for jo in raw_jo:
+                if isinstance(jo, dict):
+                    jo_copy = dict(jo)
+                    jo_copy["source"] = "sqlite_journal"
+                    journal_orders.append(jo_copy)
+                else:
+                    journal_orders.append(jo)
         except Exception:
-            orders = []
-        if not orders:
-            try:
-                orders = engine.journal.get_orders(limit=15) if hasattr(engine.journal, "get_orders") else []
-            except Exception:
-                orders = []
+            journal_orders = []
+
         try:
             events = engine.journal.get_events(limit=15) if hasattr(engine.journal, "get_events") else []
         except Exception:
@@ -230,7 +246,11 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 },
                 "open_positions": open_positions,
                 "decisions": decisions_summary,
-                "recent_orders": orders[:10],
+                "live_orders": live_orders,
+                "live_orders_status": live_orders_fetch_status,
+                "live_orders_error": live_orders_error,
+                "journal_orders": journal_orders[:10],
+                "recent_orders": (live_orders if live_orders else journal_orders)[:10],
                 "recent_events": events[:10],
             }
         )

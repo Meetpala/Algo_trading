@@ -64,15 +64,23 @@ def test_partial_fill_cancels_remainder_and_sizes_stop_exactly():
         return ord_id
     mock_broker.place_order.side_effect = on_place
 
-    # Entry order for 50 shares partially fills for 20 shares @ 1001.0
+    cancelled_orders = set()
+    def on_cancel(ord_id):
+        cancelled_orders.add(ord_id)
+        return True
+    mock_broker.cancel_order.side_effect = on_cancel
+
+    # Entry order for 14 shares partially fills for 6 shares @ 1001.0; once cancelled, confirmed terminal
     def on_status(ord_id):
         if "ORD_1" in ord_id:
+            status = OrderStatus.CANCELLED if "ORD_1" in cancelled_orders else OrderStatus.PENDING
+            pending_q = 0 if "ORD_1" in cancelled_orders else 8
             return OrderState(
                 order_id="ORD_1",
                 request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=14, price=1000.05),
-                status=OrderStatus.PENDING,  # partial fill, still pending
+                status=status,
                 filled_quantity=6,
-                pending_quantity=8,
+                pending_quantity=pending_q,
                 average_price=1001.0,
             )
         elif "ORD_2" in ord_id:
@@ -86,6 +94,10 @@ def test_partial_fill_cancels_remainder_and_sizes_stop_exactly():
             )
         return None
     mock_broker.get_order_status.side_effect = on_status
+    mock_broker.get_positions.side_effect = lambda: (
+        [PositionState(symbol="TRENT", side=Side.BUY, quantity=6, average_entry=1001.0, product=Product.MIS)]
+        if "ORD_1" in cancelled_orders else []
+    )
 
     cfg = AppConfig()
     object.__setattr__(cfg.watchlist, "symbols", ["TRENT"])
@@ -132,6 +144,87 @@ def test_partial_fill_cancels_remainder_and_sizes_stop_exactly():
         assert pos.quantity == 6
         assert pos.average_entry == 1001.0
         assert pos.target_price > 1001.0
+    finally:
+        eng_module.evaluate_signal = orig_eval
+        eng_module.evaluate_market_regime = orig_regime
+
+
+def test_partial_fill_unconfirmed_cancellation_retains_entering_phase():
+    """When entry remainder cancellation times out or remains unconfirmed, position must stay in ENTERING and stop must NOT be placed."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.get_positions.return_value = []
+    mock_broker.estimate_order_margin.return_value = OrderMarginEstimate(required_margin=3000.0, leverage_available=4.0)
+
+    now = datetime(2026, 3, 20, 9, 35, tzinfo=IST)
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(
+        symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05, upper_circuit=1200.0, lower_circuit=800.0, mis_available=True
+    )
+    mock_broker.get_quote.return_value = Quote(
+        symbol="TRENT", exchange="NSE", last_price=1000.0, bid=999.8, ask=1000.2, volume=10000, timestamp=now, is_fresh=True
+    )
+
+    placed_orders = []
+    def on_place(req):
+        ord_id = f"ORD_{len(placed_orders) + 1}"
+        placed_orders.append((ord_id, req))
+        return ord_id
+    mock_broker.place_order.side_effect = on_place
+
+    # Order remains permanently PENDING even after cancel request
+    mock_broker.get_order_status.return_value = OrderState(
+        order_id="ORD_1",
+        request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=14, price=1000.05),
+        status=OrderStatus.PENDING,
+        filled_quantity=6,
+        pending_quantity=8,
+        average_price=1001.0,
+    )
+
+    cfg = AppConfig()
+    object.__setattr__(cfg.watchlist, "symbols", ["TRENT"])
+    object.__setattr__(cfg.watchlist, "scanner_enabled", False)
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    candles = [Candle(timestamp=now - timedelta(minutes=5 * (20 - i)), open=1000.0, high=1001.0, low=999.0, close=1000.0, volume=10000, is_complete=True) for i in range(20)]
+    candles[-1] = Candle(timestamp=now, open=1000.0, high=1001.0, low=996.0, close=1000.0, volume=10000, is_complete=True)
+    mock_broker.get_historical.return_value = candles
+
+    fake_sig = SignalEvaluation(
+        symbol="TRENT",
+        decision=Decision.PROPOSED_LONG,
+        signal_price=1000.0,
+        side=Side.BUY,
+        gates=[GateResult("TEST", GateStatus.PASS, "OK")],
+        relative_strength=0.05,
+        relative_volume=3.0,
+    )
+
+    import apex3.strategy.engine as eng_module
+    orig_eval = eng_module.evaluate_signal
+    orig_regime = eng_module.evaluate_market_regime
+    try:
+        eng_module.evaluate_signal = MagicMock(return_value=fake_sig)
+        eng_module.evaluate_market_regime = MagicMock(return_value=MagicMock(regime=MarketRegime.BULLISH, is_valid=True))
+
+        engine.evaluate_step(now)
+
+        # 1. Remainder cancellation was attempted
+        assert mock_broker.cancel_order.call_count >= 1
+
+        # 2. Protective stop was NOT placed because cancellation was unconfirmed!
+        assert len(placed_orders) == 1  # Only the entry order!
+
+        # 3. Position remains in ENTERING phase to prevent unmanaged exposure
+        pos = engine.state_machine.positions["TRENT"]
+        assert pos.phase == PositionPhase.ENTERING
+
+        # 4. Emergency/Critical warning logged
+        mock_journal.log_warning.assert_called()
     finally:
         eng_module.evaluate_signal = orig_eval
         eng_module.evaluate_market_regime = orig_regime

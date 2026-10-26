@@ -68,8 +68,26 @@ class HybridBrokerAdapter(BrokerInterface):
         )
 
     def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
-        """Fetch instrument info from Angel One data feed."""
-        return self.data_provider.get_instrument_info(symbol=symbol, exchange=exchange)
+        """Fetch instrument info, enriching with execution broker circuit limits if available."""
+        info = self.data_provider.get_instrument_info(symbol=symbol, exchange=exchange)
+        if (info.upper_circuit <= 0 or info.lower_circuit <= 0) and hasattr(self.execution_broker, "get_instrument_info"):
+            try:
+                exec_info = self.execution_broker.get_instrument_info(symbol=symbol, exchange=exchange)
+                if exec_info:
+                    return InstrumentInfo(
+                        symbol=info.symbol,
+                        exchange=info.exchange,
+                        tick_size=exec_info.tick_size or info.tick_size,
+                        lot_size=exec_info.lot_size or info.lot_size,
+                        exchange_token=info.exchange_token or exec_info.exchange_token,
+                        instrument_token=info.instrument_token or exec_info.instrument_token,
+                        upper_circuit=exec_info.upper_circuit if exec_info.upper_circuit > 0 else info.upper_circuit,
+                        lower_circuit=exec_info.lower_circuit if exec_info.lower_circuit > 0 else info.lower_circuit,
+                        mis_available=exec_info.mis_available,
+                    )
+            except Exception:
+                pass
+        return info
 
     # ── Order Execution & Portfolio (Delegated to Zerodha Personal) ──
 

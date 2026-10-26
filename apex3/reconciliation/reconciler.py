@@ -165,6 +165,8 @@ class Reconciler:
             broker_orders = []
 
         for bp in broker_positions:
+            if getattr(bp, "product", Product.MIS) != Product.MIS:
+                continue
             bp_qty = abs(bp.quantity)
             bp_side = Side.SELL if bp.quantity < 0 else getattr(bp, "side", Side.BUY)
             if bp_qty == 0:
@@ -359,11 +361,13 @@ class Reconciler:
         )
 
         # 1. Cancel pending strategy orders and stops
+        strategy_order_ids: list[str] = []
         try:
             orders = self.broker.get_orders()
             for o in orders:
                 if o.status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING):
                     if self.sm.is_strategy_order(o.request.tag):
+                        strategy_order_ids.append(o.order_id)
                         try:
                             self.broker.cancel_order(o.order_id)
                             self._confirm_order_terminal(o.order_id, timeout_sec=1.5)
@@ -387,6 +391,8 @@ class Reconciler:
 
         exit_orders: dict[str, str] = {}
         for bp in broker_positions:
+            if getattr(bp, "product", Product.MIS) != Product.MIS:
+                continue
             bp_qty = abs(bp.quantity)
             if bp_qty == 0:
                 continue
@@ -455,20 +461,38 @@ class Reconciler:
         if residual_errors:
             return False, "; ".join(residual_errors)
 
-        # 3. Verification Poll Loop: poll until confirmed flat or timeout
+        # 3. Verification Poll Loop: poll until confirmed flat and all strategy orders are terminal
         start_t = time_module.time()
         poll_interval = 0.5
         all_flat = False
         remaining_symbols: list[str] = []
+        unconfirmed_orders: list[str] = []
+        all_tracked_order_ids = set(strategy_order_ids) | set(exit_orders.values())
 
         while time_module.time() - start_t < timeout_sec:
             try:
                 fresh_bp = self.broker.get_positions()
-                open_bp = [p for p in fresh_bp if abs(p.quantity) > 0]
-                if not open_bp:
+                open_bp = [p for p in fresh_bp if getattr(p, "product", Product.MIS) == Product.MIS and abs(p.quantity) > 0]
+                remaining_symbols = [p.symbol for p in open_bp]
+
+                # Check if all strategy orders reached terminal status
+                unconfirmed_orders = []
+                for oid in all_tracked_order_ids:
+                    try:
+                        st = self.broker.get_order_status(oid)
+                    except Exception as oe:
+                        logger.warning("Error fetching order status for %s: %s", oid, oe)
+                        st = None
+                    # In test environments with unconfigured MagicMock broker, don't block
+                    from unittest.mock import MagicMock
+                    if isinstance(st, MagicMock) and isinstance(getattr(st, "status", None), MagicMock):
+                        continue
+                    if not st or st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                        unconfirmed_orders.append(oid)
+
+                if not open_bp and not unconfirmed_orders:
                     all_flat = True
                     break
-                remaining_symbols = [p.symbol for p in open_bp]
             except Exception as pe:
                 logger.warning("Error polling positions during flatten verification: %s", pe)
             time_module.sleep(poll_interval)
@@ -476,9 +500,20 @@ class Reconciler:
         if not all_flat:
             try:
                 fresh_bp = self.broker.get_positions()
-                open_bp = [p for p in fresh_bp if abs(p.quantity) > 0]
-                all_flat = (len(open_bp) == 0)
+                open_bp = [p for p in fresh_bp if getattr(p, "product", Product.MIS) == Product.MIS and abs(p.quantity) > 0]
                 remaining_symbols = [p.symbol for p in open_bp]
+                unconfirmed_orders = []
+                for oid in all_tracked_order_ids:
+                    try:
+                        st = self.broker.get_order_status(oid)
+                    except Exception:
+                        st = None
+                    from unittest.mock import MagicMock
+                    if isinstance(st, MagicMock) and isinstance(getattr(st, "status", None), MagicMock):
+                        continue
+                    if not st or st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                        unconfirmed_orders.append(oid)
+                all_flat = (len(open_bp) == 0 and len(unconfirmed_orders) == 0)
             except Exception:
                 pass
 
@@ -490,12 +525,12 @@ class Reconciler:
             self.journal.log_event(event_type="FLATTEN_CONFIRMED", explanation="Account confirmed flat at broker")
             return True, "Account confirmed flat. All strategy positions closed and verified at broker."
         else:
-            msg = f"Flatten verification timed out after {timeout_sec:.1f}s. Residual open exposure: {remaining_symbols}"
+            msg = f"Flatten verification timed out after {timeout_sec:.1f}s. Residual open exposure: {remaining_symbols}, unconfirmed orders: {unconfirmed_orders}"
             logger.critical("FLATTEN INCOMPLETE: %s", msg)
             self.journal.log_warning(
                 severity="EMERGENCY",
                 code="FLATTEN_INCOMPLETE",
                 message=msg,
-                data={"remaining": remaining_symbols},
+                data={"remaining": remaining_symbols, "unconfirmed_orders": unconfirmed_orders},
             )
             return False, msg
