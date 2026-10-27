@@ -129,7 +129,10 @@ def run_app():
             session_tag=engine.session_tag,
             config=config,
         )
-        watched = list(getattr(config.radar, "core_watchlist", [])) + list(getattr(config.radar, "extended_pool", []))
+        radar_cfg = getattr(config, "raw_dict", {}).get("radar", {}) if hasattr(config, "raw_dict") else {}
+        watched = list(radar_cfg.get("core_watchlist", [])) + list(radar_cfg.get("extended_pool", []))
+        if not watched:
+            watched = list(config.watchlist.symbols) + list(config.watchlist.scanner_universe)
         rec_status = reconciler.audit_startup_state(watched_symbols=watched)
         if not rec_status.is_clean:
             msg = (

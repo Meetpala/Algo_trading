@@ -256,7 +256,10 @@ def main():
         sm = StateMachine(session_tag_prefix="APEX3")
         reconciler = Reconciler(broker=broker, state_machine=sm, journal=journal, session_tag="APEX3", config=config)
 
-        watched = list(getattr(config.radar, "core_watchlist", [])) + list(getattr(config.radar, "extended_pool", []))
+        radar_cfg = getattr(config, "raw_dict", {}).get("radar", {}) if hasattr(config, "raw_dict") else {}
+        watched = list(radar_cfg.get("core_watchlist", [])) + list(radar_cfg.get("extended_pool", []))
+        if not watched:
+            watched = list(config.watchlist.symbols) + list(config.watchlist.scanner_universe)
         rec_status = reconciler.audit_startup_state(watched_symbols=watched)
         if rec_status.is_clean:
             print(f"  [PASS] Reconciliation Audit Clean: {rec_status.message} (Flat={rec_status.is_flat})")
