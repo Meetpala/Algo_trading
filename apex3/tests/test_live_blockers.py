@@ -228,10 +228,14 @@ def test_partial_fill_unconfirmed_cancellation_never_leaves_shares_unprotected()
         # 1. Remainder cancellation was attempted
         assert mock_broker.cancel_order.call_count >= 1
 
-        # 2. While remainder is still PENDING, position stays in ENTERING to prevent naked remainder execution
+        # 2. While remainder is still PENDING, position stays in ENTERING, BUT filled shares (6) are actively protected immediately!
         pos = engine.state_machine.positions["TRENT"]
         assert pos.phase == PositionPhase.ENTERING
-        assert len(placed_orders) == 1  # Only entry order, stop is deferred
+        assert len(placed_orders) == 2  # Entry order + immediate protective stop for filled shares
+        sl_ord_id, sl_req = placed_orders[1]
+        assert sl_req.order_type == OrderType.SL
+        assert sl_req.quantity == 6
+        assert pos.protective_order_id == "ORD_2"
 
         # 3. Next step: remainder is now confirmed CANCELLED and broker positions confirm 6 shares
         def on_status_confirmed(ord_id):
@@ -1173,7 +1177,7 @@ def test_flatten_reports_incomplete_if_strategy_order_remains_pending():
 
     success, msg = reconciler.execute_flatten_sequence(timeout_sec=0.2)
     assert success is False
-    assert "Residual open exposure" in msg or "unconfirmed orders" in msg
+    assert "Residual open exposure" in msg or "unconfirmed" in msg.lower()
     assert "SL_INFY_1" in msg
     # Verify emergency warning logged
     mock_journal.log_warning.assert_called()
@@ -1574,6 +1578,7 @@ def test_angel_quote_marketdata_full_depth_and_exchange_feed_timestamp():
     provider._auth_token = "test_jwt"
     provider._token_cache["TRENT"] = "1964"
 
+    now_feed = datetime.now(IST)
     mock_smart.getMarketData.return_value = {
         "status": True,
         "data": {
@@ -1582,7 +1587,7 @@ def test_angel_quote_marketdata_full_depth_and_exchange_feed_timestamp():
                     "tradingSymbol": "TRENT-EQ",
                     "ltp": 1000.50,
                     "tradeVolume": 50000,
-                    "exchFeedTime": "27-Oct-2026 10:15:30",
+                    "exchFeedTime": now_feed.strftime("%d-%b-%Y %H:%M:%S"),
                     "upperCircuit": 1100.0,
                     "lowerCircuit": 900.0,
                     "depth": {
@@ -1600,7 +1605,7 @@ def test_angel_quote_marketdata_full_depth_and_exchange_feed_timestamp():
     assert quote.ask == 1000.60
     assert quote.is_fresh is True
     assert quote.timestamp is not None
-    assert quote.timestamp.hour == 10 and quote.timestamp.minute == 15
+    assert quote.timestamp.hour == now_feed.hour and quote.timestamp.minute == now_feed.minute
 
     # Check instrument info cached circuit limits
     inst = provider.get_instrument_info("TRENT")

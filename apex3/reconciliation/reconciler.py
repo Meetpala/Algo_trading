@@ -561,16 +561,16 @@ class Reconciler:
                     )
                     continue
 
-                # If stop order status is still unconfirmed, retry confirmation once more
-                if term_status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
+                # If stop order status is still open/live on exchange, retry confirmation once more
+                if term_status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING, OrderStatus.PENDING):
                     term_st = self._confirm_order_terminal(managed.protective_order_id, timeout_sec=2.0)
                     term_status = getattr(term_st, "status", None)
                     if term_status == OrderStatus.COMPLETE:
                         managed.phase = PositionPhase.CLOSED
                         managed.quantity = 0
                         continue
-                    if term_status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
-                        # Still unconfirmed: REFUSE to place an overlapping exit order to prevent duplicate fill!
+                    if term_status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING, OrderStatus.PENDING):
+                        # Still live: REFUSE to place an overlapping exit order to prevent duplicate fill!
                         err_msg = f"Stop order {managed.protective_order_id} for {managed.symbol} unconfirmed ({term_status}) during flatten. Deferring exit order to prevent double-fill."
                         logger.critical(err_msg)
                         residual_errors.append(err_msg)

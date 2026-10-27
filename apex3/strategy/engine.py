@@ -1502,7 +1502,9 @@ class StrategyEngine:
         all_symbols_to_quote = [self.config.regime.benchmark_symbol] + [s for s in symbols if s != self.config.regime.benchmark_symbol]
         batch_quotes: dict[str, Quote] = {}
         try:
-            batch_quotes = self.broker.get_quotes_batch(all_symbols_to_quote)
+            res = self.broker.get_quotes_batch(all_symbols_to_quote)
+            if type(res) is dict:
+                batch_quotes = res
         except Exception as bqe:
             logger.warning("Batch quote fetch failed; falling back to individual quotes: %s", bqe)
 
@@ -1590,10 +1592,18 @@ class StrategyEngine:
 
         def compute_conviction(sym_name: str) -> float:
             sig_item, _, _, quote_item = evaluated_signals[sym_name]
-            mid = (quote_item.bid + quote_item.ask) / 2.0 if (quote_item and quote_item.bid and quote_item.ask) else 0.0
-            spread_bps = ((quote_item.ask - quote_item.bid) / mid) * 10000.0 if mid > 0 else 1.0
+            bid = getattr(quote_item, "bid", 0.0) if quote_item else 0.0
+            ask = getattr(quote_item, "ask", 0.0) if quote_item else 0.0
+            bid_val = float(bid) if isinstance(bid, (int, float)) and not isinstance(bid, bool) else 0.0
+            ask_val = float(ask) if isinstance(ask, (int, float)) and not isinstance(ask, bool) else 0.0
+            mid = (bid_val + ask_val) / 2.0 if (bid_val > 0 and ask_val > 0) else 0.0
+            spread_bps = ((ask_val - bid_val) / mid) * 10000.0 if mid > 0 else 1.0
             spread_floor = max(spread_bps, 1.0)
-            score = (abs(sig_item.relative_strength) * 100.0 * sig_item.relative_volume) / spread_floor
+            raw_rs = getattr(sig_item, "relative_strength", 0.0) if sig_item else 0.0
+            rs = float(raw_rs) if isinstance(raw_rs, (int, float)) and not isinstance(raw_rs, bool) else 0.0
+            raw_rvol = getattr(sig_item, "relative_volume", 1.0) if sig_item else 1.0
+            rvol = float(raw_rvol) if isinstance(raw_rvol, (int, float)) and not isinstance(raw_rvol, bool) else 1.0
+            score = (abs(rs) * 100.0 * rvol) / spread_floor
             if sym_name in core_list:
                 score *= core_mult
             return score

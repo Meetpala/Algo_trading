@@ -264,6 +264,12 @@ class AngelDataProvider:
                         for item in fetched:
                             tok = str(item.get("symbolToken", ""))
                             sym = tokens_map.get(tok)
+                            if not sym:
+                                ts = str(item.get("tradingSymbol", "")).replace("-EQ", "").upper()
+                                if ts in clean_symbols:
+                                    sym = ts
+                            if not sym and len(chunk) == 1 and len(clean_symbols) == 1:
+                                sym = clean_symbols[0]
                             if sym:
                                 quotes[sym] = self._parse_market_item(item, sym, exchange)
             except Exception as e:
