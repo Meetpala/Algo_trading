@@ -1816,6 +1816,215 @@ def test_unknown_kite_order_type_and_product_mapping():
     assert tcs_pos.product == Product.MIS
 
 
+def test_index_freshness_passes_without_exchange_depth():
+    """P0: Indices (NIFTY 50) have 0 bid/ask depth on exchange; valid feed time + LTP must yield is_fresh=True."""
+    from apex3.broker.angel_data_provider import AngelDataProvider
+    provider = AngelDataProvider(api_key="", client_code="", pin="", totp_secret="")
+    now_feed = datetime.now(IST)
+
+    item = {
+        "tradingSymbol": "Nifty 50",
+        "symbolToken": "99926000",
+        "ltp": 24500.25,
+        "tradeVolume": 0,
+        "exchFeedTime": now_feed.strftime("%d-%b-%Y %H:%M:%S"),
+        "depth": {"buy": [], "sell": []},
+    }
+
+    quote = provider._parse_market_item(item, "NIFTY 50", "NSE")
+    assert quote.last_price == 24500.25
+    assert quote.bid == 0.0
+    assert quote.ask == 0.0
+    assert quote.is_fresh is True
+
+
+def test_angel_quote_fails_closed_when_feed_time_missing_or_stale():
+    """P1: Angel provider marks quote is_fresh=False if exchFeedTime is missing or older than 2.0s."""
+    from apex3.broker.angel_data_provider import AngelDataProvider
+    provider = AngelDataProvider(api_key="", client_code="", pin="", totp_secret="")
+
+    # Missing feed timestamp
+    item_missing_ts = {
+        "tradingSymbol": "INFY-EQ",
+        "symbolToken": "1594",
+        "ltp": 1800.0,
+        "depth": {
+            "buy": [{"price": 1799.9, "quantity": 100}],
+            "sell": [{"price": 1800.1, "quantity": 100}],
+        },
+    }
+    q1 = provider._parse_market_item(item_missing_ts, "INFY", "NSE")
+    assert q1.is_fresh is False
+
+    # Stale timestamp (10 seconds ago)
+    old_time = datetime.now(IST) - timedelta(seconds=10)
+    item_stale_ts = {
+        "tradingSymbol": "INFY-EQ",
+        "symbolToken": "1594",
+        "ltp": 1800.0,
+        "exchFeedTime": old_time.strftime("%d-%b-%Y %H:%M:%S"),
+        "depth": {
+            "buy": [{"price": 1799.9, "quantity": 100}],
+            "sell": [{"price": 1800.1, "quantity": 100}],
+        },
+    }
+    q2 = provider._parse_market_item(item_stale_ts, "INFY", "NSE")
+    assert q2.is_fresh is False
+
+
+def test_batch_quotes_snapshot_used_in_scan_and_propose():
+    """P1: Engine evaluate_step calls broker.get_quotes_batch() for all watchlist symbols in one call."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.get_positions.return_value = []
+    cfg = AppConfig()
+    object.__setattr__(cfg.watchlist, "symbols", ["RELIANCE", "INFY"])
+    object.__setattr__(cfg.watchlist, "scanner_enabled", False)
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    engine.opening_ranges["RELIANCE"] = OpeningRange(symbol="RELIANCE", is_complete=True, high=2500.0, low=2480.0, candle_count=3)
+    engine.opening_ranges["INFY"] = OpeningRange(symbol="INFY", is_complete=True, high=1800.0, low=1780.0, candle_count=3)
+
+    now = datetime(2026, 3, 23, 9, 35, 10, tzinfo=IST)
+    bench_q = Quote(symbol="NIFTY 50", exchange="NSE", last_price=24500.0, bid=0.0, ask=0.0, volume=0, timestamp=now, is_fresh=True)
+    rel_q = Quote(symbol="RELIANCE", exchange="NSE", last_price=2500.0, bid=2499.8, ask=2500.2, volume=1000, timestamp=now, is_fresh=True)
+    infy_q = Quote(symbol="INFY", exchange="NSE", last_price=1800.0, bid=1799.8, ask=1800.2, volume=1000, timestamp=now, is_fresh=True)
+
+    batch_map = {"NIFTY 50": bench_q, "RELIANCE": rel_q, "INFY": infy_q}
+    mock_broker.get_quotes_batch.return_value = batch_map
+    mock_broker.get_historical.return_value = [
+        Candle(timestamp=now - timedelta(minutes=5 * (15 - i)), open=100.0, high=101.0, low=99.0, close=100.0, volume=1000, is_complete=True)
+        for i in range(15)
+    ]
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="RELIANCE", tick_size=0.05, lot_size=1)
+
+    import apex3.strategy.engine as eng_module
+    orig_eval_sig = eng_module.evaluate_signal
+    orig_regime = eng_module.evaluate_market_regime
+    try:
+        eng_module.evaluate_market_regime = MagicMock(return_value=MagicMock(regime=MarketRegime.BULLISH, is_valid=True, gate=GateResult("REGIME", GateStatus.PASS, "OK")))
+        eng_module.evaluate_signal = MagicMock(return_value=SignalEvaluation(
+            symbol="RELIANCE",
+            decision=Decision.WAIT,
+            signal_price=2500.0,
+            side=Side.BUY,
+            gates=[GateResult("TEST", GateStatus.FAIL, "WAIT")],
+        ))
+
+        engine.evaluate_step(now)
+
+        # Verify get_quotes_batch was called with benchmark + watchlist
+        assert mock_broker.get_quotes_batch.call_count >= 1
+        call_symbols = mock_broker.get_quotes_batch.call_args[0][0]
+        assert "NIFTY 50" in call_symbols
+        assert "RELIANCE" in call_symbols
+        assert "INFY" in call_symbols
+    finally:
+        eng_module.evaluate_signal = orig_eval_sig
+        eng_module.evaluate_market_regime = orig_regime
+
+
+def test_hybrid_adapter_queries_zerodha_for_mis_and_tick_size():
+    """P1: HybridBrokerAdapter consults execution_broker (Zerodha) first for MIS eligibility, tick size, and lot size."""
+    from apex3.broker.hybrid_adapter import HybridBrokerAdapter
+    mock_data = MagicMock()
+    mock_exec = MagicMock()
+    adapter = HybridBrokerAdapter(data_provider=mock_data, execution_broker=mock_exec)
+
+    # Zerodha returns verified instrument info
+    mock_exec.get_instrument_info.return_value = InstrumentInfo(
+        symbol="TRENT",
+        exchange="NSE",
+        tick_size=0.05,
+        lot_size=1,
+        mis_available=True,
+        instrument_token="12345",
+    )
+    # Angel returns token and circuit limits
+    mock_data.resolve_token.return_value = "1964"
+    mock_data.get_instrument_info.return_value = InstrumentInfo(
+        symbol="TRENT",
+        exchange="NSE",
+        upper_circuit=1100.0,
+        lower_circuit=900.0,
+    )
+
+    info = adapter.get_instrument_info("TRENT")
+    assert info.mis_available is True
+    assert info.tick_size == 0.05
+    assert info.instrument_token == "12345"
+    assert info.upper_circuit == 1100.0
+    assert info.lower_circuit == 900.0
+    assert info.exchange_token == "1964"
+
+    # When Zerodha fails, fail safe with mis_available=False
+    mock_exec.get_instrument_info.side_effect = RuntimeError("Zerodha down")
+    info_fail = adapter.get_instrument_info("TRENT")
+    assert info_fail.mis_available is False
+
+
+def test_partial_fill_late_fill_modifies_stop_quantity():
+    """P0: If additional shares fill during cancel polling, stop order quantity is modified via modify_order."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TRENT", tick_size=0.05, lot_size=1)
+
+    pos = engine.state_machine.get_or_create_position("TRENT")
+    pos.symbol = "TRENT"
+    pos.phase = PositionPhase.ENTERING
+    pos.entry_order_id = "ENTRY_TRENT"
+    pos.side = Side.BUY
+    pos.initial_stop_price = 990.0
+    pos.protective_order_id = "SL_TRENT_1"
+
+    # First poll: partial fill 5 shares
+    def on_status(oid):
+        if oid == "ENTRY_TRENT":
+            return OrderState(
+                order_id="ENTRY_TRENT",
+                status=OrderStatus.OPEN,
+                filled_quantity=5,
+                average_price=1000.0,
+            )
+        elif oid == "SL_TRENT_1":
+            return OrderState(
+                order_id="SL_TRENT_1",
+                request=OrderRequest(symbol="TRENT", side=Side.SELL, quantity=5, order_type=OrderType.SL),
+                status=OrderStatus.TRIGGER_PENDING,
+                pending_quantity=5,
+            )
+        return None
+    mock_broker.get_order_status.side_effect = on_status
+
+    # Terminal state polling during cancellation: late fill brings total to 8 shares before CANCELLED
+    engine._confirm_order_terminal = MagicMock(return_value=OrderState(
+        order_id="ENTRY_TRENT",
+        status=OrderStatus.CANCELLED,
+        filled_quantity=8,
+        average_price=1000.0,
+    ))
+    mock_broker.get_positions.return_value = [
+        PositionState(symbol="TRENT", side=Side.BUY, quantity=8, average_entry=1000.0, product=Product.MIS)
+    ]
+    mock_broker.modify_order.return_value = True
+
+    now = datetime(2026, 3, 23, 9, 36, 0, tzinfo=IST)
+    engine._evaluate_step_locked(now)
+
+    # Verify modify_order was called to update stop from 5 to 8 shares
+    assert mock_broker.modify_order.call_count >= 1
+    call_args = mock_broker.modify_order.call_args
+    assert call_args.kwargs.get("quantity") == 8 or (len(call_args.args) > 1 and call_args.args[1] == 8)
+    assert pos.quantity == 8
+
+
+
 
 
 

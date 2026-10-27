@@ -85,6 +85,12 @@ class HybridBrokerAdapter(BrokerInterface):
 
         # 2. Query data provider for Angel streaming token and cached circuits
         data_info = self.data_provider.get_instrument_info(symbol=symbol, exchange=exchange)
+        angel_token = getattr(data_info, "exchange_token", "") or getattr(data_info, "instrument_token", "")
+        if not angel_token and hasattr(self.data_provider, "resolve_token"):
+            try:
+                angel_token = self.data_provider.resolve_token(symbol, exchange) or ""
+            except Exception:
+                pass
 
         if exec_info is not None:
             up_c = data_info.upper_circuit if data_info.upper_circuit > 0 else exec_info.upper_circuit
@@ -94,8 +100,8 @@ class HybridBrokerAdapter(BrokerInterface):
                 exchange=exec_info.exchange,
                 tick_size=exec_info.tick_size if exec_info.tick_size > 0 else data_info.tick_size,
                 lot_size=exec_info.lot_size if exec_info.lot_size > 0 else data_info.lot_size,
-                exchange_token=data_info.exchange_token or getattr(data_info, "instrument_token", ""),
-                instrument_token=exec_info.instrument_token or data_info.instrument_token,
+                exchange_token=angel_token,
+                instrument_token=exec_info.instrument_token or angel_token,
                 upper_circuit=up_c,
                 lower_circuit=low_c,
                 mis_available=exec_info.mis_available,

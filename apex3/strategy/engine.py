@@ -371,7 +371,8 @@ class StrategyEngine:
                     ent_pos.best_favorable_price = ent_pos.average_entry
                     ent_pos.r_value = abs(ent_pos.average_entry - ent_pos.initial_stop_price)
                     inst = self.broker.get_instrument_info(ent_pos.symbol)
-                    tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+                    raw_tick = getattr(inst, "tick_size", 0.05) if inst else 0.05
+                    tick = float(raw_tick) if isinstance(raw_tick, (int, float)) and not isinstance(raw_tick, bool) and raw_tick > 0 else 0.05
                     ent_pos.target_price = calculate_target_price(
                         side=ent_pos.side,
                         entry_price=ent_pos.average_entry,
