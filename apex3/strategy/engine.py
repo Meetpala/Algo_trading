@@ -132,6 +132,7 @@ class StrategyEngine:
 
         # Opening ranges cache: symbol -> OpeningRange
         self.opening_ranges: dict[str, OpeningRange] = {}
+        self.latest_regime_eval: Optional[Any] = None
 
     def _confirm_order_terminal(self, order_id: str, timeout_sec: float = 3.0) -> Optional[OrderState]:
         """Poll broker until order reaches a terminal state (CANCELLED, REJECTED, COMPLETE)."""
@@ -171,10 +172,14 @@ class StrategyEngine:
 
         # Query fresh executable quote (best bid for SELL, best ask for BUY)
         px = 0.0
+        now_ts = datetime.now(IST)
         for _ in range(3):
             try:
                 q = self.broker.get_quote(symbol)
-                if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0:
+                is_fresh = getattr(q, "is_fresh", True)
+                q_ts = getattr(q, "timestamp", None)
+                age_sec = (now_ts - q_ts).total_seconds() if q_ts else 0.0
+                if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0 and is_fresh and age_sec <= 15.0:
                     if side == Side.SELL and isinstance(getattr(q, "bid", None), (int, float)) and q.bid > 0:
                         px = float(q.bid)
                     elif side == Side.BUY and isinstance(getattr(q, "ask", None), (int, float)) and q.ask > 0:
@@ -190,21 +195,13 @@ class StrategyEngine:
         if px <= 0.0 and isinstance(current_price, (int, float)) and current_price > 0:
             px = float(current_price)
 
+        if px <= 0.0:
+            err_msg = f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})"
+            logger.critical(err_msg)
+            raise ValueError(err_msg)
+
         lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
         upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
-
-        if px <= 0.0:
-            # Fall back to circuit limits if no quote or price reference is available
-            if side == Side.SELL and lower_c > 0:
-                logger.warning("No price quote for exit %s; using lower circuit %.2f as bound", symbol, lower_c)
-                px = lower_c
-            elif side == Side.BUY and upper_c > 0:
-                logger.warning("No price quote for exit %s; using upper circuit %.2f as bound", symbol, upper_c)
-                px = upper_c
-            else:
-                err_msg = f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})"
-                logger.critical(err_msg)
-                raise ValueError(err_msg)
 
         if side == Side.SELL:
             raw_limit = px * (1.0 - buffer_pct)
@@ -236,6 +233,10 @@ class StrategyEngine:
             if pos.phase == PositionPhase.OPEN_PROTECTED and not pos.protective_order_id:
                 return True
         return False
+
+    def get_current_regime(self) -> Optional[Any]:
+        """Return the most recently evaluated market regime without extra API calls."""
+        return getattr(self, "latest_regime_eval", None)
 
     def get_active_watchlist(self) -> list[str]:
         """Return manual symbols or the full scanner candidate universe."""
@@ -1596,6 +1597,7 @@ class StrategyEngine:
         bench_candles = self.broker.get_historical(self.config.regime.benchmark_symbol, "5minute", hist_from_5m, now)
         bench_quote = batch_quotes.get(self.config.regime.benchmark_symbol) or self.broker.get_quote(self.config.regime.benchmark_symbol)
         regime_eval = evaluate_market_regime(bench_candles, self.config.regime, bench_quote)
+        self.latest_regime_eval = regime_eval
 
         if regime_eval.regime == MarketRegime.NEUTRAL:
             if not decisions:

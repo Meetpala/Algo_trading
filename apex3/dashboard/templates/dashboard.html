@@ -129,9 +129,13 @@
     </main>
 
     <script>
+        const OPERATOR_TOKEN = "{{ operator_token }}";
+
         async function fetchStatus() {
             try {
-                const res = await fetch('/api/status');
+                const res = await fetch('/api/status', {
+                    headers: { 'X-Operator-Token': OPERATOR_TOKEN }
+                });
                 const data = await res.json();
                 
                 // Clock & Badges

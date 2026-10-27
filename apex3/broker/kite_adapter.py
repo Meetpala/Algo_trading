@@ -23,7 +23,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from apex3.broker.interface import BrokerInterface
-from apex3.broker.rate_limiter import RateLimiter
+from apex3.broker.rate_limiter import RateLimiter, RateLimitTimeoutError
 from apex3.models import (
     Candle,
     InstrumentInfo,
@@ -127,6 +127,8 @@ class KiteAdapter(BrokerInterface):
 
         self._kite: Optional[Any] = None
         self._instruments_cache: dict[str, dict] = {}
+        self._instrument_info_cache: dict[str, InstrumentInfo] = {}
+        self._mis_margin_cache: dict[str, bool] = {}
         self._cache_date: Optional[str] = None
 
         if _kiteconnect_available and _KiteConnect is not None:
@@ -140,12 +142,19 @@ class KiteAdapter(BrokerInterface):
         else:
             logger.info("KiteAdapter: kiteconnect library not installed.")
 
-    def _acquire_rate_limit(self, category: str) -> None:
-        """Acquire a token from the rate limiter if configured."""
+    def _acquire_rate_limit(self, category: str, timeout: float = 5.0) -> bool:
+        """Acquire a token from the rate limiter if configured.
+
+        Raises RateLimitTimeoutError on timeout to prevent unthrottled API bursts.
+        """
         if self.rate_limiter:
-            acquired = self.rate_limiter.acquire(category)
+            acquired = self.rate_limiter.acquire(category, timeout=timeout)
             if not acquired:
-                logger.warning("Rate limit acquire timed out for category '%s' in KiteAdapter", category)
+                err_msg = f"Rate limit acquire timed out for category '{category}' in KiteAdapter"
+                logger.error(err_msg)
+                raise RateLimitTimeoutError(err_msg)
+            return True
+        return True
 
     def _require_live(self) -> None:
         """Guard that raises if live mode is disabled."""
@@ -612,16 +621,22 @@ class KiteAdapter(BrokerInterface):
 
     def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
         """Fetch instrument metadata and circuit boundaries from Kite."""
+        if symbol in self._instrument_info_cache:
+            return self._instrument_info_cache[symbol]
+
         self._require_kite()
         inst = self._get_instruments(exchange).get(symbol)
         tick = float(inst.get("tick_size", 0.05)) if inst else 0.05
 
-        # Get circuit limits from live quote
+        # Get circuit limits from live quote with rate limiting
+        q_data = {}
         try:
+            self._acquire_rate_limit("quotes")
             q_data = self._kite.quote(f"{exchange}:{symbol}").get(f"{exchange}:{symbol}", {})
             upper_c = float(q_data.get("upper_circuit_limit", 0.0))
             lower_c = float(q_data.get("lower_circuit_limit", 0.0))
-        except Exception:
+        except Exception as qe:
+            logger.warning("Could not fetch live quote/circuits for %s: %s", symbol, qe)
             upper_c = 0.0
             lower_c = 0.0
 
@@ -634,46 +649,65 @@ class KiteAdapter(BrokerInterface):
         token_str = str(inst.get("instrument_token", "")) if inst else ""
 
         # Validate actual broker-side MIS eligibility (segment, equity series, and margin rules)
+        # Defaults to False (fail-closed)
         mis_eligible = False
         if inst and inst.get("segment") == "NSE" and inst.get("instrument_type") == "EQ":
             clean_sym = symbol.upper()
             # SEBI / NSE restricted surveillance or trade-to-trade series prohibit intraday MIS
             if not any(clean_sym.endswith(sfx) for sfx in ("-BE", "-BZ", "-SM", "-ST", "-E1", "-SZ", "-IL")):
-                mis_eligible = True
                 if self._kite and self._access_token:
                     try:
-                        if not hasattr(self, "_mis_margin_cache"):
-                            self._mis_margin_cache = {}
                         if symbol in self._mis_margin_cache:
                             mis_eligible = self._mis_margin_cache[symbol]
                         else:
+                            self._acquire_rate_limit("orders")
                             ref_price = float(q_data.get("last_price", 100.0) or 100.0)
                             if ref_price <= 0:
                                 ref_price = 100.0
-                            m_res = self._kite.order_margins([{
-                                "exchange": exchange,
-                                "tradingsymbol": symbol,
-                                "transaction_type": "BUY",
-                                "variety": "regular",
-                                "product": "MIS",
-                                "order_type": "LIMIT",
-                                "quantity": 1,
-                                "price": ref_price,
-                            }])
-                            if m_res and isinstance(m_res, list) and m_res[0].get("total", 0) > 0:
+                            # Authoritatively verify both BUY and SELL (short intraday) orders
+                            m_res = self._kite.order_margins([
+                                {
+                                    "exchange": exchange,
+                                    "tradingsymbol": symbol,
+                                    "transaction_type": "BUY",
+                                    "variety": "regular",
+                                    "product": "MIS",
+                                    "order_type": "LIMIT",
+                                    "quantity": 1,
+                                    "price": ref_price,
+                                },
+                                {
+                                    "exchange": exchange,
+                                    "tradingsymbol": symbol,
+                                    "transaction_type": "SELL",
+                                    "variety": "regular",
+                                    "product": "MIS",
+                                    "order_type": "LIMIT",
+                                    "quantity": 1,
+                                    "price": ref_price,
+                                },
+                            ])
+                            if (
+                                m_res
+                                and isinstance(m_res, list)
+                                and len(m_res) >= 2
+                                and m_res[0].get("total", 0) > 0
+                                and m_res[1].get("total", 0) > 0
+                                and "error" not in m_res[0]
+                                and "error" not in m_res[1]
+                            ):
                                 mis_eligible = True
-                            elif m_res and isinstance(m_res, list) and "error" in m_res[0]:
+                            else:
                                 mis_eligible = False
                             self._mis_margin_cache[symbol] = mis_eligible
                     except Exception as me:
-                        err_str = str(me).upper()
-                        if "MIS" in err_str or "NOT ALLOWED" in err_str or "BLOCKED" in err_str:
-                            mis_eligible = False
-                            if not hasattr(self, "_mis_margin_cache"):
-                                self._mis_margin_cache = {}
-                            self._mis_margin_cache[symbol] = False
+                        logger.warning("Broker MIS margin verification failed for %s, failing closed: %s", symbol, me)
+                        mis_eligible = False
+                        self._mis_margin_cache[symbol] = False
+                else:
+                    mis_eligible = True
 
-        return InstrumentInfo(
+        info = InstrumentInfo(
             symbol=symbol,
             exchange=exchange,
             upper_circuit=upper_c,
@@ -683,6 +717,8 @@ class KiteAdapter(BrokerInterface):
             instrument_token=token_str,
             mis_available=mis_eligible,
         )
+        self._instrument_info_cache[symbol] = info
+        return info
 
     # ── Session ──────────────────────────────────────────────────
 

@@ -108,10 +108,14 @@ class Reconciler:
 
         # Query fresh executable quote (best bid for SELL, best ask for BUY)
         px = 0.0
+        now_ts = datetime.now(IST)
         for _ in range(3):
             try:
                 q = self.broker.get_quote(symbol)
-                if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0:
+                is_fresh = getattr(q, "is_fresh", True)
+                q_ts = getattr(q, "timestamp", None)
+                age_sec = (now_ts - q_ts).total_seconds() if q_ts else 0.0
+                if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0 and is_fresh and age_sec <= 15.0:
                     if side == Side.SELL and isinstance(getattr(q, "bid", None), (int, float)) and q.bid > 0:
                         px = float(q.bid)
                     elif side == Side.BUY and isinstance(getattr(q, "ask", None), (int, float)) and q.ask > 0:
@@ -127,21 +131,13 @@ class Reconciler:
         if px <= 0.0 and isinstance(current_price, (int, float)) and current_price > 0:
             px = float(current_price)
 
+        if px <= 0.0:
+            err_msg = f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})"
+            logger.critical(err_msg)
+            raise ValueError(err_msg)
+
         lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
         upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
-
-        if px <= 0.0:
-            # Fall back to circuit limits if no quote or price reference is available
-            if side == Side.SELL and lower_c > 0:
-                logger.warning("No price quote for exit %s; using lower circuit %.2f as bound", symbol, lower_c)
-                px = lower_c
-            elif side == Side.BUY and upper_c > 0:
-                logger.warning("No price quote for exit %s; using upper circuit %.2f as bound", symbol, upper_c)
-                px = upper_c
-            else:
-                err_msg = f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})"
-                logger.critical(err_msg)
-                raise ValueError(err_msg)
 
         if side == Side.SELL:
             raw_limit = px * (1.0 - buffer_pct)
@@ -537,8 +533,14 @@ class Reconciler:
                         logger.info("Exit order %s for %s already in-flight (status=%s); polling fill instead of duplicate exit.", managed.exit_order_id, managed.symbol, ex_st.status)
                         exit_orders[managed.symbol] = managed.exit_order_id
                         continue
-                except Exception:
-                    pass
+                except Exception as ex_err:
+                    logger.critical(
+                        "Failed to check status of existing exit order %s for %s: %s. "
+                        "Failing closed: treating exit as in-flight to prevent duplicate order placement.",
+                        managed.exit_order_id, managed.symbol, ex_err,
+                    )
+                    exit_orders[managed.symbol] = managed.exit_order_id
+                    continue
 
             if managed.protective_order_id:
                 try:
@@ -563,8 +565,9 @@ class Reconciler:
                     )
                     continue
 
-                # If stop order status is still open/live on exchange, retry confirmation once more
+                # If stop order status is missing (None) or still open/live on exchange, retry confirmation once more
                 IN_FLIGHT_STATUSES = (
+                    None,
                     OrderStatus.OPEN,
                     OrderStatus.TRIGGER_PENDING,
                     OrderStatus.PENDING,
@@ -579,7 +582,7 @@ class Reconciler:
                         managed.quantity = 0
                         continue
                     if term_status in IN_FLIGHT_STATUSES:
-                        # Still live: REFUSE to place an overlapping exit order to prevent duplicate fill!
+                        # Still unconfirmed / live: REFUSE to place an overlapping exit order to prevent duplicate fill!
                         err_msg = f"Stop order {managed.protective_order_id} for {managed.symbol} unconfirmed ({term_status}) during flatten. Deferring exit order to prevent double-fill."
                         logger.critical(err_msg)
                         residual_errors.append(err_msg)

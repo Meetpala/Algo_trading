@@ -9,6 +9,7 @@ capabilities. All trading orders are routed exclusively through the execution br
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -76,6 +77,8 @@ class AngelDataProvider:
         self._feed_token: Optional[str] = None
         self._token_cache: dict[str, str] = dict(DEFAULT_ANGEL_TOKENS)
         self._circuit_cache: dict[str, tuple[float, float]] = {}
+        self._candle_cache: dict[tuple[str, str], tuple[float, list[Candle]]] = {}
+        self._candle_cache_ttl: float = 10.0
 
         if api_key and client_code and pin and totp_secret:
             self.authenticate()
@@ -335,11 +338,22 @@ class AngelDataProvider:
         elif interval in ("1d", "day"):
             angel_interval = "ONE_DAY"
 
+        # Check short-term candle cache to prevent burst exhaustion
+        cache_key = (clean, interval)
+        now_mono = time.monotonic()
+        if cache_key in self._candle_cache:
+            cached_t, cached_candles = self._candle_cache[cache_key]
+            if (now_mono - cached_t) < self._candle_cache_ttl and cached_candles:
+                return cached_candles
+
         if self._smart_api:
             if self._rate_limiter:
-                acquired = self._rate_limiter.acquire("historical", timeout=3.0)
+                acquired = self._rate_limiter.acquire("historical", timeout=4.0)
                 if not acquired:
                     logger.warning("Rate limit timeout acquiring historical token for %s", clean)
+                    if cache_key in self._candle_cache and self._candle_cache[cache_key][1]:
+                        logger.info("Serving stale cached candles for %s due to rate limit timeout", clean)
+                        return self._candle_cache[cache_key][1]
                     return []
 
             try:
@@ -384,9 +398,13 @@ class AngelDataProvider:
                                 is_complete=is_done,
                             )
                         )
+                    if candles:
+                        self._candle_cache[cache_key] = (now_mono, candles)
                     return candles
             except Exception as e:
                 logger.error("Angel One get_historical error for %s: %s", clean, e)
+                if cache_key in self._candle_cache and self._candle_cache[cache_key][1]:
+                    return self._candle_cache[cache_key][1]
 
         return []
 

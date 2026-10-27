@@ -179,7 +179,16 @@ def run_app():
 
     # Create & Run Flask Local Dashboard
     dashboard_app = create_app(engine, config, journal)
-    host = args.host or config.dashboard.host
+    requested_host = args.host or config.dashboard.host
+    if requested_host not in ("127.0.0.1", "localhost", "::1"):
+        logger.warning(
+            "Security Warning: APEX-3 Dashboard requested non-loopback host '%s'. "
+            "Enforcing loopback binding (127.0.0.1) for security compliance.",
+            requested_host,
+        )
+        host = "127.0.0.1"
+    else:
+        host = requested_host
     port = args.port or config.dashboard.port
     logger.info(
         "Starting APEX-3 Operator Dashboard at http://%s:%d...",

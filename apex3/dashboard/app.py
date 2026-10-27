@@ -69,12 +69,10 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
     @app.before_request
     def restrict_to_localhost():
-        # Prevent unauthorized external exposure unless protected
+        # Prevent any external exposure: APEX-3 Dashboard must be strictly local loopback
         remote = request.remote_addr or ""
-        auth_required = bool(getattr(getattr(config, "dashboard", None), "auth_required", False))
         if remote not in ("127.0.0.1", "localhost", "::1", "testclient"):
-            if not auth_required:
-                return jsonify({"error": "Forbidden: APEX-3 Dashboard is strictly bound to localhost unless auth_required is enabled."}), 403
+            return jsonify({"error": "Forbidden: APEX-3 Dashboard is strictly restricted to local loopback interface."}), 403
 
         # CSRF Protection: For mutating requests, verify Origin or Referer is strictly from loopback
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):
@@ -88,7 +86,10 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
     @app.route("/")
     def index():
-        return render_template("dashboard.html", mode=config.mode, operator_token=_get_operator_token())
+        token_to_render = ""
+        if _is_authorized():
+            token_to_render = _get_operator_token()
+        return render_template("dashboard.html", mode=config.mode, operator_token=token_to_render)
 
     @app.route("/login/kite")
     def login_kite():
@@ -148,6 +149,9 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
     @app.route("/api/status")
     def api_status():
         """Get live system status for dashboard auto-refresh."""
+        if not _is_authorized():
+            return jsonify({"error": "Unauthorized: valid operator token required"}), 401
+
         now = engine.scheduler.now_ist()
         session_info = engine.scheduler.get_state_display(now)
 
@@ -164,11 +168,13 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 timestamp=now,
             )
 
-        # Market regime
-        bench_candles = engine.broker.get_historical(config.regime.benchmark_symbol, "5minute", None, None)
-        bench_quote = engine.broker.get_quote(config.regime.benchmark_symbol)
-        from apex3.strategy.regime import evaluate_market_regime
-        regime_eval = evaluate_market_regime(bench_candles, config.regime, bench_quote)
+        # Market regime: read from engine cache to prevent rate-limit exhaustion
+        regime_eval = getattr(engine, "latest_regime_eval", None)
+        if regime_eval is None:
+            bench_candles = engine.broker.get_historical(config.regime.benchmark_symbol, "5minute", None, None)
+            bench_quote = engine.broker.get_quote(config.regime.benchmark_symbol)
+            from apex3.strategy.regime import evaluate_market_regime
+            regime_eval = evaluate_market_regime(bench_candles, config.regime, bench_quote)
 
         # Positions
         open_positions = []

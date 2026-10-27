@@ -31,6 +31,10 @@ _DEFAULT_RATES: dict[str, float] = {
 _DEFAULT_TIMEOUT: float = 5.0
 
 
+class RateLimitTimeoutError(Exception):
+    """Raised when acquiring a token from the rate limiter times out."""
+
+
 @dataclass
 class _TokenBucket:
     """Single token bucket for one rate-limit category.

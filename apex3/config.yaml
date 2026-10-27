@@ -18,6 +18,7 @@ risk_management:
   risk_per_trade_pct: 0.0080          # 0.80% of equity (₹120.00 risk cap per trade)
   daily_loss_limit_pct: 0.0160        # 1.60% of equity (-₹240.00 hard daily stop = 2 losses)
   slippage_allowance_pct: 0.0         # 0.0% slippage deduction (prevents shrinking share quantity)
+  bound_loss_with_charges: true       # Hard net loss bound: sizes quantity so stop loss + statutory charges <= risk cap
 
 session_schedule:
   timezone: "Asia/Kolkata"

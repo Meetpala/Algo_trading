@@ -2024,6 +2024,213 @@ def test_partial_fill_late_fill_modifies_stop_quantity():
     assert pos.quantity == 8
 
 
+def test_angel_candle_caching_and_timeout_fallback():
+    """Verify AngelDataProvider caches candles and falls back to cache on rate-limit timeout."""
+    from apex3.broker.angel_data_provider import AngelDataProvider
+    from apex3.broker.rate_limiter import RateLimiter
+
+    limiter = RateLimiter(rates={"historical": 10.0})
+    provider = AngelDataProvider(rate_limiter=limiter)
+    provider._smart_api = MagicMock()
+    mock_candles = [
+        ["2026-10-27T09:15:00Z", 100.0, 105.0, 99.0, 104.0, 1000],
+        ["2026-10-27T09:20:00Z", 104.0, 106.0, 103.0, 105.0, 1200],
+    ]
+    provider._smart_api.getCandleData.return_value = {"status": True, "data": mock_candles}
+
+    # First fetch: hits API and caches
+    c1 = provider.get_historical("RELIANCE", "5minute")
+    assert len(c1) == 2
+    assert provider._smart_api.getCandleData.call_count == 1
+
+    # Second fetch within TTL: served from cache without calling getCandleData
+    c2 = provider.get_historical("RELIANCE", "5minute")
+    assert len(c2) == 2
+    assert provider._smart_api.getCandleData.call_count == 1
+
+    # When rate limiter times out, fallback serves cached candles instead of empty list
+    with patch.object(limiter, "acquire", return_value=False):
+        c3 = provider.get_historical("RELIANCE", "5minute")
+        assert len(c3) == 2  # Not empty!
+
+
+def test_kite_quote_rate_limiting_and_timeout_error():
+    """Verify KiteAdapter raises RateLimitTimeoutError on timeout and rate-limits quotes."""
+    from apex3.broker.kite_adapter import KiteAdapter
+    from apex3.broker.rate_limiter import RateLimiter, RateLimitTimeoutError
+
+    limiter = RateLimiter(rates={"quotes": 1.0, "orders": 1.0})
+    adapter = KiteAdapter(api_key="k", access_token="t", live_enabled=False, rate_limiter=limiter)
+    adapter._kite = MagicMock()
+    adapter._kite.quote.return_value = {
+        "NSE:TCS": {"last_price": 3500.0, "upper_circuit_limit": 3850.0, "lower_circuit_limit": 3150.0}
+    }
+    adapter._kite.instruments.return_value = [
+        {"tradingsymbol": "TCS", "segment": "NSE", "instrument_type": "EQ", "tick_size": 0.05, "lot_size": 1}
+    ]
+
+    # With rate limiter timing out, calling _acquire_rate_limit raises RateLimitTimeoutError
+    with patch.object(limiter, "acquire", return_value=False):
+        with pytest.raises(RateLimitTimeoutError):
+            adapter._acquire_rate_limit("quotes")
+
+    # get_instrument_info acquires quotes rate limit and caches result
+    with patch.object(limiter, "acquire", wraps=limiter.acquire) as mock_acq:
+        info1 = adapter.get_instrument_info("TCS")
+        assert mock_acq.call_count >= 1
+        assert info1.symbol == "TCS"
+        assert info1.upper_circuit == 3850.0
+
+        # Second call served from cache without extra API calls
+        info2 = adapter.get_instrument_info("TCS")
+        assert info2 is info1
+
+
+def test_kite_mis_margin_fails_closed_on_error():
+    """Verify KiteAdapter marks MIS unavailable when order_margins returns an error or failure."""
+    from apex3.broker.kite_adapter import KiteAdapter
+
+    adapter = KiteAdapter(api_key="k", access_token="t", live_enabled=False)
+    adapter._kite = MagicMock()
+    adapter._kite.quote.return_value = {"NSE:TEST": {"last_price": 500.0}}
+    adapter._kite.instruments.return_value = [
+        {"tradingsymbol": "TEST", "segment": "NSE", "instrument_type": "EQ", "tick_size": 0.05, "lot_size": 1}
+    ]
+    # Margin check returns error or missing margin
+    adapter._kite.order_margins.return_value = [{"error": "MIS blocked for this stock"}]
+
+    info = adapter.get_instrument_info("TEST")
+    assert info.mis_available is False
+
+
+def test_flatten_fails_closed_on_unconfirmed_order_states():
+    """Verify flatten refuses to place duplicate exit when existing exit status fails or stop status is None."""
+    from apex3.reconciliation.reconciler import Reconciler
+    from apex3.reconciliation.state_machine import StateMachine
+    from apex3.journal.journal import Journal
+
+    mock_broker = MagicMock()
+    sm = StateMachine()
+    journal = MagicMock()
+    cfg = AppConfig()
+    reconciler = Reconciler(mock_broker, sm, journal, "TEST", config=cfg)
+
+    # 1. Position in EXITING with existing exit_order_id, but broker status call raises Exception
+    pos = sm.get_or_create_position("INFY")
+    pos.phase = PositionPhase.EXITING
+    pos.side = Side.BUY
+    pos.quantity = 10
+    pos.exit_order_id = "EX_INFY_1"
+
+    mock_broker.get_positions.return_value = [
+        PositionState(symbol="INFY", side=Side.BUY, quantity=10, product=Product.MIS, average_entry=1500.0)
+    ]
+    mock_broker.get_order_status.side_effect = RuntimeError("Broker connection timeout")
+
+    # Flatten must fail closed: do NOT submit duplicate exit order!
+    success, msg = reconciler.execute_flatten_sequence()
+    assert mock_broker.place_order.call_count == 0
+
+    # 2. Position with protective stop where broker status returns None (missing status)
+    sm.positions.clear()
+    pos2 = sm.get_or_create_position("TCS")
+    pos2.phase = PositionPhase.OPEN_PROTECTED
+    pos2.side = Side.BUY
+    pos2.quantity = 5
+    pos2.protective_order_id = "SL_TCS_1"
+
+    mock_broker.get_positions.return_value = [
+        PositionState(symbol="TCS", side=Side.BUY, quantity=5, product=Product.MIS, average_entry=3500.0)
+    ]
+    mock_broker.get_order_status.side_effect = None
+    mock_broker.get_order_status.return_value = None  # None = missing status
+    reconciler._confirm_order_terminal = MagicMock(return_value=None)
+
+    success2, msg2 = reconciler.execute_flatten_sequence()
+    # Must refuse to submit exit order because stop state is unconfirmed
+    assert mock_broker.place_order.call_count == 0
+    assert "unconfirmed" in msg2.lower()
+
+
+def test_exit_pricing_rejects_stale_or_missing_quote():
+    """Verify exit pricing helper strictly requires fresh quotes with top-of-book depth."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # Stale quote: is_fresh = False
+    mock_broker.get_quote.return_value = Quote(
+        symbol="TCS",
+        exchange="NSE",
+        last_price=3500.0,
+        bid=3499.0,
+        ask=3501.0,
+        volume=1000,
+        timestamp=datetime.now(IST),
+        is_fresh=False,  # STALE
+    )
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TCS", exchange="NSE", tick_size=0.05)
+
+    with pytest.raises(ValueError, match="valid price quote is required"):
+        engine._create_exit_order_request("TCS", Side.SELL, 5, "EXIT")
+
+    # Stale quote: age > 15 seconds
+    mock_broker.get_quote.return_value = Quote(
+        symbol="TCS",
+        exchange="NSE",
+        last_price=3500.0,
+        bid=3499.0,
+        ask=3501.0,
+        volume=1000,
+        timestamp=datetime.now(IST) - timedelta(seconds=20),  # OLD
+        is_fresh=True,
+    )
+    with pytest.raises(ValueError, match="valid price quote is required"):
+        engine._create_exit_order_request("TCS", Side.SELL, 5, "EXIT")
+
+
+def test_dashboard_status_requires_auth_and_serves_cached_regime():
+    """Verify /api/status requires operator authorization when auth_required=True and uses cached regime."""
+    from apex3.dashboard.app import create_app
+    from apex3.strategy.regime import RegimeEvaluation, RegimeGateResult, MarketRegime
+
+    cfg = AppConfig()
+    cfg.dashboard.auth_required = True
+    cfg.dashboard.api_token = "secure_test_token"
+
+    mock_engine = MagicMock()
+    mock_engine.scheduler.now_ist.return_value = datetime(2026, 10, 27, 10, 0, tzinfo=IST)
+    mock_engine.scheduler.get_state_display.return_value = {"state": "ENTRY_WINDOW"}
+    mock_engine.broker.get_margins.return_value = MagicMock(equity_available=15000.0, equity_used=0.0, collateral=0.0, net_value=15000.0)
+    mock_engine.state_machine.positions = {}
+    mock_engine.journal = MagicMock()
+
+    # Engine has cached regime
+    cached_regime = RegimeEvaluation(
+        regime=MarketRegime.BULLISH,
+        ema_slope=0.005,
+        adx=26.5,
+        gate=RegimeGateResult(status=GateStatus.PASS, reason="Bullish trend verified"),
+    )
+    mock_engine.latest_regime_eval = cached_regime
+
+    app = create_app(mock_engine, cfg, mock_engine.journal)
+    client = app.test_client()
+
+    # 1. Unauthenticated request to /api/status returns 401
+    res_unauth = client.get("/api/status")
+    assert res_unauth.status_code == 401
+
+    # 2. Authenticated request with X-Operator-Token returns 200 and uses cached regime
+    res_auth = client.get("/api/status", headers={"X-Operator-Token": "secure_test_token"})
+    assert res_auth.status_code == 200
+    data = res_auth.get_json()
+    assert data["regime"]["state"] == "BULLISH"
+    # Broker get_historical was NOT called by dashboard!
+    assert mock_engine.broker.get_historical.call_count == 0
+
+
 
 
 
