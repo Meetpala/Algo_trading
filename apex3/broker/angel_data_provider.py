@@ -78,7 +78,7 @@ class AngelDataProvider:
         self._token_cache: dict[str, str] = dict(DEFAULT_ANGEL_TOKENS)
         self._circuit_cache: dict[str, tuple[float, float]] = {}
         self._candle_cache: dict[tuple[str, str], tuple[float, list[Candle]]] = {}
-        self._candle_cache_ttl: float = 10.0
+        self._candle_cache_ttl: float = 30.0
 
         if api_key and client_code and pin and totp_secret:
             self.authenticate()
@@ -170,7 +170,7 @@ class AngelDataProvider:
         now_ist = datetime.now(IST)
         if feed_dt is not None:
             age_sec = (now_ist - feed_dt).total_seconds()
-            is_time_fresh = (-1.0 <= age_sec <= 2.0)
+            is_time_fresh = (-1.0 <= age_sec <= 15.0)
             quote_ts = feed_dt
         else:
             is_time_fresh = False

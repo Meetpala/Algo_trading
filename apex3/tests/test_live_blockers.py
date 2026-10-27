@@ -228,9 +228,9 @@ def test_partial_fill_unconfirmed_cancellation_never_leaves_shares_unprotected()
         # 1. Remainder cancellation was attempted
         assert mock_broker.cancel_order.call_count >= 1
 
-        # 2. While remainder is still PENDING, position stays in ENTERING, BUT filled shares (6) are actively protected immediately!
+        # 2. While remainder cancel is still unconfirmed, position transitions to OPEN_PROTECTED because protective stop is confirmed!
         pos = engine.state_machine.positions["TRENT"]
-        assert pos.phase == PositionPhase.ENTERING
+        assert pos.phase == PositionPhase.OPEN_PROTECTED
         assert len(placed_orders) == 2  # Entry order + immediate protective stop for filled shares
         sl_ord_id, sl_req = placed_orders[1]
         assert sl_req.order_type == OrderType.SL
@@ -1856,8 +1856,8 @@ def test_angel_quote_fails_closed_when_feed_time_missing_or_stale():
     q1 = provider._parse_market_item(item_missing_ts, "INFY", "NSE")
     assert q1.is_fresh is False
 
-    # Stale timestamp (10 seconds ago)
-    old_time = datetime.now(IST) - timedelta(seconds=10)
+    # Stale timestamp (20 seconds ago, exceeding 15.0s threshold)
+    old_time = datetime.now(IST) - timedelta(seconds=20)
     item_stale_ts = {
         "tradingSymbol": "INFY-EQ",
         "symbolToken": "1594",

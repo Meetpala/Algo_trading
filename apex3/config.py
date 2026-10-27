@@ -164,7 +164,7 @@ class ScheduleConfig:
 class RateLimitsConfig:
     orders_per_second: int = 10
     orders_per_minute: int = 200
-    quotes_per_second: int = 1
+    quotes_per_second: int = 5
     historical_per_second: int = 3
     general_per_second: int = 10
 

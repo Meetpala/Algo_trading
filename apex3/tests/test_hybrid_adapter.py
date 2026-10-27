@@ -127,3 +127,32 @@ def test_hybrid_adapter_routing():
     res = hybrid.cancel_order("ZERODHA_ORDER_12345")
     assert res is True
     assert "ZERODHA_ORDER_12345" in zerodha_broker.cancelled_orders
+
+
+def test_hybrid_adapter_get_quotes_batch_and_self_healing_session():
+    """Verify HybridBrokerAdapter.get_quotes_batch() delegates to data_provider and is_session_valid self-heals."""
+    mock_data_provider = MagicMock()
+    mock_exec_broker = MagicMock()
+    mock_exec_broker.is_session_valid.return_value = True
+
+    now = datetime.now(IST)
+    batch_resp = {
+        "TRENT": Quote("TRENT", "NSE", 1000.0, 999.8, 1000.2, 5000, now, is_fresh=True),
+        "JSWSTEEL": Quote("JSWSTEEL", "NSE", 900.0, 899.5, 900.5, 8000, now, is_fresh=True),
+    }
+    mock_data_provider.get_quotes_batch.return_value = batch_resp
+
+    hybrid = HybridBrokerAdapter(data_provider=mock_data_provider, execution_broker=mock_exec_broker)
+
+    # 1. get_quotes_batch routes directly to data_provider
+    quotes = hybrid.get_quotes_batch(["TRENT", "JSWSTEEL"], exchange="NSE")
+    assert len(quotes) == 2
+    assert quotes["TRENT"].last_price == 1000.0
+    mock_data_provider.get_quotes_batch.assert_called_once_with(["TRENT", "JSWSTEEL"], exchange="NSE")
+
+    # 2. is_session_valid calls authenticate() if Angel One session drops, and self-heals
+    mock_data_provider.is_session_valid.side_effect = [False, True]
+    valid = hybrid.is_session_valid()
+    assert valid is True
+    mock_data_provider.authenticate.assert_called_once()
+

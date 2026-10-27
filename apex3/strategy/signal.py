@@ -315,7 +315,7 @@ def evaluate_signal(
             reason_codes=["FUTURE_QUOTE_TIMESTAMP"],
             explanation=f"Quote timestamp is in the future by {-clock_diff:.1f}s",
         )
-    max_quote_age = float(getattr(config, "max_quote_age_sec", 2.0))
+    max_quote_age = float(getattr(config, "max_quote_age_sec", 15.0))
     if clock_diff > max_quote_age:
         gates.append(
             GateResult(

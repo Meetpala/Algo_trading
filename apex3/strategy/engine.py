@@ -113,7 +113,7 @@ class StrategyEngine:
         self.broker = broker
         self.journal = journal
         self.session_tag = session_tag
-        self.trade_logger = trade_logger or TradeLogger(log_path="info.log", start_date="2026-10-29")
+        self.trade_logger = trade_logger or TradeLogger(log_path="info.log", start_date="2026-10-28")
 
         self.scheduler = SessionScheduler(config.schedule)
         self.state_machine = StateMachine(session_tag_prefix=session_tag)
@@ -147,6 +147,25 @@ class StrategyEngine:
                     return st
             time_mod.sleep(0.05)
         return last_state
+
+    def _confirm_protective_sl(self, sl_order_id: str, expected_qty: int, timeout_sec: float = 2.0) -> bool:
+        """Poll broker for newly placed SL order while in transitional PENDING states until TRIGGER_PENDING."""
+        import time as time_mod
+        start_t = time_mod.time()
+        while time_mod.time() - start_t < timeout_sec:
+            sl_state = self.broker.get_order_status(sl_order_id)
+            if sl_state:
+                sl_qty = (
+                    getattr(sl_state, "quantity", None)
+                    or getattr(getattr(sl_state, "request", None), "quantity", 0)
+                    or getattr(sl_state, "pending_quantity", 0)
+                )
+                if sl_state.status == OrderStatus.TRIGGER_PENDING and sl_qty == expected_qty:
+                    return True
+                if sl_state.status not in (OrderStatus.PENDING, None):
+                    break
+            time_mod.sleep(0.05)
+        return False
 
     def _create_exit_order_request(
         self,
@@ -227,7 +246,7 @@ class StrategyEngine:
 
     def has_in_flight_orders(self) -> bool:
         """Return True if any managed position has orders in-flight or is unprotected."""
-        for pos in self.state_manager.positions.values():
+        for pos in self.state_machine.positions.values():
             if pos.phase in (PositionPhase.ENTERING, PositionPhase.OPEN_UNPROTECTED, PositionPhase.EXITING):
                 return True
             if pos.phase == PositionPhase.OPEN_PROTECTED and not pos.protective_order_id:
@@ -456,7 +475,7 @@ class StrategyEngine:
                             self.broker.cancel_order(ent_pos.entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", ent_pos.symbol, cancel_err)
-                        term_state = self._confirm_order_terminal(ent_pos.entry_order_id, timeout_sec=2.0)
+                        term_state = self._confirm_order_terminal(ent_pos.entry_order_id, timeout_sec=0.5)
                         if term_state:
                             term_filled_qty = int(getattr(term_state, "filled_quantity", 0) or 0)
                             if term_filled_qty > ent_pos.quantity:
@@ -475,14 +494,13 @@ class StrategyEngine:
                                 entry_state = term_state
                             else:
                                 logger.warning(
-                                    "Entry order %s remainder cancel unconfirmed (%s); keeping protected in ENTERING",
+                                    "Entry order %s remainder cancel unconfirmed (%s); proceeding to verify protection",
                                     ent_pos.entry_order_id,
                                     getattr(term_state, "status", "UNKNOWN"),
                                 )
-                                continue
+                                entry_state = term_state
                         else:
-                            logger.warning("Entry order %s remainder cancel timed out; keeping protected in ENTERING", ent_pos.entry_order_id)
-                            continue
+                            logger.warning("Entry order %s remainder cancel timed out; proceeding to verify protection", ent_pos.entry_order_id)
 
                     confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
                     if confirmed_fill_qty <= 0:
@@ -496,7 +514,7 @@ class StrategyEngine:
                         fresh_pos = [p for p in self.broker.get_positions() if p.symbol == ent_pos.symbol and getattr(p, "product", Product.MIS) == Product.MIS]
                         if fresh_pos:
                             broker_net_qty = abs(fresh_pos[0].quantity)
-                            if broker_net_qty != confirmed_fill_qty:
+                            if broker_net_qty > 0 and broker_net_qty != confirmed_fill_qty:
                                 logger.critical(
                                     "EMERGENCY: Broker MIS position (%d) != confirmed fill quantity (%d) for %s! Halting for manual reconciliation.",
                                     broker_net_qty, confirmed_fill_qty, ent_pos.symbol,
@@ -531,11 +549,13 @@ class StrategyEngine:
                     sl_confirmed = False
                     if ent_pos.protective_order_id:
                         try:
-                            sl_check = self.broker.get_order_status(ent_pos.protective_order_id)
-                            sl_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
-                            if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_qty == ent_pos.quantity:
+                            sl_confirmed = self._confirm_protective_sl(
+                                ent_pos.protective_order_id,
+                                ent_pos.quantity,
+                                timeout_sec=2.0,
+                            )
+                            if sl_confirmed:
                                 ent_pos.phase = PositionPhase.OPEN_PROTECTED
-                                sl_confirmed = True
                         except Exception as ce:
                             logger.error("Error verifying final stop status for %s: %s", ent_pos.symbol, ce)
 
@@ -1057,6 +1077,23 @@ class StrategyEngine:
                         if exit_state and exit_state.status == OrderStatus.COMPLETE:
                             pos.phase = PositionPhase.CLOSED
                             pos.quantity = 0
+                            fill_px = exit_state.average_price or pos.average_entry
+                            try:
+                                self.trade_logger.record_exit(
+                                    symbol=pos.symbol,
+                                    side=exit_side,
+                                    quantity=exit_state.filled_quantity or remaining_qty,
+                                    exit_price=fill_px,
+                                    entry_price=pos.average_entry,
+                                    order_id=exit_order_id,
+                                    trade_id=exit_order_id,
+                                    exit_reason="TARGET_HIT",
+                                    timestamp=now,
+                                    entry_time=getattr(pos, "entry_time", None),
+                                    initial_stop=pos.initial_stop_price,
+                                )
+                            except Exception as log_err:
+                                logger.error("Error logging immediate target exit to trade_logger: %s", log_err)
                         elif exit_state and exit_state.pending_quantity > 0:
                             pos.quantity = exit_state.pending_quantity
                             pos.phase = PositionPhase.EXITING
@@ -1992,7 +2029,7 @@ class StrategyEngine:
                             self.broker.cancel_order(entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", sym, cancel_err)
-                        term_state = self._confirm_order_terminal(entry_order_id, timeout_sec=2.0)
+                        term_state = self._confirm_order_terminal(entry_order_id, timeout_sec=0.5)
                         if term_state:
                             term_filled_qty = int(getattr(term_state, "filled_quantity", 0) or 0)
                             if term_filled_qty > managed.quantity:
@@ -2011,16 +2048,13 @@ class StrategyEngine:
                                 entry_state = term_state
                             else:
                                 logger.warning(
-                                    "Entry order %s remainder cancel unconfirmed (%s); keeping protected in ENTERING",
+                                    "Entry order %s remainder cancel unconfirmed (%s); proceeding to verify protection",
                                     entry_order_id,
                                     getattr(term_state, "status", "UNKNOWN"),
                                 )
-                                managed.phase = PositionPhase.ENTERING
-                                continue
+                                entry_state = term_state
                         else:
-                            logger.warning("Entry order %s remainder cancel timed out; keeping protected in ENTERING", entry_order_id)
-                            managed.phase = PositionPhase.ENTERING
-                            continue
+                            logger.warning("Entry order %s remainder cancel timed out; proceeding to verify protection", entry_order_id)
 
                     confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
                     if confirmed_fill_qty <= 0:
@@ -2034,7 +2068,7 @@ class StrategyEngine:
                         fresh_pos = [p for p in self.broker.get_positions() if p.symbol == sym and getattr(p, "product", Product.MIS) == Product.MIS]
                         if fresh_pos:
                             broker_net_qty = abs(fresh_pos[0].quantity)
-                            if broker_net_qty != confirmed_fill_qty:
+                            if broker_net_qty > 0 and broker_net_qty != confirmed_fill_qty:
                                 logger.critical(
                                     "EMERGENCY: Broker MIS position (%d) != confirmed fill quantity (%d) for %s! Halting for manual reconciliation.",
                                     broker_net_qty, confirmed_fill_qty, sym,
@@ -2071,11 +2105,9 @@ class StrategyEngine:
                     sl_confirmed = False
                     if managed.protective_order_id:
                         try:
-                            sl_state = self.broker.get_order_status(managed.protective_order_id)
-                            sl_qty = getattr(sl_state, "quantity", None) or getattr(getattr(sl_state, "request", None), "quantity", 0) or getattr(sl_state, "pending_quantity", 0)
-                            if sl_state and sl_state.status == OrderStatus.TRIGGER_PENDING and sl_qty == actual_qty:
+                            sl_confirmed = self._confirm_protective_sl(managed.protective_order_id, actual_qty, timeout_sec=2.0)
+                            if sl_confirmed:
                                 managed.phase = PositionPhase.OPEN_PROTECTED
-                                sl_confirmed = True
                                 try:
                                     self.trade_logger.record_entry(
                                         symbol=sym,
@@ -2093,7 +2125,7 @@ class StrategyEngine:
                                 except Exception as log_err:
                                     logger.error("Error logging immediate entry to trade_logger: %s", log_err)
                             else:
-                                logger.error("Stop order %s in unconfirmed state: %s", managed.protective_order_id, getattr(sl_state, 'status', None))
+                                logger.error("Stop order %s in unconfirmed state: %s", managed.protective_order_id, getattr(self.broker.get_order_status(managed.protective_order_id), 'status', None))
                         except Exception as ce:
                             logger.error("Failed to verify stop status for %s: %s", sym, ce)
 

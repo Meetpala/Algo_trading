@@ -174,21 +174,26 @@ class HybridBrokerAdapter(BrokerInterface):
         return self.execution_broker.get_positions()
 
     def is_session_valid(self) -> bool:
-        """Check session validity on BOTH data provider and execution broker."""
+        """Check session validity on BOTH data provider and execution broker, self-healing Angel token if dropped."""
+        exec_valid = bool(self.execution_broker.is_session_valid())
+        if not exec_valid:
+            logger.critical("Hybrid session check FAILED: Zerodha execution session is invalid or expired.")
+            return False
+
         data_valid = True
         if hasattr(self.data_provider, "is_session_valid"):
             data_valid = bool(self.data_provider.is_session_valid())
+            if not data_valid and hasattr(self.data_provider, "authenticate"):
+                logger.warning("Angel One data session invalid; attempting automatic self-heal authentication...")
+                try:
+                    self.data_provider.authenticate()
+                    data_valid = bool(self.data_provider.is_session_valid())
+                except Exception as auth_err:
+                    logger.error("Angel One auto self-heal authentication failed: %s", auth_err)
+                    data_valid = False
 
-        exec_valid = bool(self.execution_broker.is_session_valid())
-
-        if not data_valid and not exec_valid:
-            logger.critical("Hybrid session check FAILED: Both Angel data and Zerodha execution sessions are invalid.")
-            return False
-        elif not data_valid:
+        if not data_valid:
             logger.critical("Hybrid session check FAILED: Angel One market data session is invalid or unauthenticated.")
-            return False
-        elif not exec_valid:
-            logger.critical("Hybrid session check FAILED: Zerodha execution session is invalid or expired.")
             return False
 
         return True

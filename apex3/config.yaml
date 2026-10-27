@@ -152,7 +152,7 @@ dashboard:
 rate_limits:
   orders_per_second: 10
   orders_per_minute: 200
-  quotes_per_second: 1
+  quotes_per_second: 5
   historical_per_second: 3
   general_per_second: 10
 

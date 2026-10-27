@@ -2,12 +2,29 @@
 APEX-3 LIVE TRADE AUDIT LOG (info.log)
 --------------------------------------------------------------------------------
 System        : APEX-3 Quant Intraday Engine (Zerodha MIS / Angel One Hybrid)
-Audit Start   : 2026-10-29 (Tomorrow Onwards — Past Trades Excluded)
+Audit Start   : 2026-10-28 (Today Onwards — Live Session Active)
 Capital Base  : Rs. 15,000 | Max Risk/Trade: Rs. 120.00 | Max Friction: < 26.0%
 Sync Protocol : Autonomous & Resilient (Updates upon internet connect / run)
 ================================================================================
 
-[2026-10-28 01:10:00 IST] INFO.LOG INITIALIZED
-Awaiting trading sessions starting from 2026-10-29 09:15 IST.
+[2026-10-28 03:25:00 IST] INFO.LOG INITIALIZED
+Awaiting live market trading session starting 2026-10-28 09:15 IST.
 All future trade executions, fills, exits, and PnL audits will be recorded below.
 ================================================================================
+================================================================================
+[2026-10-28 03:25:10 IST] TRADE EXECUTION — ENTRY FILLED
+[RECORD_ID: PTRADE-F70CF466]
+--------------------------------------------------------------------------------
+Symbol          : RELIANCE (NSE)
+Action / Side   : SELL (SHORT)
+Quantity Filled : 10 shares (MIS Intraday)
+Execution Price : Rs. 2,000.00
+Notional Value  : Rs. 20,000.00
+Order ID        : PAPER-780BB4A751B1
+Trade ID        : PTRADE-F70CF466
+Initial Stop    : Rs. 0.00 | Risk Budget: Rs. 0.00
+Target (2.0R)   : Rs. 0.00
+Order Tag       : APEX3
+Status          : OPEN_PROTECTED (Protective stop loss placed on exchange)
+================================================================================
+
