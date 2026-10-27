@@ -98,12 +98,31 @@ class Reconciler:
             inst = self.broker.get_instrument_info(symbol)
             tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
             buffer_pct = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.5) / 100.0 if self.config else 0.005
-            px = current_price
-            if px <= 0.0:
+
+            # Prioritize live quote from exchange to verify current price
+            px = 0.0
+            try:
                 q = self.broker.get_quote(symbol)
-                px = q.last_price if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0 else 0.0
+                if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0:
+                    px = float(q.last_price)
+            except Exception:
+                pass
             if px <= 0.0:
-                raise ValueError(f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})")
+                px = float(current_price) if isinstance(current_price, (int, float)) and current_price > 0 else 0.0
+
+            # If no price reference is available, fall back to MARKET order to guarantee execution
+            if px <= 0.0:
+                logger.warning("No price available for exit order %s; falling back to MARKET order", symbol)
+                return OrderRequest(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    product=Product.MIS,
+                    order_type=OrderType.MARKET,
+                    price=0.0,
+                    tag=tag,
+                    strategy_id=self.session_tag,
+                )
 
             lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
             upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
@@ -130,6 +149,16 @@ class Reconciler:
                 strategy_id=self.session_tag,
             )
         else:
+            return OrderRequest(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                product=Product.MIS,
+                order_type=OrderType.MARKET,
+                price=0.0,
+                tag=tag,
+                strategy_id=self.session_tag,
+            )
             return OrderRequest(
                 symbol=symbol,
                 side=side,
@@ -170,8 +199,20 @@ class Reconciler:
         # Query broker orders to support restart recovery of strategy positions
         try:
             broker_orders = self.broker.get_orders()
-        except Exception:
-            broker_orders = []
+        except Exception as oe:
+            self.journal.log_warning(
+                severity="CRITICAL",
+                code="BROKER_ORDERBOOK_FETCH_FAILED",
+                message=f"Could not fetch broker orders during startup audit: {oe}",
+            )
+            return ReconciliationStatus(
+                is_clean=False,
+                has_unknown_positions=True,
+                unknown_symbols=[],
+                unprotected_positions=[],
+                is_flat=False,
+                message=f"Failed to fetch broker orders during startup audit: {oe}",
+            )
 
         for bp in broker_positions:
             if getattr(bp, "product", Product.MIS) != Product.MIS:
@@ -500,9 +541,46 @@ class Reconciler:
             if managed.protective_order_id:
                 try:
                     self.broker.cancel_order(managed.protective_order_id)
-                    self._confirm_order_terminal(managed.protective_order_id, timeout_sec=1.5)
-                except Exception:
-                    pass
+                except Exception as ce:
+                    logger.warning("Failed cancel request for stop %s: %s", managed.protective_order_id, ce)
+
+                term_st = self._confirm_order_terminal(managed.protective_order_id, timeout_sec=2.0)
+                term_status = getattr(term_st, "status", None)
+
+                # If the stop filled on the exchange, position was already closed by the stop!
+                if term_status == OrderStatus.COMPLETE:
+                    logger.info("Protective stop %s filled during flatten; position %s closed via stop fill.", managed.protective_order_id, managed.symbol)
+                    managed.phase = PositionPhase.CLOSED
+                    managed.quantity = 0
+                    self.journal.log_event(
+                        event_type="STOP_LOSS_HIT",
+                        symbol=managed.symbol,
+                        side=getattr(managed.side, "value", "LONG"),
+                        data={"order_id": managed.protective_order_id, "filled_during_flatten": True},
+                        explanation=f"Protective stop {managed.protective_order_id} filled during flatten sequence",
+                    )
+                    continue
+
+                # If stop order status is still unconfirmed, retry confirmation once more
+                if term_status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
+                    term_st = self._confirm_order_terminal(managed.protective_order_id, timeout_sec=2.0)
+                    term_status = getattr(term_st, "status", None)
+                    if term_status == OrderStatus.COMPLETE:
+                        managed.phase = PositionPhase.CLOSED
+                        managed.quantity = 0
+                        continue
+                    if term_status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
+                        # Still unconfirmed: REFUSE to place an overlapping exit order to prevent duplicate fill!
+                        err_msg = f"Stop order {managed.protective_order_id} for {managed.symbol} unconfirmed ({term_status}) during flatten. Deferring exit order to prevent double-fill."
+                        logger.critical(err_msg)
+                        residual_errors.append(err_msg)
+                        self.journal.log_warning(
+                            severity="EMERGENCY",
+                            code="STOP_CANCEL_UNCONFIRMED_FLATTEN_HALTED",
+                            message=err_msg,
+                            data={"symbol": managed.symbol, "order_id": managed.protective_order_id, "status": str(term_status)},
+                        )
+                        continue
 
             exit_side = Side.SELL if bp_side == Side.BUY else Side.BUY
             exit_qty = bp_qty

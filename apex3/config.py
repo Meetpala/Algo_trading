@@ -48,6 +48,9 @@ class RiskConfig:
     daily_loss_limit_pct: float = 1.60
     slippage_allowance_pct: float = 0.0
     bound_loss_with_charges: bool = True
+    max_concurrent_positions: int = 2
+    max_new_entries_per_bar: int = 1
+    second_slot_requires_slot1_profit_r: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -77,7 +80,7 @@ class SignalConfig:
     max_stop_distance_pct: float = 0.0090
     min_breakout_cushion_atr: float = 0.15
     min_clv_ratio: float = 0.70
-    min_atr_pct: float = 0.0012
+    min_atr_pct: float = 0.0022
     max_quote_age_sec: float = 2.0
 
 
@@ -389,6 +392,9 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             daily_loss_limit_pct=daily_loss,
             slippage_allowance_pct=float(risk_raw.get("slippage_allowance_pct", 0.0)),
             bound_loss_with_charges=bool(risk_raw.get("bound_loss_with_charges", True)),
+            max_concurrent_positions=int(risk_raw.get("max_concurrent_positions", 2)),
+            max_new_entries_per_bar=int(risk_raw.get("max_new_entries_per_bar", 1)),
+            second_slot_requires_slot1_profit_r=float(risk_raw.get("second_slot_requires_slot1_profit_r", 0.0)),
         ),
         regime=RegimeConfig(
             benchmark_symbol=str(regime_raw.get("benchmark_symbol", "NIFTY 50")),
@@ -414,14 +420,14 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             max_stop_distance_pct=float(signal_raw.get("max_stop_distance_pct", 0.0090)),
             min_breakout_cushion_atr=float(signal_raw.get("min_breakout_cushion_atr", 0.15)),
             min_clv_ratio=float(signal_raw.get("min_clv_ratio", 0.70)),
-            min_atr_pct=float(signal_raw.get("min_atr_pct", 0.0012)),
+            min_atr_pct=float(signal_raw.get("min_atr_pct", 0.0022)),
         ),
         entry=EntryConfig(
             order_type=str(entry_raw.get("order_type", "LIMIT")),
             max_slippage_pct=float(entry_raw.get("max_slippage_pct", 0.15)),
             unfilled_timeout_sec=int(entry_raw.get("unfilled_timeout_sec", 30)),
             max_retries=int(entry_raw.get("max_retries", 1)),
-            exit_order_type=str(entry_raw.get("exit_order_type", "MARKET")),
+            exit_order_type=str(entry_raw.get("exit_order_type", "LIMIT")),
             marketable_limit_buffer_pct=float(entry_raw.get("marketable_limit_buffer_pct", 0.5)),
         ),
         stops=StopsConfig(

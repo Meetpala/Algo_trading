@@ -53,7 +53,7 @@ signal_gates:
   min_adr_baseline: 0.025             # 2.5% minimum ADR baseline prevents choking on morning opening noise
   min_breakout_cushion_atr: 0.15      # Breakout close must clear OR by >= 0.15 * ATR(14)
   min_clv_ratio: 0.70                 # Close Location Value >= 0.70 (closes in top/bottom 30% of bar)
-  min_atr_pct: 0.0012                 # Gate 9A: Minimum Volatility Floor (ATR14 / Price >= 0.12%)
+  min_atr_pct: 0.0022                 # Gate 9A: Minimum Volatility Floor (ATR14 / Price >= 0.22%)
 
 stops_and_targets:
   swing_lookback_bars: 5              # 5-bar structural swing low/high anchor
