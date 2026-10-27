@@ -33,17 +33,24 @@ def load_preparsed_data(symbols: list[str]) -> dict:
         df['Datetime'] = pd.to_datetime(df['Datetime'])
         df = df.sort_values('Datetime').reset_index(drop=True)
 
-        candles = []
-        for _, row in df.iterrows():
-            candles.append(Candle(
-                timestamp=row['Datetime'].to_pydatetime(),
-                open=float(row['Open']),
-                high=float(row['High']),
-                low=float(row['Low']),
-                close=float(row['Close']),
-                volume=int(row['Volume']),
+        dts = df['Datetime'].dt.to_pydatetime()
+        opens = df['Open'].to_numpy(dtype=float)
+        highs = df['High'].to_numpy(dtype=float)
+        lows = df['Low'].to_numpy(dtype=float)
+        closes = df['Close'].to_numpy(dtype=float)
+        vols = df['Volume'].to_numpy(dtype=int)
+        candles = [
+            Candle(
+                timestamp=dts[i],
+                open=float(opens[i]),
+                high=float(highs[i]),
+                low=float(lows[i]),
+                close=float(closes[i]),
+                volume=int(vols[i]),
                 is_complete=True,
-            ))
+            )
+            for i in range(len(df))
+        ]
         data[s] = {
             'df': df,
             'candles': candles,
