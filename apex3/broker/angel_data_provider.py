@@ -59,10 +59,10 @@ class AngelDataProvider:
 
     def __init__(
         self,
-        api_key: str,
-        client_code: str,
-        pin: str,
-        totp_secret: str,
+        api_key: str = "",
+        client_code: str = "",
+        pin: str = "",
+        totp_secret: str = "",
         rate_limiter: Optional[RateLimiter] = None,
     ) -> None:
         self.api_key = api_key

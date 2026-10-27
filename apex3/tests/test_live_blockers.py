@@ -2107,7 +2107,6 @@ def test_flatten_fails_closed_on_unconfirmed_order_states():
     """Verify flatten refuses to place duplicate exit when existing exit status fails or stop status is None."""
     from apex3.reconciliation.reconciler import Reconciler
     from apex3.reconciliation.state_machine import StateMachine
-    from apex3.journal.journal import Journal
 
     mock_broker = MagicMock()
     sm = StateMachine()
@@ -2193,7 +2192,8 @@ def test_exit_pricing_rejects_stale_or_missing_quote():
 def test_dashboard_status_requires_auth_and_serves_cached_regime():
     """Verify /api/status requires operator authorization when auth_required=True and uses cached regime."""
     from apex3.dashboard.app import create_app
-    from apex3.strategy.regime import RegimeEvaluation, RegimeGateResult, MarketRegime
+    from apex3.strategy.regime import RegimeEvaluation, MarketRegime
+    from apex3.models import GateResult
 
     cfg = AppConfig()
     cfg.dashboard.auth_required = True
@@ -2211,7 +2211,7 @@ def test_dashboard_status_requires_auth_and_serves_cached_regime():
         regime=MarketRegime.BULLISH,
         ema_slope=0.005,
         adx=26.5,
-        gate=RegimeGateResult(status=GateStatus.PASS, reason="Bullish trend verified"),
+        gate=GateResult(name="REGIME", status=GateStatus.PASS, reason="Bullish trend verified"),
     )
     mock_engine.latest_regime_eval = cached_regime
 
