@@ -2195,23 +2195,29 @@ def test_dashboard_status_requires_auth_and_serves_cached_regime():
     from apex3.strategy.regime import RegimeEvaluation, MarketRegime
     from apex3.models import GateResult
 
-    cfg = AppConfig()
-    cfg.dashboard.auth_required = True
-    cfg.dashboard.api_token = "secure_test_token"
+    from apex3.config import DashboardConfig
+    cfg = AppConfig(dashboard=DashboardConfig(auth_required=True, api_token="secure_test_token"))
 
     mock_engine = MagicMock()
     mock_engine.scheduler.now_ist.return_value = datetime(2026, 10, 27, 10, 0, tzinfo=IST)
     mock_engine.scheduler.get_state_display.return_value = {"state": "ENTRY_WINDOW"}
     mock_engine.broker.get_margins.return_value = MagicMock(equity_available=15000.0, equity_used=0.0, collateral=0.0, net_value=15000.0)
+    mock_engine.broker.get_orders.return_value = []
     mock_engine.state_machine.positions = {}
+    mock_engine.is_paused = False
+    mock_engine.pause_reason = ""
+    mock_engine.get_active_watchlist.return_value = ["INFY", "TCS"]
+    mock_engine.last_decisions = []
     mock_engine.journal = MagicMock()
+    mock_engine.journal.get_orders.return_value = []
+    mock_engine.journal.get_events.return_value = []
 
     # Engine has cached regime
     cached_regime = RegimeEvaluation(
         regime=MarketRegime.BULLISH,
-        ema_slope=0.005,
-        adx=26.5,
         gate=GateResult(name="REGIME", status=GateStatus.PASS, reason="Bullish trend verified"),
+        ema_slope_val=0.005,
+        adx_val=26.5,
     )
     mock_engine.latest_regime_eval = cached_regime
 

@@ -195,6 +195,8 @@ class DashboardConfig:
     host: str = "127.0.0.1"
     port: int = 5000
     refresh_interval_sec: int = 2
+    auth_required: bool = False
+    api_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -478,6 +480,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             host=str(dashboard_raw.get("host", "127.0.0.1")),
             port=int(dashboard_raw.get("port", 5000)),
             refresh_interval_sec=int(dashboard_raw.get("refresh_interval_sec", 2)),
+            auth_required=bool(dashboard_raw.get("auth_required", False)),
+            api_token=str(dashboard_raw.get("api_token", "")),
         ),
         secrets=_load_secrets(),
         raw_dict=raw,
