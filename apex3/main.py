@@ -53,11 +53,19 @@ def run_app():
     # Initialize Broker Adapter
     if config.mode == "live":
         from apex3.broker.kite_adapter import KiteAdapter
+        from apex3.broker.rate_limiter import RateLimiter
         logger.warning("LIVE TRADING MODE CONFIGURED — Checking safety gates...")
+        rl_rates = {
+            "orders": float(getattr(config.rate_limits, "orders_per_second", 10.0)),
+            "quotes": float(getattr(config.rate_limits, "quotes_per_second", 1.0)),
+            "historical": float(getattr(config.rate_limits, "historical_per_second", 3.0)),
+        }
+        rate_limiter = RateLimiter(rates=rl_rates)
         kite_broker = KiteAdapter(
             api_key=config.secrets.kite_api_key,
             access_token=config.secrets.kite_access_token,
             live_enabled=config.secrets.live_trading_enabled,
+            rate_limiter=rate_limiter,
         )
         if config.secrets.angel_api_key:
             from apex3.broker.angel_data_provider import AngelDataProvider
@@ -68,6 +76,7 @@ def run_app():
                 client_code=config.secrets.angel_client_code,
                 pin=config.secrets.angel_pin,
                 totp_secret=config.secrets.angel_totp_secret,
+                rate_limiter=rate_limiter,
             )
             broker = HybridBrokerAdapter(data_provider=angel_data, execution_broker=kite_broker)
         else:
@@ -75,12 +84,17 @@ def run_app():
 
         # Pre-flight session check
         if broker.is_session_valid():
-            logger.info("SUCCESS: Zerodha Kite live session is ACTIVE and authenticated.")
+            logger.info("SUCCESS: Broker live session(s) ACTIVE and authenticated.")
         else:
-            logger.warning(
-                "ATTENTION: Zerodha Kite access token is expired or unauthenticated for today. "
-                "Run 'python scripts/login_zerodha.py' or log in via dashboard at /login/kite before 09:15 IST."
+            msg = (
+                "CRITICAL PRE-FLIGHT ERROR: Broker session authentication check failed. "
+                "Verify API credentials, TOTP, and access tokens before starting autonomous live trading."
             )
+            logger.critical(msg)
+            if not getattr(args, "simulate", False):
+                import sys
+                logger.critical("Aborting live autonomous startup. Engine will NOT start.")
+                sys.exit(1)
     else:
         logger.info("Operating in PAPER TRADING mode. Real orders are impossible.")
         broker = PaperBroker(starting_margin=config.paper_starting_capital)

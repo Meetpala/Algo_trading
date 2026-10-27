@@ -23,6 +23,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from apex3.broker.interface import BrokerInterface
+from apex3.broker.rate_limiter import RateLimiter
 from apex3.models import (
     Candle,
     InstrumentInfo,
@@ -89,7 +90,10 @@ def _map_kite_order_type(type_str: str) -> OrderType:
         "SL": OrderType.SL,
         "SL-M": OrderType.SL_M,
     }
-    return mapping.get(t, OrderType.LIMIT)
+    if t in mapping:
+        return mapping[t]
+    logger.warning("Unrecognized Kite order type '%s'; returning OrderType.UNKNOWN", type_str)
+    return OrderType.UNKNOWN
 
 
 class KiteAdapter(BrokerInterface):
@@ -109,10 +113,12 @@ class KiteAdapter(BrokerInterface):
         api_key: Optional[str] = None,
         access_token: Optional[str] = None,
         live_enabled: bool = False,
+        rate_limiter: Optional[RateLimiter] = None,
     ) -> None:
         self._api_key: str = api_key or os.environ.get("KITE_API_KEY", "")
         self._access_token: str = access_token or os.environ.get("KITE_ACCESS_TOKEN", "")
         self._live_enabled: bool = live_enabled
+        self.rate_limiter: Optional[RateLimiter] = rate_limiter
 
         self._kite: Optional[Any] = None
         self._instruments_cache: dict[str, dict] = {}
@@ -128,6 +134,13 @@ class KiteAdapter(BrokerInterface):
                 logger.warning("KiteAdapter: No API key provided. Set KITE_API_KEY env var.")
         else:
             logger.info("KiteAdapter: kiteconnect library not installed.")
+
+    def _acquire_rate_limit(self, category: str) -> None:
+        """Acquire a token from the rate limiter if configured."""
+        if self.rate_limiter:
+            acquired = self.rate_limiter.acquire(category)
+            if not acquired:
+                logger.warning("Rate limit acquire timed out for category '%s' in KiteAdapter", category)
 
     def _require_live(self) -> None:
         """Guard that raises if live mode is disabled."""
@@ -199,6 +212,7 @@ class KiteAdapter(BrokerInterface):
     def estimate_order_margin(self, request: OrderRequest) -> OrderMarginEstimate:
         """Estimate margin via Kite's order margin calculator."""
         self._require_kite()
+        self._acquire_rate_limit("orders")
         order_type_str = request.order_type.value
         params = [{
             "exchange": request.exchange,
@@ -246,6 +260,7 @@ class KiteAdapter(BrokerInterface):
         """Place an order via Kite Connect."""
         self._require_live()
         self._require_kite()
+        self._acquire_rate_limit("orders")
 
         order_type_str = request.order_type.value
         price = request.price if order_type_str in ("LIMIT", "SL") else None
@@ -287,6 +302,7 @@ class KiteAdapter(BrokerInterface):
         """Modify an order via Kite Connect."""
         self._require_live()
         self._require_kite()
+        self._acquire_rate_limit("orders")
 
         params: dict[str, Any] = {}
         if quantity is not None:
@@ -310,6 +326,7 @@ class KiteAdapter(BrokerInterface):
         """Cancel an order via Kite Connect."""
         self._require_live()
         self._require_kite()
+        self._acquire_rate_limit("orders")
 
         logger.info("Cancelling LIVE Kite order %s", order_id)
         self._kite.cancel_order(variety="regular", order_id=order_id)
@@ -320,6 +337,7 @@ class KiteAdapter(BrokerInterface):
     def get_order_status(self, order_id: str) -> OrderState:
         """Fetch order status from Kite."""
         self._require_kite()
+        self._acquire_rate_limit("orders")
         history = self._kite.order_history(order_id)
         if not history:
             raise ValueError(f"No history returned for order {order_id}")
@@ -353,6 +371,7 @@ class KiteAdapter(BrokerInterface):
     def get_orders(self) -> list[OrderState]:
         """Fetch all orders for the current session from Kite."""
         self._require_kite()
+        self._acquire_rate_limit("orders")
         raw_orders = self._kite.orders()
         states = []
         for o in raw_orders:
@@ -386,6 +405,7 @@ class KiteAdapter(BrokerInterface):
     def get_trades(self) -> list[dict]:
         """Fetch all executed trades from Kite."""
         self._require_kite()
+        self._acquire_rate_limit("orders")
         return self._kite.trades()
 
     # ── Positions ────────────────────────────────────────────────
@@ -393,6 +413,7 @@ class KiteAdapter(BrokerInterface):
     def get_positions(self) -> list[PositionState]:
         """Fetch current positions from Kite."""
         self._require_kite()
+        self._acquire_rate_limit("orders")
         raw_pos = self._kite.positions()
         net_pos = raw_pos.get("net", [])
 
@@ -412,7 +433,7 @@ class KiteAdapter(BrokerInterface):
                     current_price=float(p.get("last_price", 0.0)),
                     unrealized_pnl=float(p.get("unrealised", 0.0)),
                     realized_pnl=float(p.get("realised", 0.0)),
-                    product=getattr(Product, str(p.get("product", "MIS")).upper(), Product.MIS),
+                    product=getattr(Product, str(p.get("product", "MIS")).upper().strip(), Product.UNKNOWN),
                 )
             )
         return positions
@@ -422,6 +443,7 @@ class KiteAdapter(BrokerInterface):
     def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
         """Fetch a live quote snapshot from Kite with verified source timestamp and depth."""
         self._require_kite()
+        self._acquire_rate_limit("quotes")
         instrument_key = f"{exchange}:{symbol}"
         data = self._kite.quote(instrument_key)
         q = data[instrument_key]
@@ -485,6 +507,7 @@ class KiteAdapter(BrokerInterface):
     ) -> list[Candle]:
         """Fetch historical candle data from Kite."""
         self._require_kite()
+        self._acquire_rate_limit("historical")
         token = self._resolve_instrument_token(symbol, exchange)
 
         # Normalize interval strings ("5min" -> "5minute", "1min" -> "minute")
@@ -537,11 +560,9 @@ class KiteAdapter(BrokerInterface):
             q_data = self._kite.quote(f"{exchange}:{symbol}").get(f"{exchange}:{symbol}", {})
             upper_c = float(q_data.get("upper_circuit_limit", 0.0))
             lower_c = float(q_data.get("lower_circuit_limit", 0.0))
-            last_p = float(q_data.get("last_price", 100.0))
         except Exception:
             upper_c = 0.0
             lower_c = 0.0
-            last_p = 100.0
 
         # Do not fabricate synthetic +-10% circuit limits; report 0.0 if not verified from exchange
         if upper_c <= 0.0:

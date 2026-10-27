@@ -78,6 +78,7 @@ class SignalConfig:
     min_breakout_cushion_atr: float = 0.15
     min_clv_ratio: float = 0.70
     min_atr_pct: float = 0.0012
+    max_quote_age_sec: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ class EntryConfig:
     max_slippage_pct: float = 0.15
     unfilled_timeout_sec: int = 30
     max_retries: int = 1
-    exit_order_type: str = "MARKET"
+    exit_order_type: str = "LIMIT"
     marketable_limit_buffer_pct: float = 0.5
 
 

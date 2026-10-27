@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from apex3.broker.rate_limiter import RateLimiter
 from apex3.models import Candle, InstrumentInfo, Quote
 
 logger = logging.getLogger(__name__)
@@ -61,16 +62,20 @@ class AngelDataProvider:
         client_code: str,
         pin: str,
         totp_secret: str,
+        rate_limiter: Optional[RateLimiter] = None,
     ) -> None:
         self.api_key = api_key
         self.client_code = client_code
         self.pin = pin
         self.totp_secret = totp_secret
+        self._rate_limiter = rate_limiter
 
         self._smart_api: Optional[Any] = None
         self._auth_token: Optional[str] = None
+        self._refresh_token: Optional[str] = None
         self._feed_token: Optional[str] = None
         self._token_cache: dict[str, str] = dict(DEFAULT_ANGEL_TOKENS)
+        self._circuit_cache: dict[str, tuple[float, float]] = {}
 
         if api_key and client_code and pin and totp_secret:
             self.authenticate()
@@ -94,6 +99,7 @@ class AngelDataProvider:
 
             data = session_data.get("data", {})
             self._auth_token = data.get("jwtToken")
+            self._refresh_token = data.get("refreshToken")
             self._feed_token = self._smart_api.getfeedToken()
             logger.info("Angel One SmartAPI authentication SUCCESSFUL! Free market data feed active.")
             return True
@@ -102,6 +108,20 @@ class AngelDataProvider:
             return False
         except Exception as e:
             logger.error("Failed to connect to Angel One SmartAPI: %s", e)
+            return False
+
+    def is_session_valid(self) -> bool:
+        """Verify that Angel One SmartAPI session is active and authenticated."""
+        if not self._smart_api or not self._auth_token:
+            return False
+        try:
+            if hasattr(self._smart_api, "getProfile"):
+                prof = self._smart_api.getProfile(self._refresh_token)
+                if prof and prof.get("status") is False:
+                    return False
+            return True
+        except Exception as e:
+            logger.warning("Angel One session validity check failed: %s", e)
             return False
 
     def resolve_token(self, symbol: str, exchange: str = "NSE") -> str:
@@ -113,7 +133,7 @@ class AngelDataProvider:
         return ""
 
     def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
-        """Fetch live quote snapshot from Angel One."""
+        """Fetch live quote snapshot from Angel One with true market depth and exchange timestamp."""
         clean = symbol.replace("-EQ", "").upper()
         token = self.resolve_token(clean, exchange)
         if not token:
@@ -130,6 +150,79 @@ class AngelDataProvider:
             )
 
         if self._smart_api:
+            # 1. Enforce rate limiting
+            if self._rate_limiter:
+                acquired = self._rate_limiter.acquire("quotes", timeout=2.0)
+                if not acquired:
+                    logger.warning("Rate limit timeout acquiring quotes token for %s", clean)
+                    return Quote(
+                        symbol=clean,
+                        exchange=exchange,
+                        last_price=0.0,
+                        bid=0.0,
+                        ask=0.0,
+                        volume=0,
+                        timestamp=datetime.now(IST),
+                        is_fresh=False,
+                    )
+
+            # 2. Query FULL market data with orderbook depth and exchange timestamps
+            try:
+                if hasattr(self._smart_api, "getMarketData"):
+                    m_data = self._smart_api.getMarketData(
+                        mode="FULL",
+                        exchangeTokens={exchange: [token]},
+                    )
+                    if m_data and m_data.get("status") and "data" in m_data:
+                        fetched = m_data["data"].get("fetched", [])
+                        if fetched:
+                            item = fetched[0]
+                            ltp = float(item.get("ltp", 0.0))
+                            depth = item.get("depth", {})
+                            buy_levels = depth.get("buy", []) if isinstance(depth, dict) else []
+                            sell_levels = depth.get("sell", []) if isinstance(depth, dict) else []
+
+                            best_bid = float(buy_levels[0].get("price", 0.0)) if buy_levels else 0.0
+                            best_ask = float(sell_levels[0].get("price", 0.0)) if sell_levels else 0.0
+                            vol = int(item.get("tradeVolume", item.get("volume", 0)) or 0)
+
+                            # Cache exchange circuit limits
+                            up_c = float(item.get("upperCircuit", 0.0) or 0.0)
+                            low_c = float(item.get("lowerCircuit", 0.0) or 0.0)
+                            if up_c > 0 and low_c > 0:
+                                self._circuit_cache[clean] = (low_c, up_c)
+
+                            # Parse exchange feed timestamp
+                            feed_str = item.get("exchFeedTime") or item.get("exchTradeTime")
+                            feed_dt = None
+                            if feed_str:
+                                for fmt in ("%d-%b-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S"):
+                                    try:
+                                        feed_dt = datetime.strptime(feed_str, fmt).replace(tzinfo=IST)
+                                        break
+                                    except Exception:
+                                        pass
+                            if not feed_dt:
+                                feed_dt = datetime.now(IST)
+
+                            # Validate market depth and spread validity
+                            is_valid_depth = (best_bid > 0 and best_ask > 0 and best_ask >= best_bid)
+                            is_fresh = bool(ltp > 0 and is_valid_depth)
+
+                            return Quote(
+                                symbol=clean,
+                                exchange=exchange,
+                                last_price=ltp,
+                                bid=best_bid,
+                                ask=best_ask,
+                                volume=vol,
+                                timestamp=feed_dt,
+                                is_fresh=is_fresh,
+                            )
+            except Exception as e_full:
+                logger.debug("getMarketData FULL not available or failed for %s: %s; trying ltpData fallback", clean, e_full)
+
+            # 3. Secondary fallback: ltpData (LTP only, no depth -> bid=0, ask=0, marked is_fresh=False)
             try:
                 trading_symbol = f"{clean}-EQ" if exchange == "NSE" and clean != "NIFTY" else clean
                 res = self._smart_api.ltpData(
@@ -140,20 +233,6 @@ class AngelDataProvider:
                 if res and res.get("status") and "data" in res:
                     data = res["data"]
                     ltp = float(data.get("ltp", 0.0))
-                    if ltp <= 0.0:
-                        return Quote(
-                            symbol=clean,
-                            exchange=exchange,
-                            last_price=0.0,
-                            bid=0.0,
-                            ask=0.0,
-                            volume=0,
-                            timestamp=datetime.now(IST),
-                            is_fresh=False,
-                        )
-                    # Angel ltpData provides last traded price.
-                    # Mark is_fresh=True so position management can track targets and fee-locks.
-                    # New entries remain safely gated by Gate 6 (Spread/Depth) because bid=0, ask=0.
                     return Quote(
                         symbol=clean,
                         exchange=exchange,
@@ -162,16 +241,16 @@ class AngelDataProvider:
                         ask=0.0,
                         volume=int(data.get("volume", 0)),
                         timestamp=datetime.now(IST),
-                        is_fresh=True,
+                        is_fresh=False,  # Fails closed on entry gates due to lack of verified depth
                     )
             except Exception as e:
                 logger.error("Angel One get_quote error for %s: %s", clean, e)
 
-        # Fallback quote if offline / unauthenticated (marked strictly stale: is_fresh=False)
+        # Fail closed: never fabricate prices
         return Quote(
             symbol=clean,
             exchange=exchange,
-            last_price=100.0,
+            last_price=0.0,
             bid=0.0,
             ask=0.0,
             volume=0,
@@ -206,6 +285,12 @@ class AngelDataProvider:
             angel_interval = "ONE_DAY"
 
         if self._smart_api:
+            if self._rate_limiter:
+                acquired = self._rate_limiter.acquire("historical", timeout=3.0)
+                if not acquired:
+                    logger.warning("Rate limit timeout acquiring historical token for %s", clean)
+                    return []
+
             try:
                 hist_params = {
                     "exchange": exchange,
@@ -241,18 +326,18 @@ class AngelDataProvider:
         return []
 
     def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
-        """Fetch instrument info with verified circuit limits."""
+        """Fetch instrument info with verified circuit limits from exchange."""
         clean = symbol.replace("-EQ", "").upper()
         token = self.resolve_token(clean, exchange)
+        low_c, up_c = self._circuit_cache.get(clean, (0.0, 0.0))
 
-        # Do not fabricate synthetic 10% circuit limits; report 0.0 if not verified from exchange
         return InstrumentInfo(
             symbol=clean,
             exchange=exchange,
             tick_size=0.05,
             lot_size=1,
             instrument_token=token,
-            upper_circuit=0.0,
-            lower_circuit=0.0,
+            upper_circuit=up_c,
+            lower_circuit=low_c,
             mis_available=True,
         )

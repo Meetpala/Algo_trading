@@ -152,25 +152,30 @@ class StrategyEngine:
         current_price: float = 0.0,
     ) -> OrderRequest:
         """Create an exit order request. If exit_order_type is LIMIT, creates aggressive marketable limit."""
-        exit_cfg_type = getattr(getattr(self.config, "entry", None), "exit_order_type", "MARKET")
+        exit_cfg_type = getattr(getattr(self.config, "entry", None), "exit_order_type", "LIMIT")
         if str(exit_cfg_type).upper() == "LIMIT":
             inst = self.broker.get_instrument_info(symbol)
-            tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+            tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
             buffer_pct = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.5) / 100.0
             px = current_price
             if px <= 0.0:
                 q = self.broker.get_quote(symbol)
-                px = q.last_price if q and q.last_price > 0 else 100.0
+                px = q.last_price if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0 else 0.0
+            if px <= 0.0:
+                raise ValueError(f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})")
+
+            lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
+            upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
 
             if side == Side.SELL:
                 raw_limit = px * (1.0 - buffer_pct)
-                if inst and inst.lower_circuit > 0:
-                    raw_limit = max(raw_limit, inst.lower_circuit)
+                if lower_c > 0:
+                    raw_limit = max(raw_limit, lower_c)
                 limit_px = floor_to_tick(raw_limit, tick)
             else:
                 raw_limit = px * (1.0 + buffer_pct)
-                if inst and inst.upper_circuit > 0:
-                    raw_limit = min(raw_limit, inst.upper_circuit)
+                if upper_c > 0:
+                    raw_limit = min(raw_limit, upper_c)
                 limit_px = ceil_to_tick(raw_limit, tick)
 
             return OrderRequest(
@@ -347,22 +352,49 @@ class StrategyEngine:
 
                 if entry_state.status == OrderStatus.COMPLETE or entry_state.filled_quantity > 0:
                     entry_filled_qty = entry_state.filled_quantity
-                    # On partial fill, cancel the unfilled remainder immediately and fetch refreshed status once
+                    # On partial fill, cancel the unfilled remainder and wait for terminal confirmation
                     if entry_state.status != OrderStatus.COMPLETE:
                         try:
                             self.broker.cancel_order(ent_pos.entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", ent_pos.symbol, cancel_err)
-                        refreshed = self.broker.get_order_status(ent_pos.entry_order_id)
-                        if refreshed:
-                            entry_state = refreshed
+                        term_state = self._confirm_order_terminal(ent_pos.entry_order_id, timeout_sec=2.0)
+                        if not term_state or term_state.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                            logger.warning(
+                                "Entry order %s remainder cancel unconfirmed (%s); keeping in ENTERING",
+                                ent_pos.entry_order_id,
+                                getattr(term_state, "status", "UNKNOWN"),
+                            )
+                            continue
+                        entry_state = term_state
 
-                    # Reconcile confirmed fill quantity against live broker positions
-                    actual_qty = max(int(entry_filled_qty), int(getattr(entry_state, "filled_quantity", 0) or 0))
+                    confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
+                    if confirmed_fill_qty <= 0:
+                        ent_pos.phase = PositionPhase.FLAT
+                        ent_pos.quantity = 0
+                        continue
+
+                    # Reconcile confirmed fill quantity against live broker positions (strictly verify, no max() absorption)
+                    actual_qty = confirmed_fill_qty
                     try:
-                        fresh_pos = [p for p in self.broker.get_positions() if p.symbol == ent_pos.symbol and p.product == Product.MIS]
+                        fresh_pos = [p for p in self.broker.get_positions() if p.symbol == ent_pos.symbol and getattr(p, "product", Product.MIS) == Product.MIS]
                         if fresh_pos:
-                            actual_qty = max(actual_qty, abs(fresh_pos[0].quantity))
+                            broker_net_qty = abs(fresh_pos[0].quantity)
+                            if broker_net_qty != confirmed_fill_qty:
+                                logger.critical(
+                                    "EMERGENCY: Broker MIS position (%d) != confirmed fill quantity (%d) for %s! Halting for manual reconciliation.",
+                                    broker_net_qty, confirmed_fill_qty, ent_pos.symbol,
+                                )
+                                self.journal.log_warning(
+                                    severity="EMERGENCY",
+                                    code="POSITION_QTY_DISAGREEMENT",
+                                    message=f"Broker MIS position {broker_net_qty} does not match fill {confirmed_fill_qty} for {ent_pos.symbol}",
+                                    data={"broker_qty": broker_net_qty, "fill_qty": confirmed_fill_qty},
+                                )
+                                self.is_paused = True
+                                self.pause_reason = f"QTY_MISMATCH_{ent_pos.symbol}"
+                                ent_pos.phase = PositionPhase.ERROR
+                                continue
                     except Exception as pe:
                         logger.warning("Error fetching broker positions for %s fill reconciliation: %s", ent_pos.symbol, pe)
 
@@ -679,13 +711,12 @@ class StrategyEngine:
                                 pos.protective_order_id,
                                 px,
                             )
-                            cancel_ok = False
                             sl_st = None
                             try:
-                                cancel_ok = bool(self.broker.cancel_order(pos.protective_order_id))
-                                sl_st = self.broker.get_order_status(pos.protective_order_id)
+                                self.broker.cancel_order(pos.protective_order_id)
                             except Exception as c_err:
                                 logger.warning("Error cancelling stop during gap exit %s: %s", pos.symbol, c_err)
+                            sl_st = self._confirm_order_terminal(pos.protective_order_id, timeout_sec=2.0)
 
                             if sl_st and sl_st.status == OrderStatus.COMPLETE:
                                 self.journal.log_event(
@@ -713,7 +744,7 @@ class StrategyEngine:
                                 )
                                 continue
 
-                            if not cancel_ok and sl_st and sl_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
+                            if not sl_st or sl_st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
                                 logger.warning(
                                     "Protective SL order %s for %s cancellation unconfirmed (%s); retrying gap exit next tick",
                                     pos.protective_order_id,
@@ -826,42 +857,38 @@ class StrategyEngine:
 
                     if target_reached:
                         exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
-                        # Confirm stop cancellation first before sending market exit
-                        cancel_ok = False
                         sl_filled = 0
                         sl_st = None
                         if pos.protective_order_id:
                             try:
-                                cancel_ok = bool(self.broker.cancel_order(pos.protective_order_id))
-                                sl_st = self.broker.get_order_status(pos.protective_order_id)
-                                if sl_st and sl_st.status == OrderStatus.COMPLETE:
-                                    self.journal.log_event(
-                                        event_type="STOP_LOSS_HIT",
-                                        symbol=pos.symbol,
-                                        side=pos.side.value,
-                                        data={
-                                            "stop_price": pos.current_stop_price,
-                                            "sl_order_id": pos.protective_order_id,
-                                            "fill_price": sl_st.average_price or pos.current_stop_price if sl_st else pos.current_stop_price,
-                                        },
-                                    )
-                                    pos.phase = PositionPhase.CLOSED
-                                    pos.quantity = 0
-                                    continue
-                                elif sl_st:
-                                    sl_filled = getattr(sl_st, "filled_quantity", 0)
+                                self.broker.cancel_order(pos.protective_order_id)
                             except Exception as c_err:
                                 logger.warning("Error cancelling stop before target exit %s: %s", pos.symbol, c_err)
-
-                        # Only defer if cancel_ok is False AND status is still live pending
-                        if pos.protective_order_id and not cancel_ok and sl_st and sl_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
-                            logger.warning(
-                                "Protective SL order %s for %s cancellation unconfirmed (%s); deferring target exit to next cycle",
-                                pos.protective_order_id,
-                                pos.symbol,
-                                getattr(sl_st, "status", "UNKNOWN"),
-                            )
-                            continue
+                            sl_st = self._confirm_order_terminal(pos.protective_order_id, timeout_sec=2.0)
+                            if sl_st and sl_st.status == OrderStatus.COMPLETE:
+                                self.journal.log_event(
+                                    event_type="STOP_LOSS_HIT",
+                                    symbol=pos.symbol,
+                                    side=pos.side.value,
+                                    data={
+                                        "stop_price": pos.current_stop_price,
+                                        "sl_order_id": pos.protective_order_id,
+                                        "fill_price": sl_st.average_price or pos.current_stop_price,
+                                    },
+                                )
+                                pos.phase = PositionPhase.CLOSED
+                                pos.quantity = 0
+                                continue
+                            elif not sl_st or sl_st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
+                                logger.warning(
+                                    "Protective SL order %s for %s cancellation unconfirmed (%s); deferring target exit to next cycle",
+                                    pos.protective_order_id,
+                                    pos.symbol,
+                                    getattr(sl_st, "status", "UNKNOWN"),
+                                )
+                                continue
+                            else:
+                                sl_filled = getattr(sl_st, "filled_quantity", 0)
 
                         remaining_qty = max(0, pos.quantity - int(sl_filled if isinstance(sl_filled, (int, float)) else 0))
                         if remaining_qty <= 0:
@@ -1752,26 +1779,54 @@ class StrategyEngine:
                 is_complete = getattr(entry_state, "status", None) == OrderStatus.COMPLETE
 
                 if entry_state and (is_complete or is_filled_qty_positive):
-                    # On partial fill, cancel the unfilled remainder immediately and fetch refreshed status once
+                    # On partial fill, cancel the unfilled remainder and wait for terminal confirmation
                     if is_filled_qty_positive and not is_complete:
                         try:
                             self.broker.cancel_order(entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", sym, cancel_err)
-                        refreshed = self.broker.get_order_status(entry_order_id)
-                        if refreshed:
-                            entry_state = refreshed
+                        term_state = self._confirm_order_terminal(entry_order_id, timeout_sec=2.0)
+                        if not term_state or term_state.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                            logger.warning(
+                                "Entry order %s remainder cancel unconfirmed (%s); keeping in ENTERING",
+                                entry_order_id,
+                                getattr(term_state, "status", "UNKNOWN"),
+                            )
+                            managed.quantity = 0
+                            managed.phase = PositionPhase.ENTERING
+                            continue
+                        entry_state = term_state
 
-                    # Reconcile confirmed fill quantity against live broker positions
-                    confirmed_qty = max(int(entry_filled_qty), int(getattr(entry_state, "filled_quantity", 0) or 0)) if is_filled_qty_positive else sizing.quantity
+                    confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
+                    if confirmed_fill_qty <= 0:
+                        managed.quantity = 0
+                        managed.phase = PositionPhase.FLAT
+                        continue
+
+                    # Reconcile confirmed fill quantity against live broker positions (strictly verify, no max() absorption)
+                    actual_qty = confirmed_fill_qty
                     try:
-                        fresh_pos = [p for p in self.broker.get_positions() if p.symbol == sym and p.product == Product.MIS]
+                        fresh_pos = [p for p in self.broker.get_positions() if p.symbol == sym and getattr(p, "product", Product.MIS) == Product.MIS]
                         if fresh_pos:
-                            confirmed_qty = max(confirmed_qty, abs(fresh_pos[0].quantity))
+                            broker_net_qty = abs(fresh_pos[0].quantity)
+                            if broker_net_qty != confirmed_fill_qty:
+                                logger.critical(
+                                    "EMERGENCY: Broker MIS position (%d) != confirmed fill quantity (%d) for %s! Halting for manual reconciliation.",
+                                    broker_net_qty, confirmed_fill_qty, sym,
+                                )
+                                self.journal.log_warning(
+                                    severity="EMERGENCY",
+                                    code="POSITION_QTY_DISAGREEMENT",
+                                    message=f"Broker MIS position {broker_net_qty} does not match fill {confirmed_fill_qty} for {sym}",
+                                    data={"broker_qty": broker_net_qty, "fill_qty": confirmed_fill_qty},
+                                )
+                                self.is_paused = True
+                                self.pause_reason = f"QTY_MISMATCH_{sym}"
+                                managed.phase = PositionPhase.ERROR
+                                continue
                     except Exception as pe:
                         logger.warning("Error fetching broker positions for %s fill reconciliation: %s", sym, pe)
 
-                    actual_qty = confirmed_qty
                     entry_avg_px = getattr(entry_state, "average_price", 0.0)
                     is_avg_px_positive = isinstance(entry_avg_px, (int, float)) and entry_avg_px > 0
                     actual_entry = float(entry_avg_px) if is_avg_px_positive else marketable_entry_price

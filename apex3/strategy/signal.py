@@ -315,13 +315,14 @@ def evaluate_signal(
             reason_codes=["FUTURE_QUOTE_TIMESTAMP"],
             explanation=f"Quote timestamp is in the future by {-clock_diff:.1f}s",
         )
-    if clock_diff > 15.0:
+    max_quote_age = float(getattr(config, "max_quote_age_sec", 2.0))
+    if clock_diff > max_quote_age:
         gates.append(
             GateResult(
                 name="QUOTE_FRESHNESS",
                 status=GateStatus.FAIL,
-                reason=f"Quote timestamp age ({clock_diff:.1f}s) exceeds max threshold (15s)",
-                data={"code": "STALE_QUOTE", "age_sec": clock_diff},
+                reason=f"Quote timestamp age ({clock_diff:.1f}s) exceeds max threshold ({max_quote_age:.1f}s)",
+                data={"code": "STALE_QUOTE", "age_sec": clock_diff, "threshold_sec": max_quote_age},
             )
         )
         return SignalEvaluation(
@@ -329,7 +330,7 @@ def evaluate_signal(
             decision=Decision.WAIT,
             gates=gates,
             reason_codes=["STALE_QUOTE"],
-            explanation=f"Quote timestamp is {clock_diff:.1f}s old",
+            explanation=f"Quote timestamp is {clock_diff:.1f}s old (max allowed: {max_quote_age:.1f}s)",
         )
 
     # Spread and market depth check

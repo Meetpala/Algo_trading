@@ -19,6 +19,7 @@ class Product(Enum):
     MIS = "MIS"    # Intraday product used by APEX-3
     CNC = "CNC"    # Cash & Carry delivery equity
     NRML = "NRML"  # Normal delivery/F&O product
+    UNKNOWN = "UNKNOWN"
 
 
 class OrderType(Enum):
@@ -26,6 +27,7 @@ class OrderType(Enum):
     LIMIT = "LIMIT"
     SL = "SL"          # Stop-loss limit
     SL_M = "SL-M"      # Stop-loss market
+    UNKNOWN = "UNKNOWN"
 
 
 class OrderVariety(Enum):
