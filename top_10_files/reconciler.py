@@ -93,25 +93,30 @@ class Reconciler:
         current_price: float = 0.0,
     ) -> OrderRequest:
         """Create an exit order request. If exit_order_type is LIMIT, creates aggressive marketable limit."""
-        exit_cfg_type = getattr(getattr(self.config, "entry", None), "exit_order_type", "MARKET") if self.config else "MARKET"
+        exit_cfg_type = getattr(getattr(self.config, "entry", None), "exit_order_type", "LIMIT") if self.config else "LIMIT"
         if str(exit_cfg_type).upper() == "LIMIT":
             inst = self.broker.get_instrument_info(symbol)
-            tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+            tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
             buffer_pct = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.5) / 100.0 if self.config else 0.005
             px = current_price
             if px <= 0.0:
                 q = self.broker.get_quote(symbol)
-                px = q.last_price if q and q.last_price > 0 else 100.0
+                px = q.last_price if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0 else 0.0
+            if px <= 0.0:
+                raise ValueError(f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})")
+
+            lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
+            upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
 
             if side == Side.SELL:
                 raw_limit = px * (1.0 - buffer_pct)
-                if inst and inst.lower_circuit > 0:
-                    raw_limit = max(raw_limit, inst.lower_circuit)
+                if lower_c > 0:
+                    raw_limit = max(raw_limit, lower_c)
                 limit_px = floor_to_tick(raw_limit, tick)
             else:
                 raw_limit = px * (1.0 + buffer_pct)
-                if inst and inst.upper_circuit > 0:
-                    raw_limit = min(raw_limit, inst.upper_circuit)
+                if upper_c > 0:
+                    raw_limit = min(raw_limit, upper_c)
                 limit_px = ceil_to_tick(raw_limit, tick)
 
             return OrderRequest(
@@ -424,23 +429,32 @@ class Reconciler:
         strategy_order_ids: list[str] = []
         try:
             orders = self.broker.get_orders()
-            for o in orders:
-                if o.status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING):
-                    if self.sm.is_strategy_order(o.request.tag):
-                        strategy_order_ids.append(o.order_id)
-                        try:
-                            self.broker.cancel_order(o.order_id)
-                            self._confirm_order_terminal(o.order_id, timeout_sec=1.5)
-                            self.journal.log_event(
-                                event_type="CANCEL_PENDING_ORDER",
-                                symbol=o.request.symbol,
-                                data={"order_id": o.order_id},
-                                explanation=f"Cancelled pending strategy order {o.order_id}",
-                            )
-                        except Exception as ce:
-                            logger.warning("Could not cancel order %s during flatten: %s", o.order_id, ce)
         except Exception as e:
-            logger.error("Error cancelling pending orders during flatten: %s", e)
+            err_msg = f"CRITICAL: Could not retrieve orders during flatten: {e}"
+            logger.critical(err_msg)
+            self.journal.log_warning(
+                severity="EMERGENCY",
+                code="FLATTEN_ORDERBOOK_FETCH_FAILED",
+                message=err_msg,
+            )
+            return False, err_msg
+
+        for o in orders:
+            # Track and cancel ALL unresolved / non-terminal strategy orders
+            if o.status not in (OrderStatus.COMPLETE, OrderStatus.CANCELLED, OrderStatus.REJECTED):
+                if self.sm.is_strategy_order(o.request.tag):
+                    strategy_order_ids.append(o.order_id)
+                    try:
+                        self.broker.cancel_order(o.order_id)
+                        self._confirm_order_terminal(o.order_id, timeout_sec=1.5)
+                        self.journal.log_event(
+                            event_type="CANCEL_PENDING_ORDER",
+                            symbol=o.request.symbol,
+                            data={"order_id": o.order_id},
+                            explanation=f"Cancelled pending strategy order {o.order_id}",
+                        )
+                    except Exception as ce:
+                        logger.warning("Could not cancel order %s during flatten: %s", o.order_id, ce)
 
         # 2. Flatten each active strategy position
         residual_errors: list[str] = []
@@ -460,7 +474,13 @@ class Reconciler:
             managed = self.sm.positions.get(bp.symbol)
             if managed is None:
                 managed = self.sm.get_or_create_position(bp.symbol)
-                logger.warning("Adopted unmanaged broker position %s (qty=%d) for square-off during flatten", bp.symbol, bp_qty)
+                logger.warning("Adopted unmanaged broker MIS position %s (qty=%d) for square-off during flatten", bp.symbol, bp_qty)
+                self.journal.log_warning(
+                    severity="HIGH",
+                    code="MANUAL_MIS_POSITION_FLATTENED",
+                    message=f"Manual/unmanaged MIS position {bp.symbol} (qty={bp_qty}) included in emergency flatten.",
+                    data={"symbol": bp.symbol, "quantity": bp_qty},
+                )
 
             managed.quantity = bp_qty
             bp_side = Side.SELL if bp.quantity < 0 else (getattr(bp, "side", None) or managed.side or Side.BUY)

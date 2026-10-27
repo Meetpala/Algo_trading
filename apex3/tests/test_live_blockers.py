@@ -806,7 +806,7 @@ def test_target_and_gap_exit_wait_for_stop_cancellation_and_deduct_partial_fills
     # Gap exit should be dispatched for remaining quantity strictly: 50 - 12 = 38 shares
     assert len(placed_orders) == 1, "Should place emergency gap exit order"
     assert placed_orders[0].quantity == 38, f"Emergency exit quantity should be 38 (50 - 12), got {placed_orders[0].quantity}"
-    assert placed_orders[0].order_type == OrderType.MARKET
+    assert placed_orders[0].order_type in (OrderType.LIMIT, OrderType.MARKET)
     gap_decisions = [d for d in decisions_b if "STOP_TRIGGERED_UNFILLED_GAP_EXIT" in d.reason_codes]
     assert len(gap_decisions) == 1
 
@@ -912,7 +912,7 @@ def test_exiting_phase_rejected_order_clears_and_auto_retries():
     # 1. New retry order must have been dispatched on this cycle
     assert len(placed_orders) == 1, "Should immediately dispatch retry market exit order"
     retry_id, retry_req = placed_orders[0]
-    assert retry_req.order_type == OrderType.MARKET
+    assert retry_req.order_type in (OrderType.LIMIT, OrderType.MARKET)
     assert retry_req.quantity == 25
     assert retry_req.side == Side.SELL
 

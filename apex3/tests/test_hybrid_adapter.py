@@ -90,6 +90,9 @@ def test_hybrid_adapter_routing():
     angel_provider = AngelDataProvider(api_key="", client_code="", pin="", totp_secret="")
     zerodha_broker = MockExecutionBroker()
 
+    angel_provider.get_quote = MagicMock(return_value=Quote("RELIANCE", "NSE", 2500.0, 2499.5, 2500.5, 10000, datetime.now(IST), is_fresh=True))
+    angel_provider.get_instrument_info = MagicMock(return_value=InstrumentInfo("RELIANCE", "NSE", tick_size=0.05))
+
     hybrid = HybridBrokerAdapter(data_provider=angel_provider, execution_broker=zerodha_broker)
 
     # 1. Market Data should route to AngelDataProvider

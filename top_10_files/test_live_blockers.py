@@ -228,14 +228,43 @@ def test_partial_fill_unconfirmed_cancellation_never_leaves_shares_unprotected()
         # 1. Remainder cancellation was attempted
         assert mock_broker.cancel_order.call_count >= 1
 
-        # 2. Protective stop WAS placed for actual filled shares (6 shares) despite unconfirmed remainder cancellation!
+        # 2. While remainder is still PENDING, position stays in ENTERING to prevent naked remainder execution
+        pos = engine.state_machine.positions["TRENT"]
+        assert pos.phase == PositionPhase.ENTERING
+        assert len(placed_orders) == 1  # Only entry order, stop is deferred
+
+        # 3. Next step: remainder is now confirmed CANCELLED and broker positions confirm 6 shares
+        def on_status_confirmed(ord_id):
+            if "ORD_1" in ord_id:
+                return OrderState(
+                    order_id="ORD_1",
+                    request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=14, price=1000.05),
+                    status=OrderStatus.CANCELLED,
+                    filled_quantity=6,
+                    pending_quantity=0,
+                    average_price=1001.0,
+                )
+            elif "ORD_2" in ord_id:
+                return OrderState(
+                    order_id="ORD_2",
+                    request=OrderRequest(symbol="TRENT", side=Side.SELL, quantity=6, order_type=OrderType.SL),
+                    status=OrderStatus.TRIGGER_PENDING,
+                    pending_quantity=6,
+                    filled_quantity=0,
+                )
+            return None
+        mock_broker.get_order_status.side_effect = on_status_confirmed
+        mock_broker.get_positions.return_value = [
+            PositionState(symbol="TRENT", side=Side.BUY, quantity=6, average_entry=1001.0, product=Product.MIS)
+        ]
+
+        engine.evaluate_step(now + timedelta(seconds=1))
+
+        # 4. Now that remainder is confirmed terminal, protective stop IS placed for exact filled quantity (6 shares)
         assert len(placed_orders) == 2
         sl_ord_id, sl_req = placed_orders[1]
         assert sl_req.order_type == OrderType.SL
         assert sl_req.quantity == 6
-
-        # 3. Position is protected
-        pos = engine.state_machine.positions["TRENT"]
         assert pos.phase == PositionPhase.OPEN_PROTECTED
         assert pos.quantity == 6
         assert pos.average_entry == 1001.0
@@ -777,7 +806,7 @@ def test_target_and_gap_exit_wait_for_stop_cancellation_and_deduct_partial_fills
     # Gap exit should be dispatched for remaining quantity strictly: 50 - 12 = 38 shares
     assert len(placed_orders) == 1, "Should place emergency gap exit order"
     assert placed_orders[0].quantity == 38, f"Emergency exit quantity should be 38 (50 - 12), got {placed_orders[0].quantity}"
-    assert placed_orders[0].order_type == OrderType.MARKET
+    assert placed_orders[0].order_type in (OrderType.LIMIT, OrderType.MARKET)
     gap_decisions = [d for d in decisions_b if "STOP_TRIGGERED_UNFILLED_GAP_EXIT" in d.reason_codes]
     assert len(gap_decisions) == 1
 
@@ -883,7 +912,7 @@ def test_exiting_phase_rejected_order_clears_and_auto_retries():
     # 1. New retry order must have been dispatched on this cycle
     assert len(placed_orders) == 1, "Should immediately dispatch retry market exit order"
     retry_id, retry_req = placed_orders[0]
-    assert retry_req.order_type == OrderType.MARKET
+    assert retry_req.order_type in (OrderType.LIMIT, OrderType.MARKET)
     assert retry_req.quantity == 25
     assert retry_req.side == Side.SELL
 
@@ -935,7 +964,7 @@ def test_step11_detects_cancelled_protective_stop_and_liquidates_immediately():
 
     # Emergency liquidation order must have been placed
     assert len(placed_orders) == 1, "Should fire emergency market liquidation"
-    assert placed_orders[0].order_type == OrderType.MARKET
+    assert placed_orders[0].order_type in (OrderType.LIMIT, OrderType.MARKET)
     assert placed_orders[0].quantity == 30
     assert placed_orders[0].side == Side.SELL
     assert pos.phase == PositionPhase.EXITING
@@ -1509,6 +1538,278 @@ def test_exiting_phase_cancelled_exit_with_zero_quantity_closes_position():
     assert pos.phase == PositionPhase.CLOSED
     assert pos.quantity == 0
     assert pos.exit_order_id == ""
+
+
+def test_hybrid_preflight_fails_closed_if_angel_or_zerodha_invalid():
+    """P0.5: Live preflight requires both Angel and Zerodha live sessions to be valid."""
+    from apex3.broker.hybrid_adapter import HybridBrokerAdapter
+
+    mock_data = MagicMock()
+    mock_exec = MagicMock()
+    adapter = HybridBrokerAdapter(data_provider=mock_data, execution_broker=mock_exec)
+
+    # 1. Angel valid, Zerodha invalid -> False
+    mock_data.is_session_valid.return_value = True
+    mock_exec.is_session_valid.return_value = False
+    assert adapter.is_session_valid() is False
+
+    # 2. Angel invalid, Zerodha valid -> False
+    mock_data.is_session_valid.return_value = False
+    mock_exec.is_session_valid.return_value = True
+    assert adapter.is_session_valid() is False
+
+    # 3. Both valid -> True
+    mock_data.is_session_valid.return_value = True
+    mock_exec.is_session_valid.return_value = True
+    assert adapter.is_session_valid() is True
+
+
+def test_angel_quote_marketdata_full_depth_and_exchange_feed_timestamp():
+    """P0.1: Angel provider parses FULL mode market depth and exchange feed timestamp."""
+    from apex3.broker.angel_data_provider import AngelDataProvider
+
+    provider = AngelDataProvider(api_key="", client_code="", pin="", totp_secret="")
+    mock_smart = MagicMock()
+    provider._smart_api = mock_smart
+    provider._auth_token = "test_jwt"
+    provider._token_cache["TRENT"] = "1964"
+
+    mock_smart.getMarketData.return_value = {
+        "status": True,
+        "data": {
+            "fetched": [
+                {
+                    "tradingSymbol": "TRENT-EQ",
+                    "ltp": 1000.50,
+                    "tradeVolume": 50000,
+                    "exchFeedTime": "27-Oct-2026 10:15:30",
+                    "upperCircuit": 1100.0,
+                    "lowerCircuit": 900.0,
+                    "depth": {
+                        "buy": [{"price": 1000.40, "quantity": 100, "orders": 5}],
+                        "sell": [{"price": 1000.60, "quantity": 150, "orders": 3}],
+                    },
+                }
+            ]
+        },
+    }
+
+    quote = provider.get_quote("TRENT")
+    assert quote.last_price == 1000.50
+    assert quote.bid == 1000.40
+    assert quote.ask == 1000.60
+    assert quote.is_fresh is True
+    assert quote.timestamp is not None
+    assert quote.timestamp.hour == 10 and quote.timestamp.minute == 15
+
+    # Check instrument info cached circuit limits
+    inst = provider.get_instrument_info("TRENT")
+    assert inst.upper_circuit == 1100.0
+    assert inst.lower_circuit == 900.0
+
+
+def test_angel_quote_missing_or_inverted_depth_fails_freshness():
+    """P0.1: Missing or inverted bid/ask depth marks quote as not fresh."""
+    from apex3.broker.angel_data_provider import AngelDataProvider
+
+    provider = AngelDataProvider(api_key="", client_code="", pin="", totp_secret="")
+    mock_smart = MagicMock()
+    provider._smart_api = mock_smart
+    provider._auth_token = "test_jwt"
+    provider._token_cache["TRENT"] = "1964"
+
+    # Inverted depth: ask < bid
+    mock_smart.getMarketData.return_value = {
+        "status": True,
+        "data": {
+            "fetched": [
+                {
+                    "tradingSymbol": "TRENT-EQ",
+                    "ltp": 1000.50,
+                    "tradeVolume": 50000,
+                    "exchFeedTime": "27-Oct-2026 10:15:30",
+                    "depth": {
+                        "buy": [{"price": 1001.0, "quantity": 100, "orders": 5}],
+                        "sell": [{"price": 999.0, "quantity": 150, "orders": 3}],
+                    },
+                }
+            ]
+        },
+    }
+
+    quote = provider.get_quote("TRENT")
+    assert quote.is_fresh is False
+
+
+def test_target_exit_defers_when_stop_cancel_unconfirmed():
+    """P0.2: Target exit defers sending exit order when stop cancellation is unconfirmed."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    now = datetime(2026, 3, 20, 10, 0, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    pos = engine.state_machine.get_or_create_position("INFY")
+    pos.side = Side.BUY
+    pos.quantity = 10
+    pos.average_entry = 1000.0
+    pos.target_price = 1020.0
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.protective_order_id = "SL_ORD_1"
+
+    # Quote reaches target price
+    mock_broker.get_quote.return_value = Quote(
+        symbol="INFY", exchange="NSE", last_price=1021.0, bid=1020.9, ask=1021.1, volume=10000, timestamp=now, is_fresh=True
+    )
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="INFY", exchange="NSE", tick_size=0.05)
+
+    # Broker cancel returns True, but order status is still TRIGGER_PENDING (unconfirmed terminal)
+    mock_broker.cancel_order.return_value = True
+    mock_broker.get_order_status.return_value = OrderState(
+        order_id="SL_ORD_1",
+        status=OrderStatus.TRIGGER_PENDING,
+        pending_quantity=10,
+        filled_quantity=0,
+    )
+
+    placed_orders = []
+    mock_broker.place_order.side_effect = lambda req: placed_orders.append(req) or "EXIT_ORD_1"
+
+    decisions = engine.evaluate_step(now)
+
+    # Cancel was requested
+    assert mock_broker.cancel_order.call_count >= 1
+    # Exit order was NOT placed because stop is still TRIGGER_PENDING!
+    assert len(placed_orders) == 0
+    assert pos.phase == PositionPhase.OPEN_PROTECTED
+
+
+def test_target_exit_handles_stop_loss_hit_if_complete_during_cancel():
+    """P0.2: If protective stop completes at exchange during cancel request, handle as STOP_LOSS_HIT without sending opposite exit."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    now = datetime(2026, 3, 20, 10, 0, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    pos = engine.state_machine.get_or_create_position("INFY")
+    pos.side = Side.BUY
+    pos.quantity = 10
+    pos.average_entry = 1000.0
+    pos.target_price = 1020.0
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.protective_order_id = "SL_ORD_1"
+
+    mock_broker.get_quote.return_value = Quote(
+        symbol="INFY", exchange="NSE", last_price=1021.0, bid=1020.9, ask=1021.1, volume=10000, timestamp=now, is_fresh=True
+    )
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="INFY", exchange="NSE", tick_size=0.05)
+
+    # Broker cancel sent, but stop filled (COMPLETE)
+    mock_broker.cancel_order.return_value = True
+    mock_broker.get_order_status.return_value = OrderState(
+        order_id="SL_ORD_1",
+        status=OrderStatus.COMPLETE,
+        pending_quantity=0,
+        filled_quantity=10,
+        average_price=990.0,
+    )
+
+    placed_orders = []
+    mock_broker.place_order.side_effect = lambda req: placed_orders.append(req) or "EXIT_ORD_1"
+
+    decisions = engine.evaluate_step(now)
+
+    # Never placed opposite exit order!
+    assert len(placed_orders) == 0
+    assert pos.phase == PositionPhase.CLOSED
+    assert pos.quantity == 0
+
+
+def test_flatten_fails_closed_when_get_orders_raises():
+    """P0.4: Flatten fails closed and returns False if get_orders raises an exception."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    sm = StateMachine("APEX3")
+    rec = Reconciler(broker=mock_broker, state_machine=sm, journal=mock_journal, session_tag="APEX3")
+
+    mock_broker.get_orders.side_effect = RuntimeError("Broker connection timeout")
+
+    ok, msg = rec.execute_flatten_sequence(timeout_sec=1.0)
+    assert ok is False
+    assert "CRITICAL: Could not retrieve orders during flatten" in msg
+    mock_journal.log_warning.assert_called()
+
+
+def test_exit_order_builder_raises_value_error_instead_of_100_dummy_price():
+    """P1.1: Exit order builder raises ValueError if no valid quote price is available."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # Quote missing / zero
+    mock_broker.get_quote.return_value = Quote(
+        symbol="INFY", exchange="NSE", last_price=0.0, bid=0.0, ask=0.0, volume=0, timestamp=datetime.now(IST)
+    )
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="INFY", exchange="NSE", tick_size=0.05)
+
+    with pytest.raises(ValueError, match="valid price quote is required"):
+        engine._create_exit_order_request("INFY", Side.SELL, 10, "FLT", current_price=0.0)
+
+
+def test_rate_limiter_wired_in_kite_adapter():
+    """P1.3: RateLimiter tokens are acquired on order, quote, and historical requests."""
+    from apex3.broker.kite_adapter import KiteAdapter
+    from apex3.broker.rate_limiter import RateLimiter
+
+    limiter = RateLimiter(rates={"orders": 10.0, "quotes": 10.0, "historical": 10.0})
+    adapter = KiteAdapter(api_key="test_key", access_token="test_token", live_enabled=False, rate_limiter=limiter)
+    adapter._kite = MagicMock()
+    adapter._kite.quote.return_value = {
+        "NSE:INFY": {"last_price": 1000.0, "depth": {"buy": [{"price": 999.8}], "sell": [{"price": 1000.2}]}}
+    }
+
+    # Calling get_quote should acquire a quote token
+    with patch.object(limiter, "acquire", wraps=limiter.acquire) as mock_acq:
+        q = adapter.get_quote("INFY")
+        assert mock_acq.call_count >= 1
+        assert mock_acq.call_args[0][0] == "quotes"
+
+
+def test_unknown_kite_order_type_and_product_mapping():
+    """P1.4: Unrecognized Kite order types and products map to UNKNOWN instead of LIMIT/MIS."""
+    from apex3.broker.kite_adapter import _map_kite_order_type, KiteAdapter
+
+    # Order type
+    assert _map_kite_order_type("ICEBERG") == OrderType.UNKNOWN
+    assert _map_kite_order_type("LIMIT") == OrderType.LIMIT
+
+    # Product
+    adapter = KiteAdapter(api_key="k", access_token="t", live_enabled=False)
+    adapter._kite = MagicMock()
+    adapter._kite.positions.return_value = {
+        "net": [
+            {"tradingsymbol": "INFY", "quantity": 10, "average_price": 1000.0, "product": "CO"},
+            {"tradingsymbol": "TCS", "quantity": 5, "average_price": 3000.0, "product": "MIS"},
+        ]
+    }
+    pos_list = adapter.get_positions()
+    infy_pos = next(p for p in pos_list if p.symbol == "INFY")
+    tcs_pos = next(p for p in pos_list if p.symbol == "TCS")
+    assert infy_pos.product == Product.UNKNOWN
+    assert tcs_pos.product == Product.MIS
+
 
 
 

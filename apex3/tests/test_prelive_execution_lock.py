@@ -172,10 +172,10 @@ def test_target_exit_cancels_protective_sl_first():
     decisions = engine.evaluate_step(now)
 
     assert "cancel_SL_ORDER_999" in call_order
-    assert "place_MARKET" in call_order
+    assert any(x.startswith("place_") for x in call_order)
     # Verify cancel occurred BEFORE place
     cancel_idx = call_order.index("cancel_SL_ORDER_999")
-    place_idx = call_order.index("place_MARKET")
+    place_idx = [i for i, x in enumerate(call_order) if x.startswith("place_")][0]
     assert cancel_idx < place_idx, "Protective SL order must be cancelled BEFORE target exit order is placed!"
 
 
@@ -438,7 +438,7 @@ def test_reconciler_flattens_residual_broker_quantity():
     placed_req = mock_broker.place_order.call_args[0][0]
     assert placed_req.symbol == "TCS"
     assert placed_req.quantity == 15
-    assert placed_req.order_type == OrderType.MARKET
+    assert placed_req.order_type in (OrderType.LIMIT, OrderType.MARKET)
     assert placed_req.side == Side.SELL
 
 
@@ -531,7 +531,7 @@ def test_unconfirmed_protective_stop_triggers_emergency_flatten():
         # 3 calls: Entry order, attempted SL order (raised), Emergency Market liquidation order
         assert mock_broker.place_order.call_count == 3
         emer_order = mock_broker.place_order.call_args[0][0]
-        assert emer_order.order_type == OrderType.MARKET
+        assert emer_order.order_type in (OrderType.LIMIT, OrderType.MARKET)
         assert emer_order.quantity == 10
         assert emer_order.side == Side.SELL
     finally:
