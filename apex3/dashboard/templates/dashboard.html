@@ -220,14 +220,29 @@
             }
         }
 
+        const OPERATOR_TOKEN = "{{ operator_token }}";
+
         async function togglePause() {
-            await fetch('/api/pause', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})});
+            await fetch('/api/pause', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Operator-Token': OPERATOR_TOKEN
+                },
+                body: JSON.stringify({})
+            });
             fetchStatus();
         }
 
         async function emergencyFlatten() {
             if (confirm("CONFIRM EMERGENCY FLATTEN: This will cancel all strategy orders and market exit all strategy MIS positions immediately.")) {
-                const res = await fetch('/api/emergency_flatten', {method: 'POST'});
+                const res = await fetch('/api/emergency_flatten', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Operator-Token': OPERATOR_TOKEN
+                    }
+                });
                 const data = await res.json();
                 alert(data.message);
                 fetchStatus();
@@ -239,10 +254,13 @@
             const symbols = val.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
             if (symbols.length === 0) return alert("Please enter at least 1 symbol");
             if (symbols.length > 3) return alert("APEX-3 allows maximum 3 symbols in active watchlist");
-            
+
             await fetch('/api/watchlist', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Operator-Token': OPERATOR_TOKEN
+                },
                 body: JSON.stringify({symbols: symbols})
             });
             document.getElementById('input-symbols').value = '';

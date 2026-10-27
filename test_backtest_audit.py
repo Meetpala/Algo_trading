@@ -141,10 +141,10 @@ def test_intrabar_fee_lock_arms_for_next_bar_when_lock_level_is_not_touched():
     exit_event, next_stop, is_applied = _call_backtest_contract(
         "resolve_position_bar_exit",
         Side.BUY,
-        open_price=100.40,
+        open_price=100.70,
         high=101.70,
-        low=100.20,
-        close=100.50,
+        low=100.65,
+        close=101.10,
         stop_price=99.00,
         target_price=102.00,
         entry_price=100.00,
@@ -153,7 +153,7 @@ def test_intrabar_fee_lock_arms_for_next_bar_when_lock_level_is_not_touched():
     )
 
     assert exit_event is None
-    assert next_stop == 100.15
+    assert next_stop == 100.60
     assert is_applied is True
 
 
@@ -161,10 +161,10 @@ def test_intrabar_fee_lock_stop_wins_when_trigger_and_stop_share_one_bar():
     exit_event, next_stop, is_applied = _call_backtest_contract(
         "resolve_position_bar_exit",
         Side.BUY,
-        open_price=100.40,
+        open_price=100.70,
         high=101.70,
-        low=100.10,
-        close=100.50,
+        low=100.50,
+        close=100.55,
         stop_price=99.00,
         target_price=102.00,
         entry_price=100.00,
@@ -172,8 +172,8 @@ def test_intrabar_fee_lock_stop_wins_when_trigger_and_stop_share_one_bar():
         bar_close_time=time(11, 0),
     )
 
-    assert exit_event == (100.15, "FEE_LOCK_STOP")
-    assert next_stop == 100.15
+    assert exit_event == (100.60, "FEE_LOCK_STOP")
+    assert next_stop == 100.60
     assert is_applied is True
 
 
@@ -214,7 +214,7 @@ def test_late_session_fee_lock_arms_from_completed_close():
     )
 
     assert exit_event is None
-    assert next_stop == 100.15
+    assert next_stop == 100.35
     assert is_applied is True
 
 
@@ -222,10 +222,10 @@ def test_late_session_fee_lock_observes_intrabar_profit_after_1415():
     exit_event, next_stop, is_applied = _call_backtest_contract(
         "resolve_position_bar_exit",
         Side.BUY,
-        open_price=100.20,
+        open_price=100.50,
         high=101.20,
-        low=100.20,
-        close=100.30,
+        low=100.40,
+        close=100.60,
         stop_price=99.00,
         target_price=102.00,
         entry_price=100.00,
@@ -235,7 +235,7 @@ def test_late_session_fee_lock_observes_intrabar_profit_after_1415():
     )
 
     assert exit_event is None
-    assert next_stop == 100.15
+    assert next_stop == 100.35
     assert is_applied is True
 
 

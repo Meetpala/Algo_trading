@@ -92,83 +92,78 @@ class Reconciler:
         tag: str,
         current_price: float = 0.0,
     ) -> OrderRequest:
-        """Create an exit order request. If exit_order_type is LIMIT, creates aggressive marketable limit."""
-        exit_cfg_type = getattr(getattr(self.config, "entry", None), "exit_order_type", "LIMIT") if self.config else "LIMIT"
-        if str(exit_cfg_type).upper() == "LIMIT":
-            inst = self.broker.get_instrument_info(symbol)
-            tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
-            buffer_pct = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.5) / 100.0 if self.config else 0.005
+        """Create an exchange-compliant, bounded marketable limit exit order request.
 
-            # Prioritize live quote from exchange to verify current price
-            px = 0.0
+        Under NSE Retail Algo guidelines, algorithmic market orders are strictly prohibited.
+        All exits must be bounded limit orders priced using fresh quotes (best bid for SELL,
+        best ask for BUY) and constrained within circuit limits and configured slippage caps.
+        """
+        inst = self.broker.get_instrument_info(symbol)
+        tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
+
+        # Enforce max_slippage_pct cap on marketable limit buffer
+        max_slip = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15) if self.config else 0.15
+        cfg_buf = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.15) if self.config else 0.15
+        buffer_pct = min(cfg_buf, max_slip) / 100.0
+
+        # Query fresh executable quote (best bid for SELL, best ask for BUY)
+        px = 0.0
+        for _ in range(3):
             try:
                 q = self.broker.get_quote(symbol)
                 if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0:
-                    px = float(q.last_price)
+                    if side == Side.SELL and isinstance(getattr(q, "bid", None), (int, float)) and q.bid > 0:
+                        px = float(q.bid)
+                    elif side == Side.BUY and isinstance(getattr(q, "ask", None), (int, float)) and q.ask > 0:
+                        px = float(q.ask)
+                    else:
+                        px = float(q.last_price)
+                    if px > 0.0:
+                        break
             except Exception:
                 pass
-            if px <= 0.0:
-                px = float(current_price) if isinstance(current_price, (int, float)) and current_price > 0 else 0.0
+            time_module.sleep(0.05)
 
-            # If no price reference is available, fall back to MARKET order to guarantee execution
-            if px <= 0.0:
-                logger.warning("No price available for exit order %s; falling back to MARKET order", symbol)
-                return OrderRequest(
-                    symbol=symbol,
-                    side=side,
-                    quantity=quantity,
-                    product=Product.MIS,
-                    order_type=OrderType.MARKET,
-                    price=0.0,
-                    tag=tag,
-                    strategy_id=self.session_tag,
-                )
+        if px <= 0.0 and isinstance(current_price, (int, float)) and current_price > 0:
+            px = float(current_price)
 
-            lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
-            upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
+        lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
+        upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
 
-            if side == Side.SELL:
-                raw_limit = px * (1.0 - buffer_pct)
-                if lower_c > 0:
-                    raw_limit = max(raw_limit, lower_c)
-                limit_px = floor_to_tick(raw_limit, tick)
+        if px <= 0.0:
+            # Fall back to circuit limits if no quote or price reference is available
+            if side == Side.SELL and lower_c > 0:
+                logger.warning("No price quote for exit %s; using lower circuit %.2f as bound", symbol, lower_c)
+                px = lower_c
+            elif side == Side.BUY and upper_c > 0:
+                logger.warning("No price quote for exit %s; using upper circuit %.2f as bound", symbol, upper_c)
+                px = upper_c
             else:
-                raw_limit = px * (1.0 + buffer_pct)
-                if upper_c > 0:
-                    raw_limit = min(raw_limit, upper_c)
-                limit_px = ceil_to_tick(raw_limit, tick)
+                err_msg = f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})"
+                logger.critical(err_msg)
+                raise ValueError(err_msg)
 
-            return OrderRequest(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                product=Product.MIS,
-                order_type=OrderType.LIMIT,
-                price=limit_px,
-                tag=tag,
-                strategy_id=self.session_tag,
-            )
+        if side == Side.SELL:
+            raw_limit = px * (1.0 - buffer_pct)
+            if lower_c > 0:
+                raw_limit = max(raw_limit, lower_c)
+            limit_px = floor_to_tick(raw_limit, tick)
         else:
-            return OrderRequest(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                product=Product.MIS,
-                order_type=OrderType.MARKET,
-                price=0.0,
-                tag=tag,
-                strategy_id=self.session_tag,
-            )
-            return OrderRequest(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                product=Product.MIS,
-                order_type=OrderType.MARKET,
-                price=0.0,
-                tag=tag,
-                strategy_id=self.session_tag,
-            )
+            raw_limit = px * (1.0 + buffer_pct)
+            if upper_c > 0:
+                raw_limit = min(raw_limit, upper_c)
+            limit_px = ceil_to_tick(raw_limit, tick)
+
+        return OrderRequest(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            product=Product.MIS,
+            order_type=OrderType.LIMIT,
+            price=limit_px,
+            tag=tag,
+            strategy_id=self.session_tag,
+        )
 
     def audit_startup_state(self, watched_symbols: list[str]) -> ReconciliationStatus:
         """Run on startup and reconnect to verify position state against broker.
@@ -487,12 +482,19 @@ class Reconciler:
                     strategy_order_ids.append(o.order_id)
                     try:
                         self.broker.cancel_order(o.order_id)
-                        self._confirm_order_terminal(o.order_id, timeout_sec=1.5)
+                        term_st = self._confirm_order_terminal(o.order_id, timeout_sec=1.5)
+                        term_status = getattr(term_st, "status", None)
+                        if not term_st or term_status not in (OrderStatus.COMPLETE, OrderStatus.CANCELLED, OrderStatus.REJECTED):
+                            logger.warning(
+                                "Order %s cancel unconfirmed (status=%s) during flatten; will verify net positions before submitting exit",
+                                o.order_id,
+                                term_status,
+                            )
                         self.journal.log_event(
                             event_type="CANCEL_PENDING_ORDER",
                             symbol=o.request.symbol,
-                            data={"order_id": o.order_id},
-                            explanation=f"Cancelled pending strategy order {o.order_id}",
+                            data={"order_id": o.order_id, "terminal_status": str(term_status)},
+                            explanation=f"Cancelled pending strategy order {o.order_id} (terminal status: {term_status})",
                         )
                     except Exception as ce:
                         logger.warning("Could not cancel order %s during flatten: %s", o.order_id, ce)
@@ -531,8 +533,8 @@ class Reconciler:
             if managed.phase == PositionPhase.EXITING and managed.exit_order_id:
                 try:
                     ex_st = self.broker.get_order_status(managed.exit_order_id)
-                    if ex_st and ex_st.status in (OrderStatus.OPEN, OrderStatus.PENDING, OrderStatus.TRIGGER_PENDING):
-                        logger.info("Exit order %s for %s already in-flight; polling fill instead of duplicate exit.", managed.exit_order_id, managed.symbol)
+                    if ex_st and ex_st.status not in (OrderStatus.COMPLETE, OrderStatus.CANCELLED, OrderStatus.REJECTED):
+                        logger.info("Exit order %s for %s already in-flight (status=%s); polling fill instead of duplicate exit.", managed.exit_order_id, managed.symbol, ex_st.status)
                         exit_orders[managed.symbol] = managed.exit_order_id
                         continue
                 except Exception:
@@ -562,14 +564,21 @@ class Reconciler:
                     continue
 
                 # If stop order status is still open/live on exchange, retry confirmation once more
-                if term_status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING, OrderStatus.PENDING):
+                IN_FLIGHT_STATUSES = (
+                    OrderStatus.OPEN,
+                    OrderStatus.TRIGGER_PENDING,
+                    OrderStatus.PENDING,
+                    OrderStatus.PARTIALLY_FILLED,
+                    OrderStatus.UNKNOWN,
+                )
+                if term_status in IN_FLIGHT_STATUSES:
                     term_st = self._confirm_order_terminal(managed.protective_order_id, timeout_sec=2.0)
                     term_status = getattr(term_st, "status", None)
                     if term_status == OrderStatus.COMPLETE:
                         managed.phase = PositionPhase.CLOSED
                         managed.quantity = 0
                         continue
-                    if term_status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING, OrderStatus.PENDING):
+                    if term_status in IN_FLIGHT_STATUSES:
                         # Still live: REFUSE to place an overlapping exit order to prevent duplicate fill!
                         err_msg = f"Stop order {managed.protective_order_id} for {managed.symbol} unconfirmed ({term_status}) during flatten. Deferring exit order to prevent double-fill."
                         logger.critical(err_msg)
@@ -582,15 +591,47 @@ class Reconciler:
                         )
                         continue
 
+            # Reconcile against verified broker net position before submitting exit
+            try:
+                refreshed_pos = [
+                    p for p in self.broker.get_positions()
+                    if p.symbol == managed.symbol and getattr(p, "product", Product.MIS) == Product.MIS
+                ]
+                if refreshed_pos:
+                    net_qty = abs(refreshed_pos[0].quantity)
+                    if net_qty == 0:
+                        logger.info("Position %s already flat on broker (qty=0); skipping duplicate exit.", managed.symbol)
+                        managed.phase = PositionPhase.CLOSED
+                        managed.quantity = 0
+                        continue
+                    bp_qty = net_qty
+                    bp_side = Side.SELL if refreshed_pos[0].quantity < 0 else (getattr(refreshed_pos[0], "side", None) or managed.side or Side.BUY)
+                    managed.side = bp_side
+                else:
+                    logger.info("No open broker position found for %s; position confirmed flat.", managed.symbol)
+                    managed.phase = PositionPhase.CLOSED
+                    managed.quantity = 0
+                    continue
+            except Exception as pe:
+                logger.warning("Error refreshing broker position for %s: %s", managed.symbol, pe)
+
             exit_side = Side.SELL if bp_side == Side.BUY else Side.BUY
             exit_qty = bp_qty
+
+            ref_px = 0.0
+            if hasattr(bp, "current_price") and isinstance(bp.current_price, (int, float)) and bp.current_price > 0:
+                ref_px = float(bp.current_price)
+            elif hasattr(bp, "average_entry") and isinstance(bp.average_entry, (int, float)) and bp.average_entry > 0:
+                ref_px = float(bp.average_entry)
+            elif hasattr(managed, "average_entry") and isinstance(managed.average_entry, (int, float)) and managed.average_entry > 0:
+                ref_px = float(managed.average_entry)
 
             exit_req = self._create_exit_order_request(
                 symbol=managed.symbol,
                 side=exit_side,
                 quantity=exit_qty,
                 tag=make_broker_tag(self.session_tag, managed.symbol, "FLT"),
-                current_price=getattr(bp, "average_entry", 0.0),
+                current_price=ref_px,
             )
 
             try:

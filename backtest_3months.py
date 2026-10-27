@@ -221,11 +221,7 @@ def resolve_position_bar_exit(
                 else high >= candidate_stop
             )
             if lock_stop_hit:
-                fill = (
-                    min(candidate_stop, open_price)
-                    if side == Side.BUY
-                    else max(candidate_stop, open_price)
-                )
+                fill = candidate_stop
                 return (fill, "FEE_LOCK_STOP"), candidate_stop, True
 
             target_event = resolve_bar_exit(

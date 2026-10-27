@@ -164,14 +164,15 @@ def run_app():
     import threading
 
     def _trading_loop():
-        logger.info("Autonomous Strategy Execution Thread started (Interval: 3.0s).")
+        logger.info("Autonomous Strategy Execution Thread started (Interval: dynamic 0.5s in-flight / 3.0s idle).")
         while True:
             try:
                 now = datetime.now(IST)
                 engine.evaluate_step(now)
             except Exception as e:
                 logger.error("Error in autonomous trading loop: %s", e)
-            time.sleep(3.0)
+            sleep_time = 0.5 if getattr(engine, "has_in_flight_orders", lambda: False)() else 3.0
+            time.sleep(sleep_time)
 
     loop_thread = threading.Thread(target=_trading_loop, daemon=True, name="Apex3TradingLoop")
     loop_thread.start()

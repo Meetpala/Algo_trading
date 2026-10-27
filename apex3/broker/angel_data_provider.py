@@ -357,7 +357,21 @@ class AngelDataProvider:
                         t_str = row[0]
                         dt = datetime.fromisoformat(t_str.replace("Z", "+00:00")).astimezone(IST)
                         now_ist = datetime.now(IST)
-                        tf_min = 5 if "FIVE" in str(interval).upper() else 5
+                        int_upper = str(interval).upper()
+                        if "1MIN" in int_upper or "1M" in int_upper or "ONE_MIN" in int_upper or int_upper == "MINUTE":
+                            tf_min = 1
+                        elif "3MIN" in int_upper or "3M" in int_upper or "THREE_MIN" in int_upper:
+                            tf_min = 3
+                        elif "15MIN" in int_upper or "15M" in int_upper or "FIFTEEN" in int_upper:
+                            tf_min = 15
+                        elif "30MIN" in int_upper or "30M" in int_upper or "THIRTY" in int_upper:
+                            tf_min = 30
+                        elif "60MIN" in int_upper or "60M" in int_upper or "1H" in int_upper or "HOUR" in int_upper:
+                            tf_min = 60
+                        elif "1D" in int_upper or "DAY" in int_upper:
+                            tf_min = 1440
+                        else:
+                            tf_min = 5
                         is_done = now_ist >= (dt + timedelta(minutes=tf_min))
                         candles.append(
                             Candle(

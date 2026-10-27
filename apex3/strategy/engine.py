@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time as time_mod
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from typing import Optional
@@ -154,61 +155,87 @@ class StrategyEngine:
         tag: str,
         current_price: float = 0.0,
     ) -> OrderRequest:
-        """Create an exit order request. If exit_order_type is LIMIT, creates aggressive marketable limit."""
-        exit_cfg_type = getattr(getattr(self.config, "entry", None), "exit_order_type", "LIMIT")
-        if str(exit_cfg_type).upper() == "LIMIT":
-            inst = self.broker.get_instrument_info(symbol)
-            tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
-            buffer_pct = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.5) / 100.0
+        """Create an exchange-compliant, bounded marketable limit exit order request.
 
-            # Prioritize live quote from exchange to verify current price
-            px = 0.0
+        Under NSE Retail Algo guidelines, algorithmic market orders are prohibited.
+        All exits must be bounded limit orders priced using fresh quotes (best bid for SELL,
+        best ask for BUY) and constrained within circuit limits and configured slippage caps.
+        """
+        inst = self.broker.get_instrument_info(symbol)
+        tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
+
+        # Enforce max_slippage_pct cap on marketable limit buffer
+        max_slip = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15) if self.config else 0.15
+        cfg_buf = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.15) if self.config else 0.15
+        buffer_pct = min(cfg_buf, max_slip) / 100.0
+
+        # Query fresh executable quote (best bid for SELL, best ask for BUY)
+        px = 0.0
+        for _ in range(3):
             try:
                 q = self.broker.get_quote(symbol)
                 if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0:
-                    px = float(q.last_price)
+                    if side == Side.SELL and isinstance(getattr(q, "bid", None), (int, float)) and q.bid > 0:
+                        px = float(q.bid)
+                    elif side == Side.BUY and isinstance(getattr(q, "ask", None), (int, float)) and q.ask > 0:
+                        px = float(q.ask)
+                    else:
+                        px = float(q.last_price)
+                    if px > 0.0:
+                        break
             except Exception:
                 pass
-            if px <= 0.0:
-                px = float(current_price) if isinstance(current_price, (int, float)) and current_price > 0 else 0.0
-            if px <= 0.0:
-                raise ValueError(f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})")
+            time_mod.sleep(0.05)
 
-            lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
-            upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
+        if px <= 0.0 and isinstance(current_price, (int, float)) and current_price > 0:
+            px = float(current_price)
 
-            if side == Side.SELL:
-                raw_limit = px * (1.0 - buffer_pct)
-                if lower_c > 0:
-                    raw_limit = max(raw_limit, lower_c)
-                limit_px = floor_to_tick(raw_limit, tick)
+        lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
+        upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
+
+        if px <= 0.0:
+            # Fall back to circuit limits if no quote or price reference is available
+            if side == Side.SELL and lower_c > 0:
+                logger.warning("No price quote for exit %s; using lower circuit %.2f as bound", symbol, lower_c)
+                px = lower_c
+            elif side == Side.BUY and upper_c > 0:
+                logger.warning("No price quote for exit %s; using upper circuit %.2f as bound", symbol, upper_c)
+                px = upper_c
             else:
-                raw_limit = px * (1.0 + buffer_pct)
-                if upper_c > 0:
-                    raw_limit = min(raw_limit, upper_c)
-                limit_px = ceil_to_tick(raw_limit, tick)
+                err_msg = f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})"
+                logger.critical(err_msg)
+                raise ValueError(err_msg)
 
-            return OrderRequest(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                product=Product.MIS,
-                order_type=OrderType.LIMIT,
-                price=limit_px,
-                tag=tag,
-                strategy_id=self.session_tag,
-            )
+        if side == Side.SELL:
+            raw_limit = px * (1.0 - buffer_pct)
+            if lower_c > 0:
+                raw_limit = max(raw_limit, lower_c)
+            limit_px = floor_to_tick(raw_limit, tick)
         else:
-            return OrderRequest(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                product=Product.MIS,
-                order_type=OrderType.MARKET,
-                price=0.0,
-                tag=tag,
-                strategy_id=self.session_tag,
-            )
+            raw_limit = px * (1.0 + buffer_pct)
+            if upper_c > 0:
+                raw_limit = min(raw_limit, upper_c)
+            limit_px = ceil_to_tick(raw_limit, tick)
+
+        return OrderRequest(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            product=Product.MIS,
+            order_type=OrderType.LIMIT,
+            price=limit_px,
+            tag=tag,
+            strategy_id=self.session_tag,
+        )
+
+    def has_in_flight_orders(self) -> bool:
+        """Return True if any managed position has orders in-flight or is unprotected."""
+        for pos in self.state_manager.positions.values():
+            if pos.phase in (PositionPhase.ENTERING, PositionPhase.OPEN_UNPROTECTED, PositionPhase.EXITING):
+                return True
+            if pos.phase == PositionPhase.OPEN_PROTECTED and not pos.protective_order_id:
+                return True
+        return False
 
     def get_active_watchlist(self) -> list[str]:
         """Return manual symbols or the full scanner candidate universe."""

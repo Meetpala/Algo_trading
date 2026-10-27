@@ -28,6 +28,8 @@ from apex3.config import AppConfig
 from apex3.journal.sqlite_journal import Journal
 from apex3.strategy.engine import StrategyEngine
 
+import secrets
+
 IST = ZoneInfo("Asia/Kolkata")
 
 
@@ -39,12 +41,40 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         static_folder=os.path.join(os.path.dirname(__file__), "static"),
     )
 
+    def _get_operator_token() -> str:
+        return (
+            os.environ.get("DASHBOARD_API_TOKEN")
+            or getattr(getattr(config, "dashboard", None), "api_token", "")
+            or "apex3_secure_operator_token"
+        )
+
+    def _is_authorized() -> bool:
+        """Verify operator authorization for state-mutating endpoints."""
+        auth_required = bool(getattr(getattr(config, "dashboard", None), "auth_required", False))
+        remote = request.remote_addr or ""
+        is_loopback = remote in ("127.0.0.1", "localhost", "::1", "testclient")
+
+        expected_token = _get_operator_token()
+        if auth_required or not is_loopback:
+            if not expected_token:
+                return False
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                token = auth_header[7:].strip()
+            else:
+                token = request.headers.get("X-Operator-Token") or request.headers.get("X-API-Key") or ""
+            if not token or not secrets.compare_digest(token, expected_token):
+                return False
+        return True
+
     @app.before_request
     def restrict_to_localhost():
-        # Prevent unauthorized external exposure
+        # Prevent unauthorized external exposure unless protected
         remote = request.remote_addr or ""
+        auth_required = bool(getattr(getattr(config, "dashboard", None), "auth_required", False))
         if remote not in ("127.0.0.1", "localhost", "::1", "testclient"):
-            return jsonify({"error": "Forbidden: APEX-3 Dashboard is strictly bound to localhost (127.0.0.1)"}), 403
+            if not auth_required:
+                return jsonify({"error": "Forbidden: APEX-3 Dashboard is strictly bound to localhost unless auth_required is enabled."}), 403
 
         # CSRF Protection: For mutating requests, verify Origin or Referer is strictly from loopback
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):
@@ -58,7 +88,7 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
     @app.route("/")
     def index():
-        return render_template("dashboard.html", mode=config.mode)
+        return render_template("dashboard.html", mode=config.mode, operator_token=_get_operator_token())
 
     @app.route("/login/kite")
     def login_kite():
@@ -258,6 +288,8 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
     @app.route("/api/watchlist", methods=["POST"])
     def update_watchlist():
         """Update the manual watchlist (up to 3 symbols)."""
+        if not _is_authorized():
+            return jsonify({"status": "error", "message": "Unauthorized: valid operator token required"}), 401
         data = request.json or {}
         raw_symbols = data.get("symbols", [])
         if not isinstance(raw_symbols, list):
@@ -269,6 +301,8 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
     @app.route("/api/pause", methods=["POST"])
     def toggle_pause():
         """Pause or resume strategy evaluation."""
+        if not _is_authorized():
+            return jsonify({"status": "error", "message": "Unauthorized: valid operator token required"}), 401
         data = request.json or {}
         pause_req = data.get("pause", not engine.is_paused)
         engine.is_paused = pause_req
@@ -278,6 +312,8 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
     @app.route("/api/emergency_flatten", methods=["POST"])
     def emergency_flatten():
         """Trigger emergency square-off sequence serialized with engine execution lock."""
+        if not _is_authorized():
+            return jsonify({"status": "error", "message": "Unauthorized: valid operator token required"}), 401
         lock = getattr(engine, "_execution_lock", None)
         if lock:
             with lock:

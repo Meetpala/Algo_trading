@@ -77,6 +77,11 @@ def _map_kite_order_status(status_str: str) -> OrderStatus:
         "UPDATE": OrderStatus.OPEN,
         "PUT ORDER REQ RECEIVED": OrderStatus.PENDING,
         "VALIDATION PENDING": OrderStatus.PENDING,
+        "OPEN PENDING": OrderStatus.PENDING,
+        "MODIFY PENDING": OrderStatus.PENDING,
+        "MODIFY VALIDATION PENDING": OrderStatus.PENDING,
+        "CANCEL PENDING": OrderStatus.PENDING,
+        "AMO REQ RECEIVED": OrderStatus.PENDING,
     }
     return mapping.get(s, OrderStatus.UNKNOWN)
 
@@ -627,6 +632,47 @@ class KiteAdapter(BrokerInterface):
             lower_c = 0.0
 
         token_str = str(inst.get("instrument_token", "")) if inst else ""
+
+        # Validate actual broker-side MIS eligibility (segment, equity series, and margin rules)
+        mis_eligible = False
+        if inst and inst.get("segment") == "NSE" and inst.get("instrument_type") == "EQ":
+            clean_sym = symbol.upper()
+            # SEBI / NSE restricted surveillance or trade-to-trade series prohibit intraday MIS
+            if not any(clean_sym.endswith(sfx) for sfx in ("-BE", "-BZ", "-SM", "-ST", "-E1", "-SZ", "-IL")):
+                mis_eligible = True
+                if self._kite and self._access_token:
+                    try:
+                        if not hasattr(self, "_mis_margin_cache"):
+                            self._mis_margin_cache = {}
+                        if symbol in self._mis_margin_cache:
+                            mis_eligible = self._mis_margin_cache[symbol]
+                        else:
+                            ref_price = float(q_data.get("last_price", 100.0) or 100.0)
+                            if ref_price <= 0:
+                                ref_price = 100.0
+                            m_res = self._kite.order_margins([{
+                                "exchange": exchange,
+                                "tradingsymbol": symbol,
+                                "transaction_type": "BUY",
+                                "variety": "regular",
+                                "product": "MIS",
+                                "order_type": "LIMIT",
+                                "quantity": 1,
+                                "price": ref_price,
+                            }])
+                            if m_res and isinstance(m_res, list) and m_res[0].get("total", 0) > 0:
+                                mis_eligible = True
+                            elif m_res and isinstance(m_res, list) and "error" in m_res[0]:
+                                mis_eligible = False
+                            self._mis_margin_cache[symbol] = mis_eligible
+                    except Exception as me:
+                        err_str = str(me).upper()
+                        if "MIS" in err_str or "NOT ALLOWED" in err_str or "BLOCKED" in err_str:
+                            mis_eligible = False
+                            if not hasattr(self, "_mis_margin_cache"):
+                                self._mis_margin_cache = {}
+                            self._mis_margin_cache[symbol] = False
+
         return InstrumentInfo(
             symbol=symbol,
             exchange=exchange,
@@ -635,7 +681,7 @@ class KiteAdapter(BrokerInterface):
             tick_size=tick,
             lot_size=int(inst.get("lot_size", 1)) if inst else 1,
             instrument_token=token_str,
-            mis_available=bool(inst is not None),
+            mis_available=mis_eligible,
         )
 
     # ── Session ──────────────────────────────────────────────────

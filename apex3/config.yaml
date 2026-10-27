@@ -99,8 +99,8 @@ radar:
 # --- Auxiliary Compatibility Sections ---
 entry:
   order_type: "LIMIT"
-  exit_order_type: "LIMIT"          # "LIMIT" (marketable limit) or "MARKET"
-  marketable_limit_buffer_pct: 0.5  # 0.5% buffer for aggressive marketable limit fills
+  exit_order_type: "LIMIT"          # "LIMIT" (marketable limit) strictly enforced per NSE algo rules
+  marketable_limit_buffer_pct: 0.15 # Bounded by max_slippage_pct (0.15%)
   max_slippage_pct: 0.15
   unfilled_timeout_sec: 30
   max_retries: 1
@@ -119,14 +119,18 @@ schedule:
   holidays_2026:
     - "2026-01-15"  # Makar Sankranti / Municipal Election Day
     - "2026-01-26"  # Republic Day
+    - "2026-02-19"  # Chhatrapati Shivaji Maharaj Jayanti
     - "2026-03-03"  # Holi
+    - "2026-03-19"  # Id-Ul-Fitr (Ramzan Id)
     - "2026-03-26"  # Shri Ram Navami
     - "2026-03-31"  # Shri Mahavir Jayanti
+    - "2026-04-01"  # Annual Bank Account Closing
     - "2026-04-03"  # Good Friday
     - "2026-04-14"  # Dr. Baba Saheb Ambedkar Jayanti
     - "2026-05-01"  # Maharashtra Day
     - "2026-05-28"  # Bakri Id
     - "2026-06-26"  # Muharram
+    - "2026-08-26"  # Id-e-Milad
     - "2026-09-14"  # Ganesh Chaturthi
     - "2026-10-02"  # Mahatma Gandhi Jayanti
     - "2026-10-20"  # Dussehra
@@ -140,7 +144,8 @@ schedule:
 dashboard:
   host: "127.0.0.1"
   port: 5000
-  auth_required: false
+  auth_required: true
+  api_token: "apex3_secure_operator_token"
   refresh_interval_sec: 2
 
 rate_limits:
