@@ -50,6 +50,12 @@ class HybridBrokerAdapter(BrokerInterface):
         """Fetch live quote from Angel One free data feed."""
         return self.data_provider.get_quote(symbol=symbol, exchange=exchange)
 
+    def get_quotes_batch(self, symbols: list[str], exchange: str = "NSE") -> dict[str, Quote]:
+        """Fetch batch quotes from Angel One free data feed in a single snapshot."""
+        if hasattr(self.data_provider, "get_quotes_batch"):
+            return self.data_provider.get_quotes_batch(symbols, exchange=exchange)
+        return {sym: self.data_provider.get_quote(sym, exchange=exchange) for sym in symbols}
+
     def get_historical(
         self,
         symbol: str,
@@ -68,26 +74,46 @@ class HybridBrokerAdapter(BrokerInterface):
         )
 
     def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
-        """Fetch instrument info, enriching with execution broker circuit limits if available."""
-        info = self.data_provider.get_instrument_info(symbol=symbol, exchange=exchange)
-        if (info.upper_circuit <= 0 or info.lower_circuit <= 0) and hasattr(self.execution_broker, "get_instrument_info"):
+        """Fetch instrument info, using execution broker for execution metadata and data provider for streaming/circuits."""
+        # 1. Query execution broker for authoritative Zerodha execution parameters
+        exec_info: Optional[InstrumentInfo] = None
+        if hasattr(self.execution_broker, "get_instrument_info"):
             try:
                 exec_info = self.execution_broker.get_instrument_info(symbol=symbol, exchange=exchange)
-                if exec_info:
-                    return InstrumentInfo(
-                        symbol=info.symbol,
-                        exchange=info.exchange,
-                        tick_size=exec_info.tick_size or info.tick_size,
-                        lot_size=exec_info.lot_size or info.lot_size,
-                        exchange_token=info.exchange_token or exec_info.exchange_token,
-                        instrument_token=info.instrument_token or exec_info.instrument_token,
-                        upper_circuit=exec_info.upper_circuit if exec_info.upper_circuit > 0 else info.upper_circuit,
-                        lower_circuit=exec_info.lower_circuit if exec_info.lower_circuit > 0 else info.lower_circuit,
-                        mis_available=exec_info.mis_available,
-                    )
-            except Exception:
-                pass
-        return info
+            except Exception as e:
+                logger.warning("Could not fetch execution broker instrument info for %s: %s", symbol, e)
+
+        # 2. Query data provider for Angel streaming token and cached circuits
+        data_info = self.data_provider.get_instrument_info(symbol=symbol, exchange=exchange)
+
+        if exec_info is not None:
+            up_c = data_info.upper_circuit if data_info.upper_circuit > 0 else exec_info.upper_circuit
+            low_c = data_info.lower_circuit if data_info.lower_circuit > 0 else exec_info.lower_circuit
+            return InstrumentInfo(
+                symbol=exec_info.symbol,
+                exchange=exec_info.exchange,
+                tick_size=exec_info.tick_size if exec_info.tick_size > 0 else data_info.tick_size,
+                lot_size=exec_info.lot_size if exec_info.lot_size > 0 else data_info.lot_size,
+                exchange_token=data_info.exchange_token or getattr(data_info, "instrument_token", ""),
+                instrument_token=exec_info.instrument_token or data_info.instrument_token,
+                upper_circuit=up_c,
+                lower_circuit=low_c,
+                mis_available=exec_info.mis_available,
+            )
+
+        # If execution broker info is missing, fail safe by marking mis_available as False
+        logger.warning("Execution broker instrument info unavailable for %s; refusing to assume MIS eligibility", symbol)
+        return InstrumentInfo(
+            symbol=data_info.symbol,
+            exchange=data_info.exchange,
+            tick_size=data_info.tick_size,
+            lot_size=data_info.lot_size,
+            exchange_token=getattr(data_info, "instrument_token", ""),
+            instrument_token=getattr(data_info, "instrument_token", ""),
+            upper_circuit=data_info.upper_circuit,
+            lower_circuit=data_info.lower_circuit,
+            mis_available=False,
+        )
 
     # ── Order Execution & Portfolio (Delegated to Zerodha Personal) ──
 

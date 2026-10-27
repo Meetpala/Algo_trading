@@ -428,6 +428,10 @@ class PaperBroker(BrokerInterface):
             if p.quantity > 0
         ]
 
+    def get_quotes_batch(self, symbols: list[str], exchange: str = "NSE") -> dict[str, Quote]:
+        """Return latest simulated quotes for multiple symbols."""
+        return {sym: self.get_quote(sym, exchange=exchange) for sym in symbols}
+
     def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
         """Return the latest simulated quote for a symbol.
 

@@ -132,13 +132,166 @@ class AngelDataProvider:
         logger.error("Unknown Angel One token mapping for symbol %s in %s (no default fallback)", clean, exchange)
         return ""
 
+    def _parse_market_item(self, item: dict, symbol: str, exchange: str) -> Quote:
+        """Parse raw SmartAPI getMarketData item into Quote with strict freshness checks."""
+        clean = symbol.replace("-EQ", "").upper()
+        token = str(item.get("symbolToken", ""))
+        is_index = clean in ("NIFTY 50", "NIFTY", "NSEI", "^NSEI", "NIFTY BANK", "BANKNIFTY") or token == "99926000"
+
+        ltp = float(item.get("ltp", 0.0) or 0.0)
+        depth = item.get("depth", {})
+        buy_levels = depth.get("buy", []) if isinstance(depth, dict) else []
+        sell_levels = depth.get("sell", []) if isinstance(depth, dict) else []
+
+        best_bid = float(buy_levels[0].get("price", 0.0) or 0.0) if buy_levels else 0.0
+        best_ask = float(sell_levels[0].get("price", 0.0) or 0.0) if sell_levels else 0.0
+        vol = int(item.get("tradeVolume", item.get("volume", 0)) or 0)
+
+        # Cache exchange circuit limits
+        up_c = float(item.get("upperCircuit", 0.0) or 0.0)
+        low_c = float(item.get("lowerCircuit", 0.0) or 0.0)
+        if up_c > 0 and low_c > 0:
+            self._circuit_cache[clean] = (low_c, up_c)
+
+        # Parse exchange feed timestamp (FAIL CLOSED IF MISSING — do NOT invent from local time)
+        feed_str = item.get("exchFeedTime") or item.get("exchTradeTime")
+        feed_dt = None
+        if feed_str:
+            for fmt in ("%d-%b-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S"):
+                try:
+                    feed_dt = datetime.strptime(feed_str, fmt).replace(tzinfo=IST)
+                    break
+                except Exception:
+                    pass
+
+        now_ist = datetime.now(IST)
+        if feed_dt is not None:
+            age_sec = (now_ist - feed_dt).total_seconds()
+            is_time_fresh = (-1.0 <= age_sec <= 2.0)
+            quote_ts = feed_dt
+        else:
+            is_time_fresh = False
+            quote_ts = now_ist
+
+        if is_index:
+            # Index quotes do not have order-book depth on the exchange.
+            # Validity requires real exchange timestamp and positive LTP.
+            is_fresh = bool(feed_dt is not None and is_time_fresh and ltp > 0.0)
+        else:
+            # Stock quotes require real exchange timestamp, positive LTP, and valid top-of-book depth
+            is_valid_depth = (best_bid > 0.0 and best_ask > 0.0 and best_ask >= best_bid)
+            is_fresh = bool(feed_dt is not None and is_time_fresh and ltp > 0.0 and is_valid_depth)
+
+        return Quote(
+            symbol=clean,
+            exchange=exchange,
+            last_price=ltp,
+            bid=best_bid,
+            ask=best_ask,
+            volume=vol,
+            timestamp=quote_ts,
+            is_fresh=is_fresh,
+        )
+
+    def get_quotes_batch(self, symbols: list[str], exchange: str = "NSE") -> dict[str, Quote]:
+        """Fetch live quote snapshots for multiple symbols in a single batch request."""
+        quotes: dict[str, Quote] = {}
+        now_ist = datetime.now(IST)
+
+        clean_symbols = [s.replace("-EQ", "").upper() for s in symbols]
+        tokens_map: dict[str, str] = {}
+        for sym in clean_symbols:
+            tok = self.resolve_token(sym, exchange)
+            if tok:
+                tokens_map[tok] = sym
+            else:
+                quotes[sym] = Quote(
+                    symbol=sym,
+                    exchange=exchange,
+                    last_price=0.0,
+                    bid=0.0,
+                    ask=0.0,
+                    volume=0,
+                    timestamp=now_ist,
+                    is_fresh=False,
+                )
+
+        if not tokens_map or not self._smart_api:
+            for sym in clean_symbols:
+                if sym not in quotes:
+                    quotes[sym] = Quote(
+                        symbol=sym,
+                        exchange=exchange,
+                        last_price=0.0,
+                        bid=0.0,
+                        ask=0.0,
+                        volume=0,
+                        timestamp=now_ist,
+                        is_fresh=False,
+                    )
+            return quotes
+
+        if self._rate_limiter:
+            acquired = self._rate_limiter.acquire("quotes", timeout=2.0)
+            if not acquired:
+                logger.warning("Rate limit timeout acquiring quotes token for batch (%d symbols)", len(tokens_map))
+                for sym in clean_symbols:
+                    if sym not in quotes:
+                        quotes[sym] = Quote(
+                            symbol=sym,
+                            exchange=exchange,
+                            last_price=0.0,
+                            bid=0.0,
+                            ask=0.0,
+                            volume=0,
+                            timestamp=now_ist,
+                            is_fresh=False,
+                        )
+                return quotes
+
+        token_list = list(tokens_map.keys())
+        chunk_size = 50
+        for i in range(0, len(token_list), chunk_size):
+            chunk = token_list[i : i + chunk_size]
+            try:
+                if hasattr(self._smart_api, "getMarketData"):
+                    m_data = self._smart_api.getMarketData(
+                        mode="FULL",
+                        exchangeTokens={exchange: chunk},
+                    )
+                    if m_data and m_data.get("status") and "data" in m_data:
+                        fetched = m_data["data"].get("fetched", [])
+                        for item in fetched:
+                            tok = str(item.get("symbolToken", ""))
+                            sym = tokens_map.get(tok)
+                            if sym:
+                                quotes[sym] = self._parse_market_item(item, sym, exchange)
+            except Exception as e:
+                logger.error("Error in getMarketData batch chunk: %s", e)
+
+        # Fallback for any symbols missing in batch response
+        for sym in clean_symbols:
+            if sym not in quotes:
+                quotes[sym] = Quote(
+                    symbol=sym,
+                    exchange=exchange,
+                    last_price=0.0,
+                    bid=0.0,
+                    ask=0.0,
+                    volume=0,
+                    timestamp=now_ist,
+                    is_fresh=False,
+                )
+
+        return quotes
+
     def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
         """Fetch live quote snapshot from Angel One with true market depth and exchange timestamp."""
+        res = self.get_quotes_batch([symbol], exchange=exchange)
         clean = symbol.replace("-EQ", "").upper()
-        token = self.resolve_token(clean, exchange)
-        if not token:
-            logger.error("Refusing quote fetch for unmapped symbol %s; failing closed.", clean)
-            return Quote(
+        return res.get(
+            clean,
+            Quote(
                 symbol=clean,
                 exchange=exchange,
                 last_price=0.0,
@@ -147,115 +300,7 @@ class AngelDataProvider:
                 volume=0,
                 timestamp=datetime.now(IST),
                 is_fresh=False,
-            )
-
-        if self._smart_api:
-            # 1. Enforce rate limiting
-            if self._rate_limiter:
-                acquired = self._rate_limiter.acquire("quotes", timeout=2.0)
-                if not acquired:
-                    logger.warning("Rate limit timeout acquiring quotes token for %s", clean)
-                    return Quote(
-                        symbol=clean,
-                        exchange=exchange,
-                        last_price=0.0,
-                        bid=0.0,
-                        ask=0.0,
-                        volume=0,
-                        timestamp=datetime.now(IST),
-                        is_fresh=False,
-                    )
-
-            # 2. Query FULL market data with orderbook depth and exchange timestamps
-            try:
-                if hasattr(self._smart_api, "getMarketData"):
-                    m_data = self._smart_api.getMarketData(
-                        mode="FULL",
-                        exchangeTokens={exchange: [token]},
-                    )
-                    if m_data and m_data.get("status") and "data" in m_data:
-                        fetched = m_data["data"].get("fetched", [])
-                        if fetched:
-                            item = fetched[0]
-                            ltp = float(item.get("ltp", 0.0))
-                            depth = item.get("depth", {})
-                            buy_levels = depth.get("buy", []) if isinstance(depth, dict) else []
-                            sell_levels = depth.get("sell", []) if isinstance(depth, dict) else []
-
-                            best_bid = float(buy_levels[0].get("price", 0.0)) if buy_levels else 0.0
-                            best_ask = float(sell_levels[0].get("price", 0.0)) if sell_levels else 0.0
-                            vol = int(item.get("tradeVolume", item.get("volume", 0)) or 0)
-
-                            # Cache exchange circuit limits
-                            up_c = float(item.get("upperCircuit", 0.0) or 0.0)
-                            low_c = float(item.get("lowerCircuit", 0.0) or 0.0)
-                            if up_c > 0 and low_c > 0:
-                                self._circuit_cache[clean] = (low_c, up_c)
-
-                            # Parse exchange feed timestamp
-                            feed_str = item.get("exchFeedTime") or item.get("exchTradeTime")
-                            feed_dt = None
-                            if feed_str:
-                                for fmt in ("%d-%b-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S"):
-                                    try:
-                                        feed_dt = datetime.strptime(feed_str, fmt).replace(tzinfo=IST)
-                                        break
-                                    except Exception:
-                                        pass
-                            if not feed_dt:
-                                feed_dt = datetime.now(IST)
-
-                            # Validate market depth and spread validity
-                            is_valid_depth = (best_bid > 0 and best_ask > 0 and best_ask >= best_bid)
-                            is_fresh = bool(ltp > 0 and is_valid_depth)
-
-                            return Quote(
-                                symbol=clean,
-                                exchange=exchange,
-                                last_price=ltp,
-                                bid=best_bid,
-                                ask=best_ask,
-                                volume=vol,
-                                timestamp=feed_dt,
-                                is_fresh=is_fresh,
-                            )
-            except Exception as e_full:
-                logger.debug("getMarketData FULL not available or failed for %s: %s; trying ltpData fallback", clean, e_full)
-
-            # 3. Secondary fallback: ltpData (LTP only, no depth -> bid=0, ask=0, marked is_fresh=False)
-            try:
-                trading_symbol = f"{clean}-EQ" if exchange == "NSE" and clean != "NIFTY" else clean
-                res = self._smart_api.ltpData(
-                    exchange=exchange,
-                    tradingsymbol=trading_symbol,
-                    symboltoken=token,
-                )
-                if res and res.get("status") and "data" in res:
-                    data = res["data"]
-                    ltp = float(data.get("ltp", 0.0))
-                    return Quote(
-                        symbol=clean,
-                        exchange=exchange,
-                        last_price=ltp,
-                        bid=0.0,
-                        ask=0.0,
-                        volume=int(data.get("volume", 0)),
-                        timestamp=datetime.now(IST),
-                        is_fresh=False,  # Fails closed on entry gates due to lack of verified depth
-                    )
-            except Exception as e:
-                logger.error("Angel One get_quote error for %s: %s", clean, e)
-
-        # Fail closed: never fabricate prices
-        return Quote(
-            symbol=clean,
-            exchange=exchange,
-            last_price=0.0,
-            bid=0.0,
-            ask=0.0,
-            volume=0,
-            timestamp=datetime.now(IST),
-            is_fresh=False,
+            ),
         )
 
     def get_historical(

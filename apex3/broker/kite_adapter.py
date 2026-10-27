@@ -440,14 +440,8 @@ class KiteAdapter(BrokerInterface):
 
     # ── Market Data ──────────────────────────────────────────────
 
-    def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
-        """Fetch a live quote snapshot from Kite with verified source timestamp and depth."""
-        self._require_kite()
-        self._acquire_rate_limit("quotes")
-        instrument_key = f"{exchange}:{symbol}"
-        data = self._kite.quote(instrument_key)
-        q = data[instrument_key]
-
+    def _parse_kite_quote(self, symbol: str, q: dict, exchange: str = "NSE") -> Quote:
+        """Parse raw Kite quote dictionary into Quote with strict freshness checks."""
         depth = q.get("depth", {})
         buys = depth.get("buy", [])
         sells = depth.get("sell", [])
@@ -459,11 +453,9 @@ class KiteAdapter(BrokerInterface):
             bid = float(buys[0]["price"])
             ask = float(sells[0]["price"])
         else:
-            # Reject missing depth; do NOT fabricate zero spread by substituting LTP
             bid = 0.0
             ask = 0.0
 
-        # Extract verified broker/source timestamp if present
         source_ts = q.get("timestamp") or q.get("last_trade_time")
         quote_ts = None
         has_valid_ts = False
@@ -478,10 +470,17 @@ class KiteAdapter(BrokerInterface):
                 quote_ts = None
 
         now_ist = datetime.now(IST)
+        is_index = symbol.upper() in ("NIFTY 50", "NIFTY", "NSEI", "^NSEI", "NIFTY BANK", "BANKNIFTY") or "NIFTY" in symbol.upper()
+
         if has_valid_ts and quote_ts is not None:
             age_sec = (now_ist - quote_ts).total_seconds()
             stale_limit = getattr(self.config.schedule, "stale_threshold_sec", 5) if hasattr(self, "config") and hasattr(self.config, "schedule") else 5
-            is_fresh = bool(has_depth and last_price > 0.0 and 0.0 <= age_sec <= max(stale_limit, 5))
+            is_time_fresh = (0.0 <= age_sec <= max(stale_limit, 2))
+            if is_index:
+                # Indices do not have depth on the exchange
+                is_fresh = bool(last_price > 0.0 and is_time_fresh)
+            else:
+                is_fresh = bool(has_depth and last_price > 0.0 and is_time_fresh)
         else:
             quote_ts = now_ist
             is_fresh = False
@@ -496,6 +495,63 @@ class KiteAdapter(BrokerInterface):
             timestamp=quote_ts,
             is_fresh=is_fresh,
         )
+
+    def get_quotes_batch(self, symbols: list[str], exchange: str = "NSE") -> dict[str, Quote]:
+        """Fetch live quote snapshots for multiple symbols in a single Kite API call."""
+        self._require_kite()
+        self._acquire_rate_limit("quotes")
+        keys = [f"{exchange}:{s}" for s in symbols]
+        try:
+            raw_data = self._kite.quote(keys)
+        except Exception as e:
+            logger.error("Kite batch quote error for %s: %s", symbols, e)
+            now = datetime.now(IST)
+            return {
+                s: Quote(
+                    symbol=s,
+                    exchange=exchange,
+                    last_price=0.0,
+                    bid=0.0,
+                    ask=0.0,
+                    volume=0,
+                    timestamp=now,
+                    is_fresh=False,
+                )
+                for s in symbols
+            }
+
+        quotes: dict[str, Quote] = {}
+        for s in symbols:
+            key = f"{exchange}:{s}"
+            q_dict = raw_data.get(key, {})
+            if q_dict:
+                quotes[s] = self._parse_kite_quote(s, q_dict, exchange=exchange)
+            else:
+                quotes[s] = Quote(
+                    symbol=s,
+                    exchange=exchange,
+                    last_price=0.0,
+                    bid=0.0,
+                    ask=0.0,
+                    volume=0,
+                    timestamp=datetime.now(IST),
+                    is_fresh=False,
+                )
+        return quotes
+
+    def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
+        """Fetch a live quote snapshot from Kite with verified source timestamp and depth."""
+        res = self.get_quotes_batch([symbol], exchange=exchange)
+        return res.get(symbol, Quote(
+            symbol=symbol,
+            exchange=exchange,
+            last_price=0.0,
+            bid=0.0,
+            ask=0.0,
+            volume=0,
+            timestamp=datetime.now(IST),
+            is_fresh=False,
+        ))
 
     def get_historical(
         self,

@@ -204,6 +204,13 @@ class BrokerInterface(ABC):
         """
         ...
 
+    def get_quotes_batch(self, symbols: list[str], exchange: str = "NSE") -> dict[str, Quote]:
+        """Fetch live quote snapshots for multiple symbols in a batch.
+
+        Subclasses may override with native multi-symbol batch APIs.
+        """
+        return {sym: self.get_quote(sym, exchange=exchange) for sym in symbols}
+
     @abstractmethod
     def get_historical(
         self,
