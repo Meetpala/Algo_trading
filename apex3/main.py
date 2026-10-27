@@ -102,6 +102,32 @@ def run_app():
     # Initialize Strategy Engine
     engine = StrategyEngine(config=config, broker=broker, journal=journal)
 
+    if config.mode == "live":
+        from apex3.reconciliation.reconciler import Reconciler
+        logger.info("Executing mandatory pre-flight account state and position reconciliation audit...")
+        reconciler = Reconciler(
+            broker=broker,
+            state_machine=engine.state_machine,
+            journal=journal,
+            session_tag=engine.session_tag,
+            config=config,
+        )
+        watched = list(getattr(config.radar, "core_watchlist", [])) + list(getattr(config.radar, "extended_pool", []))
+        rec_status = reconciler.audit_startup_state(watched_symbols=watched)
+        if not rec_status.is_clean:
+            msg = (
+                f"CRITICAL PRE-FLIGHT AUDIT FAILED: {rec_status.message}. "
+                "Account state is unverified or has conflicting external positions/orders. "
+                "Log into the Kite app, resolve orders and positions manually, and restart."
+            )
+            logger.critical(msg)
+            if not getattr(args, "simulate", False):
+                import sys
+                logger.critical("Aborting live autonomous startup. Engine will NOT start.")
+                sys.exit(1)
+        else:
+            logger.info("PRE-FLIGHT AUDIT PASSED: Account state verified. Flat=%s", rec_status.is_flat)
+
     if args.simulate:
         logger.info("Running simulated trading session...")
         # Run a simulated sequence through the 12-step pipeline

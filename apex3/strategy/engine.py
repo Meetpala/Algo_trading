@@ -157,10 +157,17 @@ class StrategyEngine:
             inst = self.broker.get_instrument_info(symbol)
             tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
             buffer_pct = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.5) / 100.0
-            px = current_price
-            if px <= 0.0:
+
+            # Prioritize live quote from exchange to verify current price
+            px = 0.0
+            try:
                 q = self.broker.get_quote(symbol)
-                px = q.last_price if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0 else 0.0
+                if q and isinstance(getattr(q, "last_price", None), (int, float)) and q.last_price > 0:
+                    px = float(q.last_price)
+            except Exception:
+                pass
+            if px <= 0.0:
+                px = float(current_price) if isinstance(current_price, (int, float)) and current_price > 0 else 0.0
             if px <= 0.0:
                 raise ValueError(f"Cannot construct exit order for {symbol}: valid price quote is required (got {px})")
 
@@ -351,7 +358,62 @@ class StrategyEngine:
                     continue
 
                 if entry_state.status == OrderStatus.COMPLETE or entry_state.filled_quantity > 0:
-                    entry_filled_qty = entry_state.filled_quantity
+                    current_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
+                    if current_fill_qty <= 0:
+                        if entry_state.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
+                            ent_pos.phase = PositionPhase.FLAT
+                            ent_pos.quantity = 0
+                        continue
+
+                    ent_pos.quantity = current_fill_qty
+                    if entry_state.average_price > 0:
+                        ent_pos.average_entry = entry_state.average_price
+                    ent_pos.best_favorable_price = ent_pos.average_entry
+                    ent_pos.r_value = abs(ent_pos.average_entry - ent_pos.initial_stop_price)
+                    inst = self.broker.get_instrument_info(ent_pos.symbol)
+                    tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+                    ent_pos.target_price = calculate_target_price(
+                        side=ent_pos.side,
+                        entry_price=ent_pos.average_entry,
+                        initial_stop=ent_pos.initial_stop_price,
+                        target_r=self.config.stops.target_r,
+                        tick_size=tick,
+                    )
+
+                    exit_side = Side.SELL if ent_pos.side == Side.BUY else Side.BUY
+                    trigger, limit = calculate_stop_limit_prices(
+                        ent_pos.side, ent_pos.initial_stop_price, self.config.stops, tick
+                    )
+
+                    # Place protective stop immediately for filled quantity
+                    if not ent_pos.protective_order_id:
+                        sl_req = OrderRequest(
+                            symbol=ent_pos.symbol,
+                            side=exit_side,
+                            quantity=ent_pos.quantity,
+                            product=Product.MIS,
+                            order_type=OrderType.SL,
+                            price=limit,
+                            trigger_price=trigger,
+                            tag=make_broker_tag(self.session_tag, ent_pos.symbol, "SL"),
+                            strategy_id=self.session_tag,
+                        )
+                        try:
+                            sl_order_id = self.broker.place_order(sl_req)
+                            ent_pos.protective_order_id = sl_order_id
+                        except Exception as sl_err:
+                            logger.error("Failed to place protective stop for pending fill %s: %s", ent_pos.symbol, sl_err)
+                    else:
+                        # Stop order exists: check if quantity needs updating due to fill increase
+                        try:
+                            sl_check = self.broker.get_order_status(ent_pos.protective_order_id)
+                            sl_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
+                            if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_qty < ent_pos.quantity:
+                                logger.info("Modifying protective stop %s for %s from %d to %d shares", ent_pos.protective_order_id, ent_pos.symbol, sl_qty, ent_pos.quantity)
+                                self.broker.modify_order(ent_pos.protective_order_id, quantity=ent_pos.quantity)
+                        except Exception as me:
+                            logger.error("Error updating stop %s for fill increase: %s", ent_pos.protective_order_id, me)
+
                     # On partial fill, cancel the unfilled remainder and wait for terminal confirmation
                     if entry_state.status != OrderStatus.COMPLETE:
                         try:
@@ -359,14 +421,32 @@ class StrategyEngine:
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", ent_pos.symbol, cancel_err)
                         term_state = self._confirm_order_terminal(ent_pos.entry_order_id, timeout_sec=2.0)
-                        if not term_state or term_state.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
-                            logger.warning(
-                                "Entry order %s remainder cancel unconfirmed (%s); keeping in ENTERING",
-                                ent_pos.entry_order_id,
-                                getattr(term_state, "status", "UNKNOWN"),
-                            )
+                        if term_state:
+                            term_filled_qty = int(getattr(term_state, "filled_quantity", 0) or 0)
+                            if term_filled_qty > ent_pos.quantity:
+                                # Late fill occurred while cancelling!
+                                logger.info("Late fill detected during cancel for %s: qty increased from %d to %d", ent_pos.symbol, ent_pos.quantity, term_filled_qty)
+                                ent_pos.quantity = term_filled_qty
+                                if term_state.average_price > 0:
+                                    ent_pos.average_entry = term_state.average_price
+                                if ent_pos.protective_order_id:
+                                    try:
+                                        self.broker.modify_order(ent_pos.protective_order_id, quantity=ent_pos.quantity)
+                                    except Exception as e:
+                                        logger.error("Failed to modify stop after late fill for %s: %s", ent_pos.symbol, e)
+
+                            if term_state.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                                entry_state = term_state
+                            else:
+                                logger.warning(
+                                    "Entry order %s remainder cancel unconfirmed (%s); keeping protected in ENTERING",
+                                    ent_pos.entry_order_id,
+                                    getattr(term_state, "status", "UNKNOWN"),
+                                )
+                                continue
+                        else:
+                            logger.warning("Entry order %s remainder cancel timed out; keeping protected in ENTERING", ent_pos.entry_order_id)
                             continue
-                        entry_state = term_state
 
                     confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
                     if confirmed_fill_qty <= 0:
@@ -402,12 +482,7 @@ class StrategyEngine:
                     if entry_state.average_price > 0:
                         ent_pos.average_entry = entry_state.average_price
                     ent_pos.best_favorable_price = ent_pos.average_entry
-                    ent_pos.phase = PositionPhase.OPEN_UNPROTECTED
-
-                    # Recalculate target and R-value from actual confirmed fill price
                     ent_pos.r_value = abs(ent_pos.average_entry - ent_pos.initial_stop_price)
-                    inst = self.broker.get_instrument_info(ent_pos.symbol)
-                    tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
                     ent_pos.target_price = calculate_target_price(
                         side=ent_pos.side,
                         entry_price=ent_pos.average_entry,
@@ -416,33 +491,17 @@ class StrategyEngine:
                         tick_size=tick,
                     )
 
-                    exit_side = Side.SELL if ent_pos.side == Side.BUY else Side.BUY
-                    trigger, limit = calculate_stop_limit_prices(
-                        ent_pos.side, ent_pos.initial_stop_price, self.config.stops, tick
-                    )
-                    sl_req = OrderRequest(
-                        symbol=ent_pos.symbol,
-                        side=exit_side,
-                        quantity=ent_pos.quantity,
-                        product=Product.MIS,
-                        order_type=OrderType.SL,
-                        price=limit,
-                        trigger_price=trigger,
-                        tag=make_broker_tag(self.session_tag, ent_pos.symbol, "SL"),
-                        strategy_id=self.session_tag,
-                    )
+                    # Verify protective stop is active and matching confirmed fill quantity
                     sl_confirmed = False
-                    try:
-                        sl_order_id = self.broker.place_order(sl_req)
-                        ent_pos.protective_order_id = sl_order_id
-                        sl_check = self.broker.get_order_status(sl_order_id)
-                        sl_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
-                        # Treat ONLY TRIGGER_PENDING with exact matching quantity as protective
-                        if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_qty == ent_pos.quantity:
-                            ent_pos.phase = PositionPhase.OPEN_PROTECTED
-                            sl_confirmed = True
-                    except Exception as sl_err:
-                        logger.error("Failed to place protective stop for pending fill %s: %s", ent_pos.symbol, sl_err)
+                    if ent_pos.protective_order_id:
+                        try:
+                            sl_check = self.broker.get_order_status(ent_pos.protective_order_id)
+                            sl_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
+                            if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_qty == ent_pos.quantity:
+                                ent_pos.phase = PositionPhase.OPEN_PROTECTED
+                                sl_confirmed = True
+                        except Exception as ce:
+                            logger.error("Error verifying final stop status for %s: %s", ent_pos.symbol, ce)
 
                     if sl_confirmed:
                         self.journal.log_event(
@@ -1439,8 +1498,16 @@ class StrategyEngine:
         # -------------------------------------------------------------
         # STEP 4: Market Regime Filter Gate
         # -------------------------------------------------------------
+        # Batch-fetch quotes for benchmark and all candidate symbols in a single timestamped snapshot
+        all_symbols_to_quote = [self.config.regime.benchmark_symbol] + [s for s in symbols if s != self.config.regime.benchmark_symbol]
+        batch_quotes: dict[str, Quote] = {}
+        try:
+            batch_quotes = self.broker.get_quotes_batch(all_symbols_to_quote)
+        except Exception as bqe:
+            logger.warning("Batch quote fetch failed; falling back to individual quotes: %s", bqe)
+
         bench_candles = self.broker.get_historical(self.config.regime.benchmark_symbol, "5minute", hist_from_5m, now)
-        bench_quote = self.broker.get_quote(self.config.regime.benchmark_symbol)
+        bench_quote = batch_quotes.get(self.config.regime.benchmark_symbol) or self.broker.get_quote(self.config.regime.benchmark_symbol)
         regime_eval = evaluate_market_regime(bench_candles, self.config.regime, bench_quote)
 
         if regime_eval.regime == MarketRegime.NEUTRAL:
@@ -1478,7 +1545,7 @@ class StrategyEngine:
                 continue
 
             inst = self.broker.get_instrument_info(sym)
-            quote = self.broker.get_quote(sym)
+            quote = batch_quotes.get(sym) or self.broker.get_quote(sym)
             stock_candles = self.broker.get_historical(sym, "5minute", hist_from_5m, now)
 
             # Build/retrieve opening range
@@ -1779,23 +1846,84 @@ class StrategyEngine:
                 is_complete = getattr(entry_state, "status", None) == OrderStatus.COMPLETE
 
                 if entry_state and (is_complete or is_filled_qty_positive):
+                    current_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
+                    if current_fill_qty <= 0:
+                        managed.quantity = 0
+                        managed.phase = PositionPhase.FLAT
+                        continue
+
+                    entry_avg_px = getattr(entry_state, "average_price", 0.0)
+                    is_avg_px_positive = isinstance(entry_avg_px, (int, float)) and entry_avg_px > 0
+                    actual_entry = float(entry_avg_px) if is_avg_px_positive else marketable_entry_price
+                    managed.quantity = current_fill_qty
+                    managed.average_entry = actual_entry
+                    managed.best_favorable_price = actual_entry
+                    managed.r_value = abs(actual_entry - initial_stop)
+                    managed.target_price = calculate_target_price(
+                        side=side,
+                        entry_price=actual_entry,
+                        initial_stop=initial_stop,
+                        target_r=self.config.stops.target_r,
+                        tick_size=inst.tick_size,
+                    )
+
+                    exit_side = Side.SELL if side == Side.BUY else Side.BUY
+                    trigger, limit = calculate_stop_limit_prices(side, initial_stop, self.config.stops, inst.tick_size)
+
+                    # Place protective stop immediately for filled quantity
+                    sl_req = OrderRequest(
+                        symbol=sym,
+                        side=exit_side,
+                        quantity=current_fill_qty,
+                        product=Product.MIS,
+                        order_type=OrderType.SL,
+                        price=limit,
+                        trigger_price=trigger,
+                        tag=make_broker_tag(self.session_tag, sym, "SL"),
+                        strategy_id=self.session_tag,
+                    )
+                    sl_order_id = ""
+                    try:
+                        sl_order_id = self.broker.place_order(sl_req)
+                        managed.protective_order_id = sl_order_id
+                    except Exception as sl_err:
+                        logger.error("Failed to place protective stop for %s: %s", sym, sl_err)
+
                     # On partial fill, cancel the unfilled remainder and wait for terminal confirmation
-                    if is_filled_qty_positive and not is_complete:
+                    if not is_complete:
                         try:
                             self.broker.cancel_order(entry_order_id)
                         except Exception as cancel_err:
                             logger.warning("Failed to cancel remaining entry for %s: %s", sym, cancel_err)
                         term_state = self._confirm_order_terminal(entry_order_id, timeout_sec=2.0)
-                        if not term_state or term_state.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
-                            logger.warning(
-                                "Entry order %s remainder cancel unconfirmed (%s); keeping in ENTERING",
-                                entry_order_id,
-                                getattr(term_state, "status", "UNKNOWN"),
-                            )
-                            managed.quantity = 0
+                        if term_state:
+                            term_filled_qty = int(getattr(term_state, "filled_quantity", 0) or 0)
+                            if term_filled_qty > managed.quantity:
+                                # Late fill occurred while cancelling!
+                                logger.info("Late fill detected during cancel for %s: qty increased from %d to %d", sym, managed.quantity, term_filled_qty)
+                                managed.quantity = term_filled_qty
+                                if term_state.average_price > 0:
+                                    managed.average_entry = term_state.average_price
+                                if managed.protective_order_id:
+                                    try:
+                                        self.broker.modify_order(managed.protective_order_id, quantity=managed.quantity)
+                                    except Exception as e:
+                                        logger.error("Failed to modify stop after late fill for %s: %s", sym, e)
+
+                            if term_state.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
+                                entry_state = term_state
+                            else:
+                                logger.warning(
+                                    "Entry order %s remainder cancel unconfirmed (%s); keeping protected in ENTERING",
+                                    entry_order_id,
+                                    getattr(term_state, "status", "UNKNOWN"),
+                                )
+                                managed.phase = PositionPhase.ENTERING
+                                continue
+                        else:
+                            logger.warning("Entry order %s remainder cancel timed out; keeping protected in ENTERING", entry_order_id)
                             managed.phase = PositionPhase.ENTERING
                             continue
-                        entry_state = term_state
 
                     confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
                     if confirmed_fill_qty <= 0:
@@ -1841,37 +1969,20 @@ class StrategyEngine:
                         target_r=self.config.stops.target_r,
                         tick_size=inst.tick_size,
                     )
-                    managed.phase = PositionPhase.OPEN_UNPROTECTED
 
-                    # Step 10: Place protective stop immediately for filled quantity
-                    exit_side = Side.SELL if side == Side.BUY else Side.BUY
-                    trigger, limit = calculate_stop_limit_prices(side, initial_stop, self.config.stops, inst.tick_size)
-
-                    sl_req = OrderRequest(
-                        symbol=sym,
-                        side=exit_side,
-                        quantity=actual_qty,
-                        product=Product.MIS,
-                        order_type=OrderType.SL,
-                        price=limit,
-                        trigger_price=trigger,
-                        tag=make_broker_tag(self.session_tag, sym, "SL"),
-                        strategy_id=self.session_tag,
-                    )
+                    # Verify protective stop is active and matching confirmed fill quantity
                     sl_confirmed = False
-                    sl_order_id = ""
-                    try:
-                        sl_order_id = self.broker.place_order(sl_req)
-                        managed.protective_order_id = sl_order_id
-                        sl_state = self.broker.get_order_status(sl_order_id)
-                        sl_qty = getattr(sl_state, "quantity", None) or getattr(getattr(sl_state, "request", None), "quantity", 0) or getattr(sl_state, "pending_quantity", 0)
-                        if sl_state and sl_state.status == OrderStatus.TRIGGER_PENDING and sl_qty == actual_qty:
-                            managed.phase = PositionPhase.OPEN_PROTECTED
-                            sl_confirmed = True
-                        else:
-                            logger.error("Stop order %s in unconfirmed state: %s", sl_order_id, getattr(sl_state, 'status', None))
-                    except Exception as sl_err:
-                        logger.error("Failed to place protective stop for %s: %s", sym, sl_err)
+                    if managed.protective_order_id:
+                        try:
+                            sl_state = self.broker.get_order_status(managed.protective_order_id)
+                            sl_qty = getattr(sl_state, "quantity", None) or getattr(getattr(sl_state, "request", None), "quantity", 0) or getattr(sl_state, "pending_quantity", 0)
+                            if sl_state and sl_state.status == OrderStatus.TRIGGER_PENDING and sl_qty == actual_qty:
+                                managed.phase = PositionPhase.OPEN_PROTECTED
+                                sl_confirmed = True
+                            else:
+                                logger.error("Stop order %s in unconfirmed state: %s", managed.protective_order_id, getattr(sl_state, 'status', None))
+                        except Exception as ce:
+                            logger.error("Failed to verify stop status for %s: %s", sym, ce)
 
                     if not sl_confirmed:
                         self._last_entry_bar_timestamp = None
