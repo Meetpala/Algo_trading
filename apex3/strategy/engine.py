@@ -30,6 +30,7 @@ from apex3.broker.interface import BrokerInterface
 from apex3.config import AppConfig
 from apex3.indicators.atr import compute_atr
 from apex3.journal.sqlite_journal import Journal
+from apex3.journal.trade_logger import TradeLogger
 from apex3.models import (
     Candle,
     Decision,
@@ -105,11 +106,13 @@ class StrategyEngine:
         broker: BrokerInterface,
         journal: Journal,
         session_tag: str = "APEX3",
+        trade_logger: Optional[TradeLogger] = None,
     ):
         self.config = config
         self.broker = broker
         self.journal = journal
         self.session_tag = session_tag
+        self.trade_logger = trade_logger or TradeLogger(log_path="info.log", start_date="2026-10-29")
 
         self.scheduler = SessionScheduler(config.schedule)
         self.state_machine = StateMachine(session_tag_prefix=session_tag)
@@ -232,6 +235,10 @@ class StrategyEngine:
         with self._execution_lock:
             decisions = self._evaluate_step_locked(current_time)
             self.last_decisions = decisions
+            try:
+                self.trade_logger.sync_from_broker(self.broker)
+            except Exception as te:
+                logger.debug("TradeLogger background sync: %s", te)
             return decisions
 
     def _evaluate_step_locked(self, current_time: Optional[datetime] = None) -> list[StrategyDecision]:
@@ -515,6 +522,22 @@ class StrategyEngine:
                             },
                             explanation=f"Entry filled for {ent_pos.symbol} (qty={ent_pos.quantity}); protective SL placed & confirmed",
                         )
+                        try:
+                            self.trade_logger.record_entry(
+                                symbol=ent_pos.symbol,
+                                side=ent_pos.side,
+                                quantity=ent_pos.quantity,
+                                price=ent_pos.average_entry,
+                                order_id=ent_pos.entry_order_id,
+                                trade_id=ent_pos.entry_order_id,
+                                timestamp=now,
+                                initial_stop=ent_pos.initial_stop_price,
+                                target_price=ent_pos.target_price,
+                                risk_rupees=getattr(ent_pos, "r_value", 0.0) * ent_pos.quantity,
+                                tag=getattr(ent_pos, "strategy_tag", self.session_tag),
+                            )
+                        except Exception as log_err:
+                            logger.error("Error logging entry to trade_logger: %s", log_err)
                     else:
                         self._last_entry_bar_timestamp = None
                         logger.critical("EMERGENCY: Protective stop unconfirmed for filled entry in %s. Liquidating immediately.", ent_pos.symbol)
@@ -642,15 +665,32 @@ class StrategyEngine:
                             if exit_state.status == OrderStatus.COMPLETE:
                                 pos.phase = PositionPhase.CLOSED
                                 pos.quantity = 0
+                                fill_px = exit_state.average_price or pos.average_entry
                                 self.journal.log_event(
                                     event_type="EXIT_ORDER_COMPLETED",
                                     symbol=pos.symbol,
                                     data={
                                         "exit_order_id": pos.exit_order_id,
-                                        "fill_price": exit_state.average_price,
+                                        "fill_price": fill_px,
                                     },
                                     explanation=f"Exit order {pos.exit_order_id} filled for {pos.symbol}",
                                 )
+                                try:
+                                    self.trade_logger.record_exit(
+                                        symbol=pos.symbol,
+                                        side=Side.SELL if pos.side == Side.BUY else Side.BUY,
+                                        quantity=pos.quantity or exit_state.filled_quantity,
+                                        exit_price=fill_px,
+                                        entry_price=pos.average_entry,
+                                        order_id=pos.exit_order_id,
+                                        trade_id=pos.exit_order_id,
+                                        exit_reason="EXIT_ORDER_FILLED",
+                                        timestamp=now,
+                                        entry_time=getattr(pos, "entry_time", None),
+                                        initial_stop=pos.initial_stop_price,
+                                    )
+                                except Exception as log_err:
+                                    logger.error("Error logging exit to trade_logger: %s", log_err)
                                 continue
                             elif exit_state.status == OrderStatus.UNKNOWN:
                                 logger.critical("Exit order %s for %s in UNKNOWN state. Flagging reconciliation alert.", pos.exit_order_id, pos.symbol)
@@ -723,6 +763,7 @@ class StrategyEngine:
                 try:
                     sl_order = self.broker.get_order_status(pos.protective_order_id)
                     if sl_order and sl_order.status == OrderStatus.COMPLETE:
+                        fill_px = sl_order.average_price or pos.current_stop_price
                         self.journal.log_event(
                             event_type="STOP_LOSS_HIT",
                             symbol=pos.symbol,
@@ -730,9 +771,25 @@ class StrategyEngine:
                             data={
                                 "stop_price": pos.current_stop_price,
                                 "sl_order_id": pos.protective_order_id,
-                                "fill_price": sl_order.average_price or pos.current_stop_price,
+                                "fill_price": fill_px,
                             },
                         )
+                        try:
+                            self.trade_logger.record_exit(
+                                symbol=pos.symbol,
+                                side=Side.SELL if pos.side == Side.BUY else Side.BUY,
+                                quantity=pos.quantity,
+                                exit_price=fill_px,
+                                entry_price=pos.average_entry,
+                                order_id=pos.protective_order_id,
+                                trade_id=pos.protective_order_id,
+                                exit_reason="STOP_LOSS_HIT",
+                                timestamp=now,
+                                entry_time=getattr(pos, "entry_time", None),
+                                initial_stop=pos.initial_stop_price,
+                            )
+                        except Exception as log_err:
+                            logger.error("Error logging SL exit to trade_logger: %s", log_err)
                         pos.phase = PositionPhase.CLOSED
                         pos.quantity = 0
                         decisions.append(
@@ -1990,6 +2047,22 @@ class StrategyEngine:
                             if sl_state and sl_state.status == OrderStatus.TRIGGER_PENDING and sl_qty == actual_qty:
                                 managed.phase = PositionPhase.OPEN_PROTECTED
                                 sl_confirmed = True
+                                try:
+                                    self.trade_logger.record_entry(
+                                        symbol=sym,
+                                        side=side,
+                                        quantity=actual_qty,
+                                        price=actual_entry,
+                                        order_id=entry_order_id,
+                                        trade_id=entry_order_id,
+                                        timestamp=now,
+                                        initial_stop=initial_stop,
+                                        target_price=managed.target_price,
+                                        risk_rupees=getattr(managed, "r_value", 0.0) * actual_qty,
+                                        tag=getattr(managed, "strategy_tag", self.session_tag),
+                                    )
+                                except Exception as log_err:
+                                    logger.error("Error logging immediate entry to trade_logger: %s", log_err)
                             else:
                                 logger.error("Stop order %s in unconfirmed state: %s", managed.protective_order_id, getattr(sl_state, 'status', None))
                         except Exception as ce:

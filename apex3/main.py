@@ -21,6 +21,7 @@ from apex3.broker.paper import PaperBroker
 from apex3.config import load_config
 from apex3.dashboard.app import create_app
 from apex3.journal.sqlite_journal import Journal
+from apex3.journal.trade_logger import TradeLogger
 from apex3.strategy.engine import StrategyEngine
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -38,6 +39,7 @@ def run_app():
     parser.add_argument("--config", type=str, default=None, help="Path to custom config.yaml")
     parser.add_argument("--mode", type=str, default=None, choices=["paper", "live"], help="Operating mode (paper or live)")
     parser.add_argument("--simulate", action="store_true", help="Run a simulated trading day and print report")
+    parser.add_argument("--sync-trades", action="store_true", help="Sync broker trades to info.log and exit")
     parser.add_argument("--host", type=str, default=None, help="Dashboard host interface (e.g. 127.0.0.1)")
     parser.add_argument("--port", type=int, default=5000, help="Local operator dashboard port")
     args = parser.parse_args()
@@ -47,8 +49,9 @@ def run_app():
         config.mode = args.mode
     logger.info("Initializing APEX-3 version 0.1.0 (Mode: %s)...", config.mode.upper())
 
-    # Initialize Journal
+    # Initialize Journal & Trade Audit Logger
     journal = Journal(db_path=config.journal.db_path)
+    trade_logger = TradeLogger(log_path="info.log", start_date="2026-10-29")
 
     # Initialize Broker Adapter
     if config.mode == "live":
@@ -99,8 +102,22 @@ def run_app():
         logger.info("Operating in PAPER TRADING mode. Real orders are impossible.")
         broker = PaperBroker(starting_margin=config.paper_starting_capital)
 
+    # Sync offline/startup trades from broker into info.log
+    try:
+        new_synced = trade_logger.sync_from_broker(broker)
+        if new_synced > 0:
+            logger.info("Trade audit log synced: %d new trade execution(s) recorded in info.log", new_synced)
+        else:
+            logger.info("Trade audit log (info.log) is up to date.")
+    except Exception as e:
+        logger.warning("Could not sync trade audit log on startup: %s", e)
+
+    if getattr(args, "sync_trades", False):
+        print(f"Trade sync complete: info.log is up to date. ({len(trade_logger._recorded_trade_ids)} IDs tracked)")
+        return
+
     # Initialize Strategy Engine
-    engine = StrategyEngine(config=config, broker=broker, journal=journal)
+    engine = StrategyEngine(config=config, broker=broker, journal=journal, trade_logger=trade_logger)
 
     if config.mode == "live":
         from apex3.reconciliation.reconciler import Reconciler
