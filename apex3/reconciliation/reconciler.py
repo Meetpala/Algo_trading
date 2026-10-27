@@ -19,8 +19,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Optional
 import time as time_module
+from zoneinfo import ZoneInfo
+
+IST = ZoneInfo("Asia/Kolkata")
 
 from apex3.broker.interface import BrokerInterface
 from apex3.journal.sqlite_journal import Journal
@@ -274,14 +278,70 @@ class Reconciler:
                     sym = o.request.symbol
                     pos = self.sm.positions.get(sym)
                     if pos is None or pos.phase in (PositionPhase.FLAT, PositionPhase.CLOSED):
-                        pos = self.sm.get_or_create_position(sym)
-                        pos.symbol = sym
-                        pos.phase = PositionPhase.ENTERING
-                        pos.entry_order_id = o.order_id
-                        pos.side = o.request.side
-                        pos.requested_quantity = o.request.quantity
-                        pos.strategy_tag = o.request.tag
-                        logger.info("Restored pending entry order %s for %s in PositionPhase.ENTERING on restart", o.order_id, sym)
+                        if getattr(o, "filled_quantity", 0) <= 0:
+                            # Orphaned unfilled entry order: cancel immediately to avoid unprotected execution on restart
+                            try:
+                                self.broker.cancel_order(o.order_id)
+                                logger.warning("Cancelled orphaned unfilled entry order %s for %s on startup", o.order_id, sym)
+                            except Exception as ce:
+                                logger.error("Failed to cancel orphaned entry order %s on startup: %s", o.order_id, ce)
+                            if hasattr(self.journal, "log_event"):
+                                side_val = o.request.side.value if hasattr(o.request.side, "value") else str(o.request.side)
+                                self.journal.log_event(
+                                    event_type="CANCELLED_ORPHAN_ENTRY_ON_STARTUP",
+                                    symbol=sym,
+                                    side=side_val,
+                                    data={"order_id": o.order_id, "status": str(o.status)},
+                                    explanation=f"Cancelled orphaned unfilled entry order {o.order_id} on startup recovery",
+                                )
+                        else:
+                            pos = self.sm.get_or_create_position(sym)
+                            pos.symbol = sym
+                            pos.phase = PositionPhase.ENTERING
+                            pos.entry_order_id = o.order_id
+                            pos.side = o.request.side
+                            pos.requested_quantity = o.request.quantity
+                            pos.strategy_tag = o.request.tag
+                            pos.entry_timestamp = getattr(o, "last_updated", None) or getattr(o, "order_timestamp", None) or datetime.now(IST)
+                            # Recover pos.initial_stop_price from self.journal
+                            if hasattr(self.journal, "get_events"):
+                                try:
+                                    events = self.journal.get_events(symbol=sym, limit=20)
+                                    for ev in events:
+                                        ev_data = ev.get("data") if isinstance(ev, dict) else getattr(ev, "data", {})
+                                        if isinstance(ev_data, str):
+                                            import json
+                                            try:
+                                                ev_data = json.loads(ev_data)
+                                            except Exception:
+                                                ev_data = {}
+                                        if isinstance(ev_data, dict):
+                                            if float(ev_data.get("initial_stop", 0) or 0) > 0:
+                                                pos.initial_stop_price = float(ev_data["initial_stop"])
+                                                break
+                                except Exception as je:
+                                    logger.debug("Could not recover initial stop from journal for %s: %s", sym, je)
+                            logger.info("Restored pending entry order %s for %s in PositionPhase.ENTERING on restart", o.order_id, sym)
+                    elif pos.phase == PositionPhase.ENTERING:
+                        if not pos.entry_timestamp:
+                            pos.entry_timestamp = getattr(o, "last_updated", None) or getattr(o, "order_timestamp", None) or datetime.now(IST)
+                        if pos.initial_stop_price <= 0 and hasattr(self.journal, "get_events"):
+                            try:
+                                events = self.journal.get_events(symbol=sym, limit=20)
+                                for ev in events:
+                                    ev_data = ev.get("data") if isinstance(ev, dict) else getattr(ev, "data", {})
+                                    if isinstance(ev_data, str):
+                                        import json
+                                        try:
+                                            ev_data = json.loads(ev_data)
+                                        except Exception:
+                                            ev_data = {}
+                                    if isinstance(ev_data, dict):
+                                        if float(ev_data.get("initial_stop", 0) or 0) > 0:
+                                            pos.initial_stop_price = float(ev_data["initial_stop"])
+                                            break
+                            except Exception as je:
+                                logger.debug("Could not recover initial stop from journal for %s: %s", sym, je)
 
         if unknown_symbols:
             msg = f"Unknown manual positions detected on broker: {unknown_symbols}. Strategy paused."

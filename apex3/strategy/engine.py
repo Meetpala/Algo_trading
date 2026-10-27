@@ -580,6 +580,10 @@ class StrategyEngine:
                                 if getattr(exit_state, "filled_quantity", 0) > 0:
                                     pos.quantity = max(0, pos.quantity - exit_state.filled_quantity)
                                 pos.exit_order_id = ""
+                                if pos.quantity <= 0:
+                                    pos.phase = PositionPhase.CLOSED
+                                    pos.quantity = 0
+                                    continue
                             elif exit_state.pending_quantity > 0:
                                 pos.quantity = exit_state.pending_quantity
                                 pos.phase = PositionPhase.EXITING
@@ -1054,15 +1058,14 @@ class StrategyEngine:
                                     )
                                     if mod_ok:
                                         mod_st = self.broker.get_order_status(pos.protective_order_id)
-                                        if mod_st and mod_st.status == OrderStatus.TRIGGER_PENDING:
+                                        if mod_st and mod_st.status in (OrderStatus.TRIGGER_PENDING, OrderStatus.OPEN):
                                             mod_confirmed = True
-                                        elif mod_st and mod_st.status == OrderStatus.OPEN:
-                                            logger.warning(
-                                                "Stop order %s for %s triggered (OPEN) during modification; stop is resting unfilled.",
-                                                pos.protective_order_id,
-                                                pos.symbol,
-                                            )
-                                            mod_confirmed = False
+                                            if mod_st.status == OrderStatus.OPEN:
+                                                logger.info(
+                                                    "Stop order %s for %s triggered (OPEN) into resting limit during modification.",
+                                                    pos.protective_order_id,
+                                                    pos.symbol,
+                                                )
                                         elif mod_st and mod_st.status == OrderStatus.COMPLETE:
                                             # Stop filled during modification
                                             self.journal.log_event(
@@ -1549,6 +1552,32 @@ class StrategyEngine:
                 cap_price = round_to_tick(sig_price * (1.0 - slip_pct), tick_size=tick)
                 marketable_entry_price = max(cand_price, cap_price)
             entry_price = marketable_entry_price
+
+            # Reject entry if live ask/bid has already gapped past cap_price
+            if side == Side.BUY and quote and quote.ask > cap_price:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        symbol=sym,
+                        side=side,
+                        timestamp_ist=now,
+                        reason_codes=["ENTRY_SLIPPAGE_EXCEEDED"],
+                        explanation=f"Live ask {quote.ask:.2f} exceeded max entry cap {cap_price:.2f} (slippage > {slip_pct*100:.2f}%)",
+                    )
+                )
+                continue
+            if side == Side.SELL and quote and quote.bid > 0 and quote.bid < cap_price:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        symbol=sym,
+                        side=side,
+                        timestamp_ist=now,
+                        reason_codes=["ENTRY_SLIPPAGE_EXCEEDED"],
+                        explanation=f"Live bid {quote.bid:.2f} fell below min entry floor {cap_price:.2f} (slippage > {slip_pct*100:.2f}%)",
+                    )
+                )
+                continue
 
             # Calculate ATR for initial stop
             atr_series = compute_atr(

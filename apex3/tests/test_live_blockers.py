@@ -12,7 +12,7 @@ Covers:
 9. Restart recovery: reconciles broker orders and restores managed state without false halt.
 """
 from datetime import date, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 import pytest
 
@@ -1348,6 +1348,167 @@ def test_calendar_freshness_validation():
     is_valid_2027, msg_2027 = sched.validate_calendar_freshness(2027)
     assert is_valid_2027 is False
     assert "No exchange holidays configured for year 2027" in msg_2027
+
+
+def test_audit_startup_state_cancels_orphaned_unfilled_entry():
+    """Fix 1: In audit_startup_state, orphaned unfilled entry order is cancelled and logged."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    sm = StateMachine("APEX3")
+    reconciler = Reconciler(mock_broker, sm, mock_journal, session_tag="APEX3")
+
+    mock_broker.get_positions.return_value = []
+    orphan_order = OrderState(
+        order_id="ENTRY_ORPHAN_1",
+        request=OrderRequest(
+            symbol="INFY",
+            side=Side.BUY,
+            quantity=10,
+            order_type=OrderType.LIMIT,
+            price=1500.0,
+            tag="APEX3_INFY_E0935",
+        ),
+        status=OrderStatus.OPEN,
+        filled_quantity=0,
+    )
+    mock_broker.get_orders.return_value = [orphan_order]
+
+    status = reconciler.audit_startup_state(["INFY"])
+    assert status.is_clean is True
+    # Order was cancelled immediately
+    mock_broker.cancel_order.assert_called_once_with("ENTRY_ORPHAN_1")
+    # Position was NOT left in ENTERING
+    assert "INFY" not in sm.positions
+    # Event logged to journal
+    assert any(
+        call.kwargs.get("event_type") == "CANCELLED_ORPHAN_ENTRY_ON_STARTUP"
+        for call in mock_journal.log_event.call_args_list
+    )
+
+
+def test_entry_slippage_exceeded_live_gap():
+    """Fix 2: Reject entry if live ask/bid has gapped past cap_price."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 9, 35, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_positions.return_value = []
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+
+    inst = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05, upper_circuit=1500.0, lower_circuit=800.0, mis_available=True)
+    mock_broker.get_instrument_info.return_value = inst
+    engine.set_manual_symbols(["TRENT"])
+    engine.opening_ranges["TRENT"] = OpeningRange(symbol="TRENT", high=1000.0, low=990.0, is_complete=True, candle_count=3)
+
+    # Quote where ask has gapped above cap_price
+    quote = Quote(symbol="TRENT", exchange="NSE", last_price=1005.0, bid=1004.8, ask=1005.0, volume=50000, timestamp=now, is_fresh=True)
+    mock_broker.get_quote.return_value = quote
+
+    candles_5m = [
+        Candle(timestamp=now - timedelta(minutes=5 * (25 - i)), open=990.0, high=1000.0, low=985.0, close=995.0, volume=10000, is_complete=True)
+        for i in range(25)
+    ]
+    mock_broker.get_historical.return_value = candles_5m
+
+    with patch("apex3.strategy.engine.evaluate_signal") as mock_eval_sig, \
+         patch("apex3.strategy.engine.evaluate_market_regime") as mock_regime:
+        mock_regime.return_value = MagicMock(regime=MarketRegime.BULLISH)
+        mock_eval_sig.return_value = SignalEvaluation(
+            symbol="TRENT",
+            decision=Decision.PROPOSED_LONG,
+            side=Side.BUY,
+            gates=[],
+            reason_codes=["BREAKOUT_CONFIRMED"],
+            explanation="Test breakout",
+            signal_price=1000.0,
+        )
+
+        decisions = engine.evaluate_step(now)
+        wait_decisions = [d for d in decisions if "ENTRY_SLIPPAGE_EXCEEDED" in d.reason_codes]
+        assert len(wait_decisions) >= 1
+        assert wait_decisions[0].decision == Decision.WAIT
+
+
+def test_step11_fee_lock_confirmed_when_order_status_open():
+    """Fix 3: When stop modification is OPEN (market touched limit), stop is confirmed moved."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 11, 0, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    pos = engine.state_machine.get_or_create_position("INFY")
+    pos.side = Side.BUY
+    pos.quantity = 10
+    pos.average_entry = 1000.0
+    pos.initial_stop_price = 990.0
+    pos.current_stop_price = 990.0
+    pos.r_value = 10.0
+    pos.target_price = 1020.0
+    pos.phase = PositionPhase.OPEN_PROTECTED
+    pos.protective_order_id = "SL_ORD_1"
+    pos.fee_lock_applied = False
+
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_positions.return_value = [
+        PositionState(symbol="INFY", side=Side.BUY, quantity=10, average_entry=1000.0, product=Product.MIS)
+    ]
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    inst = InstrumentInfo(symbol="INFY", exchange="NSE", lot_size=1, tick_size=0.05, upper_circuit=1200.0, lower_circuit=800.0, mis_available=True)
+    mock_broker.get_instrument_info.return_value = inst
+    quote = Quote(symbol="INFY", exchange="NSE", last_price=1016.50, bid=1016.4, ask=1016.6, volume=10000, timestamp=now, is_fresh=True)
+    mock_broker.get_quote.return_value = quote
+
+    mock_broker.modify_order.return_value = True
+    mock_broker.get_order_status.return_value = OrderState(order_id="SL_ORD_1", status=OrderStatus.OPEN)
+
+    decisions = engine.evaluate_step(now)
+    assert pos.fee_lock_applied is True
+    assert pos.current_stop_price > 990.0
+    assert pos.stop_modification_count == 1
+
+
+def test_exiting_phase_cancelled_exit_with_zero_quantity_closes_position():
+    """Fix 4: When exit order was cancelled/rejected but 100% filled, phase is CLOSED."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    now = datetime(2026, 3, 20, 10, 30, tzinfo=IST)
+
+    cfg = AppConfig()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    pos = engine.state_machine.get_or_create_position("INFY")
+    pos.side = Side.BUY
+    pos.quantity = 25
+    pos.phase = PositionPhase.EXITING
+    pos.exit_order_id = "EXIT_ORD_1"
+
+    # Exit order was cancelled after 25 shares filled
+    mock_broker.get_order_status.return_value = OrderState(
+        order_id="EXIT_ORD_1",
+        status=OrderStatus.CANCELLED,
+        filled_quantity=25,
+        pending_quantity=0,
+    )
+    mock_broker.get_positions.return_value = []
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+
+    decisions = engine.evaluate_step(now)
+    assert pos.phase == PositionPhase.CLOSED
+    assert pos.quantity == 0
+    assert pos.exit_order_id == ""
 
 
 
