@@ -12,7 +12,7 @@ from apex3.broker.angel_data_provider import AngelDataProvider
 from apex3.strategy.regime import evaluate_market_regime, MarketRegime
 from apex3.strategy.signal import evaluate_candidate_signal, StockCandidateBar
 from apex3.strategy.trail import compute_initial_stop_and_target
-from apex3.strategy.sizer import compute_position_size
+from apex3.strategy.sizer import calculate_position_size
 from apex3.indicators.atr import compute_atr
 from apex3.indicators.vwap import compute_session_vwap
 from apex3.models import Candle, Quote, OpeningRange, Side
@@ -71,7 +71,7 @@ for s in symbols:
     or_high = max(b.high for b in or_bars)
     or_low = min(b.low for b in or_bars)
     or_vwap = sum((b.open + b.high + b.low + b.close)/4.0 * b.volume for b in or_bars) / max(1, sum(b.volume for b in or_bars))
-    opening_range = OpeningRange(high=or_high, low=or_low, vwap=or_vwap, is_ready=True)
+    opening_range = OpeningRange(symbol=s, high=or_high, low=or_low, is_complete=True, candle_count=3)
 
     # Check bars from 09:30 to 12:30
     for bar in s_oct30[3:]:
