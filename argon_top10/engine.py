@@ -556,6 +556,7 @@ class StrategyEngine:
                             )
                             if sl_confirmed:
                                 ent_pos.phase = PositionPhase.OPEN_PROTECTED
+                                ent_pos.entry_timestamp = ent_pos.entry_timestamp or now
                         except Exception as ce:
                             logger.error("Error verifying final stop status for %s: %s", ent_pos.symbol, ce)
 
@@ -711,6 +712,7 @@ class StrategyEngine:
                         exit_state = self.broker.get_order_status(pos.exit_order_id)
                         if exit_state:
                             if exit_state.status == OrderStatus.COMPLETE:
+                                closed_qty = pos.quantity or (exit_state.filled_quantity if exit_state else 0) or getattr(pos, "requested_quantity", 0)
                                 pos.phase = PositionPhase.CLOSED
                                 pos.quantity = 0
                                 fill_px = exit_state.average_price or pos.average_entry
@@ -722,19 +724,19 @@ class StrategyEngine:
                                         "fill_price": fill_px,
                                     },
                                     explanation=f"Exit order {pos.exit_order_id} filled for {pos.symbol}",
-                                )
+                                 )
                                 try:
                                     self.trade_logger.record_exit(
                                         symbol=pos.symbol,
                                         side=Side.SELL if pos.side == Side.BUY else Side.BUY,
-                                        quantity=pos.quantity or exit_state.filled_quantity,
+                                        quantity=closed_qty,
                                         exit_price=fill_px,
                                         entry_price=pos.average_entry,
                                         order_id=pos.exit_order_id,
                                         trade_id=pos.exit_order_id,
                                         exit_reason="EXIT_ORDER_FILLED",
                                         timestamp=now,
-                                        entry_time=getattr(pos, "entry_time", None),
+                                        entry_time=getattr(pos, "entry_time", None) or getattr(pos, "entry_timestamp", None),
                                         initial_stop=pos.initial_stop_price,
                                     )
                                 except Exception as log_err:
@@ -833,7 +835,7 @@ class StrategyEngine:
                                 trade_id=pos.protective_order_id,
                                 exit_reason="STOP_LOSS_HIT",
                                 timestamp=now,
-                                entry_time=getattr(pos, "entry_time", None),
+                                entry_time=getattr(pos, "entry_time", None) or getattr(pos, "entry_timestamp", None),
                                 initial_stop=pos.initial_stop_price,
                             )
                         except Exception as log_err:
@@ -1089,7 +1091,7 @@ class StrategyEngine:
                                     trade_id=exit_order_id,
                                     exit_reason="TARGET_HIT",
                                     timestamp=now,
-                                    entry_time=getattr(pos, "entry_time", None),
+                                    entry_time=getattr(pos, "entry_time", None) or getattr(pos, "entry_timestamp", None),
                                     initial_stop=pos.initial_stop_price,
                                 )
                             except Exception as log_err:
@@ -2108,6 +2110,8 @@ class StrategyEngine:
                             sl_confirmed = self._confirm_protective_sl(managed.protective_order_id, actual_qty, timeout_sec=2.0)
                             if sl_confirmed:
                                 managed.phase = PositionPhase.OPEN_PROTECTED
+                                managed.entry_timestamp = managed.entry_timestamp or now
+                                managed.initial_stop_price = initial_stop
                                 try:
                                     self.trade_logger.record_entry(
                                         symbol=sym,

@@ -123,6 +123,10 @@ class TradeLogger:
         log_path: str = DEFAULT_LOG_FILE,
         start_date: str = DEFAULT_START_DATE,
     ) -> None:
+        if str(log_path) == DEFAULT_LOG_FILE and "PYTEST_CURRENT_TEST" in os.environ:
+            temp_dir = os.environ.get("TEMP", ".")
+            log_path = os.path.join(temp_dir, ".test_apex3_info.log")
+
         self.log_path = Path(log_path).resolve()
         self.start_date_str = start_date
         self.start_date = date.fromisoformat(start_date)
@@ -217,6 +221,10 @@ class TradeLogger:
         notional = price * quantity
         side_str = "BUY (LONG)" if side == Side.BUY else "SELL (SHORT)"
         ts_str = ts.strftime("%Y-%m-%d %H:%M:%S IST")
+        margin_est = notional / 4.0  # MIS 4x intraday leverage
+        per_share_risk = abs(price - initial_stop) if initial_stop > 0 else 0.0
+        projected_gain = per_share_risk * 2.0 * quantity if per_share_risk > 0 else (risk_rupees * 2.0 if risk_rupees > 0 else 0.0)
+        calc_risk = per_share_risk * quantity if per_share_risk > 0 else risk_rupees
 
         entry_block = (
             "================================================================================\n"
@@ -225,13 +233,16 @@ class TradeLogger:
             "--------------------------------------------------------------------------------\n"
             f"Symbol          : {symbol} (NSE)\n"
             f"Action / Side   : {side_str}\n"
-            f"Quantity Filled : {quantity} shares (MIS Intraday)\n"
+            f"Quantity Filled : {quantity} shares (MIS Intraday, 4.0x Leverage)\n"
             f"Execution Price : Rs. {price:,.2f}\n"
             f"Notional Value  : Rs. {notional:,.2f}\n"
+            f"Margin Blocked  : Rs. {margin_est:,.2f} (~{margin_est / 15000.0 * 100:.1f}% of starting capital)\n"
             f"Order ID        : {order_id or 'N/A'}\n"
             f"Trade ID        : {trade_id or 'N/A'}\n"
-            f"Initial Stop    : Rs. {initial_stop:,.2f} | Risk Budget: Rs. {risk_rupees:,.2f}\n"
-            f"Target (2.0R)   : Rs. {target_price:,.2f}\n"
+            f"Entry Time (IST): {ts_str}\n"
+            "--------------------------------------------------------------------------------\n"
+            f"Initial Stop    : Rs. {initial_stop:,.2f} | Risk Budget: Rs. {calc_risk:,.2f}\n"
+            f"Target (2.0R)   : Rs. {target_price:,.2f} | Projected Profit: Rs. {projected_gain:,.2f}\n"
             f"Order Tag       : {tag or 'APEX3'}\n"
             "Status          : OPEN_PROTECTED (Protective stop loss placed on exchange)\n"
             "================================================================================\n\n"
@@ -271,17 +282,28 @@ class TradeLogger:
             return False
 
         # Compute Gross PnL
-        # If exit_side is SELL, original position was BUY
+        # If exit_side is SELL, original position was BUY (Long)
         if side == Side.SELL:
             gross_pnl = (exit_price - entry_price) * quantity
             buy_px, sell_px = entry_price, exit_price
+            exit_side_str = "SELL (Close LONG)"
         else:
             gross_pnl = (entry_price - exit_price) * quantity
             buy_px, sell_px = exit_price, entry_price
+            exit_side_str = "BUY (Cover SHORT)"
 
         # Exact Zerodha intraday statutory friction
-        charges = calculate_zerodha_intraday_charges(buy_px, sell_px, quantity)
+        turnover = (buy_px + sell_px) * quantity
+        brokerage = min(40.0, turnover * 0.0003)
+        stt = sell_px * quantity * 0.00025
+        exchange_txn = turnover * 0.0000322
+        gst = (brokerage + exchange_txn) * 0.18
+        stamp_duty = buy_px * quantity * 0.00003
+        sebi_turnover = turnover * 0.000001
+        charges = brokerage + stt + exchange_txn + gst + stamp_duty + sebi_turnover
         net_pnl = round(gross_pnl - charges, 2)
+        margin_employed = (entry_price * quantity) / 4.0
+        ret_on_margin = (net_pnl / margin_employed * 100.0) if margin_employed > 0 else 0.0
 
         # R-Multiple calculation
         r_multiple = 0.0
@@ -309,27 +331,31 @@ class TradeLogger:
             hours, mins = divmod(mins, 60)
             holding_str = f"{hours}h {mins}m {secs}s" if hours > 0 else f"{mins}m {secs}s"
 
-        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S IST")
+        entry_time_str = entry_time.strftime("%Y-%m-%d %H:%M:%S IST") if entry_time else "Intraday Entry"
+        exit_time_str = ts.strftime("%Y-%m-%d %H:%M:%S IST")
         gross_sign = "+" if gross_pnl > 0 else ""
         net_sign = "+" if net_pnl > 0 else ""
 
         exit_block = (
             "================================================================================\n"
-            f"[{ts_str}] TRADE EXECUTION — POSITION CLOSED ({exit_reason.upper()})\n"
+            f"[{exit_time_str}] TRADE EXECUTION — POSITION CLOSED ({exit_reason.upper()})\n"
             f"[RECORD_ID: {unique_id}]\n"
             "--------------------------------------------------------------------------------\n"
             f"Symbol          : {symbol} (NSE)\n"
+            f"Exit Action     : {exit_side_str}\n"
             f"Exit Reason     : {exit_reason}\n"
             f"Shares Traded   : {quantity} shares\n"
             f"Entry Price     : Rs. {entry_price:,.2f}\n"
             f"Exit Fill Price : Rs. {exit_price:,.2f}\n"
+            f"Entry Time (IST): {entry_time_str}\n"
+            f"Exit Time (IST) : {exit_time_str}\n"
             f"Holding Duration: {holding_str}\n"
             f"Exit Order ID   : {order_id or 'N/A'}\n"
             f"Exit Trade ID   : {trade_id or 'N/A'}\n"
             "--------------------------------------------------------------------------------\n"
             f"Gross PnL       : {gross_sign}Rs. {gross_pnl:,.2f}\n"
-            f"Zerodha Friction: Rs. {charges:,.2f} (Brokerage + STT + NSE + GST + Stamp + SEBI)\n"
-            f"Net Realized PnL: {net_sign}Rs. {net_pnl:,.2f}\n"
+            f"Zerodha Friction: Rs. {charges:,.2f} (Brokerage: Rs. {brokerage:.2f} | STT: Rs. {stt:.2f} | Txn: Rs. {exchange_txn:.2f} | GST: Rs. {gst:.2f} | Stamp: Rs. {stamp_duty:.2f})\n"
+            f"Net Realized PnL: {net_sign}Rs. {net_pnl:,.2f} ({ret_on_margin:+.2f}% on margin)\n"
             f"Realized R-Mult : {r_multiple:+.2f}R\n"
             f"Friction Ratio  : {friction_pct_str}\n"
         )

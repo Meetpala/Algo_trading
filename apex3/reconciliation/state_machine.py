@@ -93,6 +93,7 @@ class ManagedPosition:
             trail_activated=self.trail_activated,
             fee_lock_applied=self.fee_lock_applied,
             strategy_tag=self.strategy_tag,
+            entry_time=self.entry_timestamp,
         )
 
 

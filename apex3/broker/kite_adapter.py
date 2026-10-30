@@ -489,7 +489,7 @@ class KiteAdapter(BrokerInterface):
         if has_valid_ts and quote_ts is not None:
             age_sec = (now_ist - quote_ts).total_seconds()
             stale_limit = getattr(self.config.schedule, "stale_threshold_sec", 5) if hasattr(self, "config") and hasattr(self.config, "schedule") else 5
-            is_time_fresh = (-1.0 <= age_sec <= max(stale_limit, 15.0))
+            is_time_fresh = (-15.0 <= age_sec <= max(stale_limit, 15.0))
             if is_index:
                 # Indices do not have depth on the exchange
                 is_fresh = bool(last_price > 0.0 and is_time_fresh)

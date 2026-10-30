@@ -299,7 +299,7 @@ def evaluate_signal(
     eval_clock = now_ist if (now_ist.date() == q_ts.date()) else (latest_bar.timestamp if latest_bar.timestamp.tzinfo else latest_bar.timestamp.replace(tzinfo=IST))
     clock_diff = (eval_clock - q_ts).total_seconds()
     age_sec = clock_diff
-    if clock_diff < -1.0:
+    if clock_diff < -15.0:
         gates.append(
             GateResult(
                 name="QUOTE_FRESHNESS",

@@ -78,7 +78,8 @@ class AngelDataProvider:
         self._token_cache: dict[str, str] = dict(DEFAULT_ANGEL_TOKENS)
         self._circuit_cache: dict[str, tuple[float, float]] = {}
         self._candle_cache: dict[tuple[str, str], tuple[float, list[Candle]]] = {}
-        self._candle_cache_ttl: float = 30.0
+        self._candle_cache_ttl: float = 120.0
+        self._error_backoff: dict[tuple[str, str], float] = {}
 
         if api_key and client_code and pin and totp_secret:
             self.authenticate()
@@ -170,7 +171,7 @@ class AngelDataProvider:
         now_ist = datetime.now(IST)
         if feed_dt is not None:
             age_sec = (now_ist - feed_dt).total_seconds()
-            is_time_fresh = (-1.0 <= age_sec <= 15.0)
+            is_time_fresh = (-15.0 <= age_sec <= 15.0)
             quote_ts = feed_dt
         else:
             is_time_fresh = False
@@ -346,6 +347,15 @@ class AngelDataProvider:
             if (now_mono - cached_t) < self._candle_cache_ttl and cached_candles:
                 return cached_candles
 
+        # Check error backoff cooldown (e.g. rate limit 429)
+        if cache_key in self._error_backoff:
+            if now_mono < self._error_backoff[cache_key]:
+                if cache_key in self._candle_cache and self._candle_cache[cache_key][1]:
+                    return self._candle_cache[cache_key][1]
+                return []
+            else:
+                del self._error_backoff[cache_key]
+
         if self._smart_api:
             if self._rate_limiter:
                 acquired = self._rate_limiter.acquire("historical", timeout=4.0)
@@ -365,6 +375,8 @@ class AngelDataProvider:
                     "todate": to_dt.strftime("%Y-%m-%d %H:%M"),
                 }
                 res = self._smart_api.getCandleData(hist_params)
+                # Space calls to respect Angel One rate limit
+                time.sleep(0.35)
                 if res and res.get("status") and "data" in res:
                     candles = []
                     for row in res["data"]:
@@ -403,6 +415,7 @@ class AngelDataProvider:
                     return candles
             except Exception as e:
                 logger.error("Angel One get_historical error for %s: %s", clean, e)
+                self._error_backoff[cache_key] = now_mono + 10.0  # 10s cooldown
                 if cache_key in self._candle_cache and self._candle_cache[cache_key][1]:
                     return self._candle_cache[cache_key][1]
 
