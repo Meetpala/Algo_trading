@@ -12,8 +12,10 @@ import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
-_venv_python = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
-if _venv_python.exists() and Path(sys.executable).resolve() != _venv_python.resolve():
+_venv_python_win = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
+_venv_python_nix = ROOT_DIR / ".venv" / "bin" / "python"
+_venv_python = _venv_python_win if _venv_python_win.exists() else (_venv_python_nix if _venv_python_nix.exists() else None)
+if _venv_python and Path(sys.executable).resolve() != _venv_python.resolve():
     import subprocess
     sys.exit(subprocess.run([str(_venv_python), str(Path(__file__).resolve()), *sys.argv[1:]]).returncode)
 

@@ -30,9 +30,11 @@ from urllib.parse import parse_qs, urlparse
 ROOT_DIR = Path(__file__).resolve().parent
 
 # Auto-bootstrap: if invoked with system/global Python instead of the project's .venv,
-# transparently re-launch under .venv\Scripts\python.exe so all dependencies are guaranteed.
-_venv_python = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
-if _venv_python.exists() and Path(sys.executable).resolve() != _venv_python.resolve():
+# transparently re-launch under .venv so all dependencies are guaranteed.
+_venv_python_win = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
+_venv_python_nix = ROOT_DIR / ".venv" / "bin" / "python"
+_venv_python = _venv_python_win if _venv_python_win.exists() else (_venv_python_nix if _venv_python_nix.exists() else None)
+if _venv_python and Path(sys.executable).resolve() != _venv_python.resolve():
     import subprocess
     sys.exit(subprocess.run([str(_venv_python), str(Path(__file__).resolve()), *sys.argv[1:]]).returncode)
 
