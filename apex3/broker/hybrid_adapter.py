@@ -48,13 +48,28 @@ class HybridBrokerAdapter(BrokerInterface):
 
     def get_quote(self, symbol: str, exchange: str = "NSE") -> Quote:
         """Fetch live quote from Angel One free data feed."""
-        return self.data_provider.get_quote(symbol=symbol, exchange=exchange)
+        q = self.data_provider.get_quote(symbol=symbol, exchange=exchange)
+        from apex3.broker.paper import PaperBroker
+        if isinstance(self.execution_broker, PaperBroker) and q is not None:
+            if q.last_price > 0:
+                self.execution_broker.simulate_tick(symbol, q.last_price)
+            self.execution_broker.set_quote(q)
+        return q
 
     def get_quotes_batch(self, symbols: list[str], exchange: str = "NSE") -> dict[str, Quote]:
         """Fetch batch quotes from Angel One free data feed in a single snapshot."""
         if hasattr(self.data_provider, "get_quotes_batch"):
-            return self.data_provider.get_quotes_batch(symbols, exchange=exchange)
-        return {sym: self.data_provider.get_quote(sym, exchange=exchange) for sym in symbols}
+            batch = self.data_provider.get_quotes_batch(symbols, exchange=exchange)
+        else:
+            batch = {sym: self.data_provider.get_quote(sym, exchange=exchange) for sym in symbols}
+        from apex3.broker.paper import PaperBroker
+        if isinstance(self.execution_broker, PaperBroker) and isinstance(batch, dict):
+            for sym, q in batch.items():
+                if q is not None:
+                    if q.last_price > 0:
+                        self.execution_broker.simulate_tick(sym, q.last_price)
+                    self.execution_broker.set_quote(q)
+        return batch
 
     def get_historical(
         self,

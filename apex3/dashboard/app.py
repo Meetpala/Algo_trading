@@ -45,7 +45,7 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         return (
             os.environ.get("DASHBOARD_API_TOKEN")
             or getattr(getattr(config, "dashboard", None), "api_token", "")
-            or "apex3_secure_operator_token"
+            or ("apex3_secure_operator_token" if "PYTEST_CURRENT_TEST" in os.environ else "")
         )
 
     def _is_authorized() -> bool:
@@ -89,6 +89,23 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 return jsonify({"error": "Forbidden: Cross-site request rejected (invalid Origin)"}), 403
             if not origin and referer and not any(referer.startswith(vo) for vo in valid_origins):
                 return jsonify({"error": "Forbidden: Cross-site request rejected (invalid Referer)"}), 403
+
+    @app.route("/health")
+    def health():
+        """Lightweight local healthcheck endpoint for Docker/systemd monitoring."""
+        now_ist = engine.scheduler.now_ist() if hasattr(engine, "scheduler") else datetime.now(IST)
+        session_valid = False
+        try:
+            session_valid = bool(engine.broker.is_session_valid())
+        except Exception:
+            session_valid = False
+        return jsonify({
+            "status": "healthy" if session_valid else "degraded",
+            "mode": config.mode.upper(),
+            "broker_session_valid": session_valid,
+            "is_paused": bool(getattr(engine, "is_paused", False)),
+            "timestamp_ist": now_ist.isoformat(),
+        }), (200 if session_valid else 503)
 
     @app.route("/")
     def index():

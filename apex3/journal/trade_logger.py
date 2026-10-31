@@ -294,15 +294,17 @@ class TradeLogger:
             buy_px, sell_px = exit_price, entry_price
             exit_side_str = "BUY (Cover SHORT)"
 
-        # Exact Zerodha intraday statutory friction
-        turnover = (buy_px + sell_px) * quantity
-        brokerage = min(40.0, turnover * 0.0003)
-        stt = sell_px * quantity * 0.00025
-        exchange_txn = turnover * 0.0000322
-        gst = (brokerage + exchange_txn) * 0.18
-        stamp_duty = buy_px * quantity * 0.00003
+        # Exact Zerodha intraday statutory friction (matches sizer.py & accounting.py)
+        buy_turnover = buy_px * quantity
+        sell_turnover = sell_px * quantity
+        turnover = buy_turnover + sell_turnover
+        brokerage = min(20.0, buy_turnover * 0.0003) + min(20.0, sell_turnover * 0.0003)
+        stt = sell_turnover * 0.00025
+        exchange_txn = turnover * 0.0000318
         sebi_turnover = turnover * 0.000001
-        charges = brokerage + stt + exchange_txn + gst + stamp_duty + sebi_turnover
+        gst = (brokerage + exchange_txn + sebi_turnover) * 0.18
+        stamp_duty = buy_turnover * 0.00003
+        charges = round(brokerage + stt + exchange_txn + gst + stamp_duty + sebi_turnover, 2)
         net_pnl = round(gross_pnl - charges, 2)
         margin_employed = (entry_price * quantity) / 4.0
         ret_on_margin = (net_pnl / margin_employed * 100.0) if margin_employed > 0 else 0.0
@@ -638,8 +640,19 @@ class TradeLogger:
         except Exception:
             content = ""
 
+        # Find latest session/timestamp date already in content so we never append out-of-order past dates
+        existing_dates = re.findall(r"\[(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\s+IST\]", content)
+        max_existing_date = self.start_date
+        for d_str in existing_dates:
+            try:
+                parsed_d = date.fromisoformat(d_str)
+                if parsed_d > max_existing_date:
+                    max_existing_date = parsed_d
+            except ValueError:
+                pass
+
         reconciled = 0
-        curr = self.start_date
+        curr = max(self.start_date, max_existing_date)
         while curr <= end_date:
             # Check only weekdays (0=Mon, 4=Fri)
             if curr.weekday() < 5:

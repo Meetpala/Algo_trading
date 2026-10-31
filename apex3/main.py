@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from datetime import datetime
+from typing import Optional
 from zoneinfo import ZoneInfo
 
+from apex3.alerts.notifier import AlertNotifier
 from apex3.broker.paper import PaperBroker
 from apex3.config import load_config
 from apex3.dashboard.app import create_app
@@ -33,6 +36,49 @@ logging.basicConfig(
 )
 logger = logging.getLogger("apex3.main")
 
+_LOCK_HANDLE = None
+
+
+def acquire_instance_lock(lock_path: str = "apex3_engine.lock") -> bool:
+    """Acquire an OS-level exclusive file lock to prevent duplicate engine instances."""
+    global _LOCK_HANDLE
+    try:
+        fh = open(lock_path, "w", encoding="utf-8")
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fh.write(f"{os.getpid()}\n")
+        fh.flush()
+        _LOCK_HANDLE = fh
+        return True
+    except Exception as e:
+        logger.critical("DUPLICATE INSTANCE PREVENTED: Could not acquire lock on %s (%s). Another APEX-3 instance is already running!", lock_path, e)
+        return False
+
+
+def release_instance_lock() -> None:
+    """Release the OS-level process lock if held."""
+    global _LOCK_HANDLE
+    if _LOCK_HANDLE is not None:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                _LOCK_HANDLE.seek(0)
+                msvcrt.locking(_LOCK_HANDLE.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(_LOCK_HANDLE.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            _LOCK_HANDLE.close()
+        except Exception:
+            pass
+        _LOCK_HANDLE = None
+
 
 def run_app():
     parser = argparse.ArgumentParser(description="APEX-3 Zerodha Intraday System")
@@ -48,6 +94,11 @@ def run_app():
     if args.mode:
         config.mode = args.mode
     logger.info("Initializing APEX-3 version 0.1.0 (Mode: %s)...", config.mode.upper())
+    notifier = AlertNotifier()
+
+    if not getattr(args, "sync_trades", False) and not getattr(args, "simulate", False):
+        if not acquire_instance_lock():
+            sys.exit(1)
 
     # Initialize Journal & Trade Audit Logger
     journal = Journal(db_path=config.journal.db_path)
@@ -58,6 +109,11 @@ def run_app():
         from apex3.broker.kite_adapter import KiteAdapter
         from apex3.broker.rate_limiter import RateLimiter
         logger.warning("LIVE TRADING MODE CONFIGURED — Checking safety gates...")
+        if not config.secrets.live_trading_enabled:
+            logger.critical("LIVE TRADING REQUIRES EXPLICIT FLAG: Set LIVE_TRADING_ENABLED=true in .env")
+            if not getattr(args, "simulate", False):
+                release_instance_lock()
+                sys.exit(1)
         rl_rates = {
             "orders": float(getattr(config.rate_limits, "orders_per_second", 10.0)),
             "quotes": float(getattr(config.rate_limits, "quotes_per_second", 1.0)),
@@ -94,13 +150,39 @@ def run_app():
                 "Verify API credentials, TOTP, and access tokens before starting autonomous live trading."
             )
             logger.critical(msg)
+            notifier.notify_connection_lost("Zerodha/AngelOne", msg)
             if not getattr(args, "simulate", False):
-                import sys
+                release_instance_lock()
                 logger.critical("Aborting live autonomous startup. Engine will NOT start.")
                 sys.exit(1)
     else:
         logger.info("Operating in PAPER TRADING mode. Real orders are impossible.")
-        broker = PaperBroker(starting_margin=config.paper_starting_capital)
+        paper_broker = PaperBroker(starting_margin=config.paper_starting_capital)
+        if config.secrets.angel_api_key and not getattr(args, "simulate", False):
+            from apex3.broker.angel_data_provider import AngelDataProvider
+            from apex3.broker.hybrid_adapter import HybridBrokerAdapter
+            from apex3.broker.rate_limiter import RateLimiter
+            rl_rates = {
+                "orders": float(getattr(config.rate_limits, "orders_per_second", 10.0)),
+                "quotes": float(getattr(config.rate_limits, "quotes_per_second", 5.0)),
+                "historical": float(getattr(config.rate_limits, "historical_per_second", 3.0)),
+            }
+            rate_limiter = RateLimiter(rates=rl_rates)
+            angel_data = AngelDataProvider(
+                api_key=config.secrets.angel_api_key,
+                client_code=config.secrets.angel_client_code,
+                pin=config.secrets.angel_pin,
+                totp_secret=config.secrets.angel_totp_secret,
+                rate_limiter=rate_limiter,
+            )
+            if angel_data.is_session_valid():
+                logger.info("LIVE-DATA PAPER MODE ACTIVE: Streaming live NSE feed from Angel One into PaperBroker.")
+                broker = HybridBrokerAdapter(data_provider=angel_data, execution_broker=paper_broker)
+            else:
+                logger.warning("Angel One live feed unavailable; falling back to standalone offline PaperBroker.")
+                broker = paper_broker
+        else:
+            broker = paper_broker
 
     # Sync offline/startup trades from broker into info.log
     try:
@@ -133,7 +215,7 @@ def run_app():
         watched = list(radar_cfg.get("core_watchlist", [])) + list(radar_cfg.get("extended_pool", []))
         if not watched:
             watched = list(config.watchlist.symbols) + list(config.watchlist.scanner_universe)
-        rec_status = reconciler.audit_startup_state(watched_symbols=watched)
+        rec_status = reconciler.audit_startup_state(watched_symbols=watched, reattach_stops=True)
         if not rec_status.is_clean:
             msg = (
                 f"CRITICAL PRE-FLIGHT AUDIT FAILED: {rec_status.message}. "
@@ -142,11 +224,17 @@ def run_app():
             )
             logger.critical(msg)
             if not getattr(args, "simulate", False):
-                import sys
+                release_instance_lock()
                 logger.critical("Aborting live autonomous startup. Engine will NOT start.")
                 sys.exit(1)
         else:
             logger.info("PRE-FLIGHT AUDIT PASSED: Account state verified. Flat=%s", rec_status.is_flat)
+            try:
+                backfill_res = engine.reconcile_and_backfill_late_start()
+                if backfill_res.get("recovered_positions"):
+                    notifier.notify_unexpected_restart(config.mode, backfill_res["recovered_positions"])
+            except Exception as bfe:
+                logger.warning("Late-start backfill warning: %s", bfe)
 
     if args.simulate:
         logger.info("Running simulated trading session...")

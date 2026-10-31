@@ -1,34 +1,44 @@
-# APEX-3 Production Cloud Dockerfile
 FROM python:3.11-slim
 
-# Prevent Python bytecode and buffer stdout/stderr
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV TZ=Asia/Kolkata
+# Prevent Python from writing pyc files and buffering stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Kolkata
 
-# Install system dependencies (curl for healthchecks, tzdata for IST timezone)
+# Install OS packages (tzdata, curl for healthcheck, build tools for Twisted/cffi)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     curl \
-    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
+    gcc \
+    libffi-dev \
+    libssl-dev \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
+
+# Create non-root execution user
+RUN useradd -m -u 1000 -s /bin/bash apex3
 
 WORKDIR /app
 
-# Copy dependency manifest first to leverage Docker layer caching
-COPY requirements.txt .
+# Install Python dependencies first for layer caching
+COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy source code and config
-COPY apex3/ ./apex3/
-COPY scripts/ ./scripts/
+# Copy application source
+COPY --chown=apex3:apex3 . /app
 
-# Ensure directory for logs exists
-RUN mkdir -p /app/logs
+# Ensure persistent runtime files exist and are owned by apex3
+RUN mkdir -p /app/logs && \
+    touch /app/apex3_journal.db /app/info.log && \
+    chown -R apex3:apex3 /app
 
-# Expose port 5000 for operator dashboard
+USER apex3
+
 EXPOSE 5000
 
-# Default entrypoint boots autonomous engine in live mode with dashboard on 0.0.0.0
-CMD ["python", "-m", "apex3.main", "--mode", "live", "--host", "0.0.0.0", "--port", "5000"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:5000/health || exit 1
+
+CMD ["python", "-m", "apex3.main", "--mode", "paper", "--host", "0.0.0.0", "--port", "5000"]

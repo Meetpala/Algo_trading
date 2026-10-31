@@ -1,14 +1,16 @@
 [Unit]
 Description=APEX-3 Autonomous Intraday Trading Engine & Dashboard
-After=network.target time-sync.target
+After=network-online.target time-sync.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/Algo_trading
+User=__APEX3_USER__
+WorkingDirectory=__APEX3_WORKDIR__
+EnvironmentFile=__APEX3_WORKDIR__/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=TZ=Asia/Kolkata
-ExecStart=/home/ubuntu/Algo_trading/.venv/bin/python -m apex3.main --mode live --host 0.0.0.0 --port 5000
+ExecStart=__APEX3_WORKDIR__/.venv/bin/python -m apex3.main --mode live --host 127.0.0.1 --port 5000
 Restart=always
 RestartSec=5s
 KillSignal=SIGTERM

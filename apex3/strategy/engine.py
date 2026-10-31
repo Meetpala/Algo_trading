@@ -56,7 +56,7 @@ from apex3.strategy.accounting import build_session_pnl
 from apex3.strategy.regime import MarketRegime, evaluate_market_regime
 from apex3.strategy.risk import evaluate_portfolio_risk
 from apex3.strategy.schedule import SessionScheduler, SessionState
-from apex3.strategy.signal import build_opening_range, evaluate_signal
+from apex3.strategy.signal import build_opening_range, evaluate_signal, validate_late_start_signal
 from apex3.strategy.sizer import size_position
 from apex3.strategy.trail import (
     calculate_initial_stop,
@@ -133,6 +133,25 @@ class StrategyEngine:
         # Opening ranges cache: symbol -> OpeningRange
         self.opening_ranges: dict[str, OpeningRange] = {}
         self.latest_regime_eval: Optional[Any] = None
+
+    def _ensure_ist(self, dt: datetime) -> datetime:
+        """Normalize any naive or aware datetime to Asia/Kolkata (IST)."""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=IST)
+        return dt.astimezone(IST)
+
+    def _filter_completed_candles(self, candles: list[Candle], now: datetime) -> list[Candle]:
+        """Return only completed candles whose bar close timestamp is <= now."""
+        now_ist = self._ensure_ist(now)
+        res = []
+        for c in candles:
+            if not getattr(c, "is_complete", True):
+                continue
+            ts = self._ensure_ist(c.timestamp)
+            if ts + timedelta(minutes=5) <= now_ist + timedelta(seconds=2):
+                res.append(c)
+        return res or [c for c in candles if getattr(c, "is_complete", True)]
+
 
     def _confirm_order_terminal(self, order_id: str, timeout_sec: float = 3.0) -> Optional[OrderState]:
         """Poll broker until order reaches a terminal state (CANCELLED, REJECTED, COMPLETE)."""
@@ -276,6 +295,101 @@ class StrategyEngine:
         # In a real app we mutate config or create new one; here we update watchlist symbols
         object.__setattr__(self.config.watchlist, "symbols", valid_symbols)
         return valid_symbols
+
+    def reconcile_and_backfill_late_start(self, current_time: Optional[datetime] = None) -> dict:
+        """Execute full Phase 2 Late-Start ('start any time') reconciliation and candle backfill.
+
+        1. Fetches positions, open orders, and today's trades from broker(s) and rebuilds state.
+        2. Immediately re-attaches protective SL orders to any unprotected strategy positions.
+        3. Backfills 5m candles from 09:15 IST to `now` and recomputes Opening Range, VWAP, and EMAs.
+        4. Updates `best_favorable_price` (HWM/LWM) on recovered open positions from backfilled candles.
+        """
+        with self._execution_lock:
+            now = self._ensure_ist(current_time or self.scheduler.now_ist())
+            session_date = now.date()
+            self._current_session_date = session_date
+            symbols = self.get_active_watchlist()
+
+            # 1. Reconcile positions, orders, and trades; re-attach missing SL orders
+            audit = self.reconciler.audit_startup_state(symbols, reattach_stops=True)
+
+            # 2. Backfill 5m candles for benchmark and watchlist symbols
+            hist_from_5m = now - timedelta(days=25)
+            bench_sym = self.config.regime.benchmark_symbol
+            try:
+                bench_candles = self._filter_completed_candles(
+                    self.broker.get_historical(bench_sym, "5minute", hist_from_5m, now), now
+                )
+            except Exception as e:
+                logger.warning("Late-start benchmark backfill failed: %s", e)
+                bench_candles = []
+
+            backfilled_symbols: list[str] = []
+            rebuilt_ors: list[str] = []
+            for sym in symbols:
+                try:
+                    raw_c = self.broker.get_historical(sym, "5minute", hist_from_5m, now)
+                    comp_c = self._filter_completed_candles(raw_c, now)
+                    if comp_c:
+                        backfilled_symbols.append(sym)
+                    or_obj = build_opening_range(sym, comp_c, session_date=session_date)
+                    self.opening_ranges[sym] = or_obj
+                    if or_obj.is_complete:
+                        rebuilt_ors.append(sym)
+
+                    # 3. If position is open on this symbol, update HWM/LWM from today's candles since entry
+                    pos = self.state_machine.positions.get(sym)
+                    if pos and pos.quantity > 0:
+                        raw_entry_ts = self._ensure_ist(pos.entry_timestamp) if pos.entry_timestamp else None
+                        if raw_entry_ts and raw_entry_ts.date() == session_date and raw_entry_ts <= now:
+                            entry_ts = raw_entry_ts
+                        else:
+                            entry_ts = now.replace(hour=9, minute=30, second=0, microsecond=0)
+                        today_post_entry = [
+                            c for c in comp_c
+                            if self._ensure_ist(c.timestamp).date() == session_date and self._ensure_ist(c.timestamp) >= entry_ts
+                        ]
+                        if today_post_entry:
+                            if pos.side == Side.BUY:
+                                pos.best_favorable_price = max([pos.best_favorable_price, pos.average_entry] + [c.high for c in today_post_entry])
+                            else:
+                                cand_lows = [c.low for c in today_post_entry] + ([pos.best_favorable_price] if pos.best_favorable_price > 0 else []) + [pos.average_entry]
+                                pos.best_favorable_price = min(x for x in cand_lows if x > 0)
+                        try:
+                            q_live = self.broker.get_quote(sym)
+                            if q_live and getattr(q_live, "is_fresh", False) and q_live.last_price > 0:
+                                if pos.side == Side.BUY:
+                                    pos.best_favorable_price = max(pos.best_favorable_price, q_live.last_price)
+                                else:
+                                    pos.best_favorable_price = min(pos.best_favorable_price, q_live.last_price) if pos.best_favorable_price > 0 else q_live.last_price
+                        except Exception:
+                            pass
+                        if pos.initial_stop_price > 0 and pos.average_entry > 0:
+                            pos.r_value = abs(pos.average_entry - pos.initial_stop_price)
+                            if pos.target_price <= 0:
+                                inst_obj = self.broker.get_instrument_info(sym)
+                                tick_sz = inst_obj.tick_size if inst_obj and inst_obj.tick_size > 0 else 0.05
+                                pos.target_price = calculate_target_price(
+                                    side=pos.side,
+                                    entry_price=pos.average_entry,
+                                    initial_stop=pos.initial_stop_price,
+                                    target_r=self.config.stops.target_r,
+                                    tick_size=tick_sz,
+                                )
+                except Exception as se:
+                    logger.warning("Late-start backfill failed for %s: %s", sym, se)
+
+            return {
+                "timestamp_ist": now.isoformat(),
+                "is_clean": audit.is_clean,
+                "is_flat": audit.is_flat,
+                "backfilled_symbols": backfilled_symbols,
+                "rebuilt_opening_ranges": rebuilt_ors,
+                "recovered_positions": [
+                    p.symbol for p in self.state_machine.positions.values() if p.quantity > 0
+                ],
+                "benchmark_candles_count": len(bench_candles),
+            }
 
     def evaluate_step(self, current_time: Optional[datetime] = None) -> list[StrategyDecision]:
         """Run one complete cycle of the 12-step deterministic pipeline (thread-safe)."""
@@ -1364,6 +1478,8 @@ class StrategyEngine:
             broker_positions = self.broker.get_positions()
             risk_positions: list[PositionState] = []
             for position in broker_positions:
+                if getattr(position, "product", Product.MIS) != Product.MIS:
+                    continue
                 qty = abs(position.quantity)
                 if qty <= 0:
                     continue
@@ -1870,6 +1986,51 @@ class StrategyEngine:
                 )
                 continue
 
+            # Late-Start & Stale-Signal Validity Gate:
+            # If the trigger bar closed more than 5 minutes before `now`, validate that price is still
+            # within slip_pct of signal_price, stop-loss was not hit, and target was not hit.
+            if completed_stock_candles:
+                trig_bar = completed_stock_candles[-1]
+                trig_ts = self._ensure_ist(trig_bar.timestamp)
+                bar_close_ts = trig_ts + timedelta(minutes=5)
+                if (now - bar_close_ts).total_seconds() > 300.0:
+                    cand_target = calculate_target_price(
+                        side=side,
+                        entry_price=entry_price,
+                        initial_stop=initial_stop,
+                        target_r=self.config.stops.target_r,
+                        tick_size=tick,
+                    )
+                    or_obj = self.opening_ranges.get(sym)
+                    late_val = validate_late_start_signal(
+                        symbol=sym,
+                        side=side,
+                        signal_price=sig_price,
+                        initial_stop=initial_stop,
+                        target_price=cand_target,
+                        or_high=or_obj.high if or_obj else 0.0,
+                        or_low=or_obj.low if or_obj else 0.0,
+                        trigger_bar_timestamp=trig_ts,
+                        subsequent_candles=stock_candles,
+                        quote=quote,
+                        now_ist=now,
+                        entry_start_hhmm=self.config.schedule.entry_start,
+                        entry_cutoff_hhmm=self.config.schedule.entry_cutoff,
+                        max_price_drift_pct=slip_pct,
+                    )
+                    if not late_val.is_valid:
+                        decisions.append(
+                            StrategyDecision(
+                                decision=Decision.WAIT,
+                                symbol=sym,
+                                side=side,
+                                timestamp_ist=now,
+                                reason_codes=[late_val.reason_code, "STALE_SIGNAL_SKIPPED"],
+                                explanation=late_val.explanation,
+                            )
+                        )
+                        continue
+
             # Estimate order margin from broker
             dummy_req = OrderRequest(
                 symbol=sym,
@@ -1939,6 +2100,34 @@ class StrategyEngine:
             # -------------------------------------------------------------
             tag = make_broker_tag(self.session_tag, sym, f"E{now.strftime('%H%M')}")
             broker_action = "PLACE_ENTRY_AND_PROTECTION"
+
+            # Duplicate-start / Order-book idempotency check before placing entry order:
+            # Verify no active entry order or existing MIS position is already on the broker for `sym`
+            dup_orders = [
+                o for o in broker_orders
+                if getattr(o, "request", None)
+                and o.request.symbol == sym
+                and (
+                    (o.status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING, OrderStatus.PENDING) and o.request.order_type == OrderType.LIMIT)
+                    or (o.request.tag == tag and o.status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING, OrderStatus.PENDING, OrderStatus.COMPLETE))
+                )
+            ]
+            dup_positions = [
+                p for p in broker_positions
+                if p.symbol == sym and getattr(p, "product", Product.MIS) == Product.MIS and abs(p.quantity) > 0
+            ]
+            if dup_orders or dup_positions:
+                decisions.append(
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        symbol=sym,
+                        side=side,
+                        timestamp_ist=now,
+                        reason_codes=["DUPLICATE_ORDER_PREVENTED"],
+                        explanation=f"Skipped duplicate entry for {sym}: active order or MIS position already exists in broker order book",
+                    )
+                )
+                continue
 
             entry_req = OrderRequest(
                 symbol=sym,

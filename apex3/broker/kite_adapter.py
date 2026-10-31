@@ -362,9 +362,9 @@ class KiteAdapter(BrokerInterface):
         order_req = OrderRequest(
             symbol=latest.get("tradingsymbol", ""),
             exchange=latest.get("exchange", "NSE"),
-            side=Side[latest.get("transaction_type", "BUY")],
+            side=getattr(Side, str(latest.get("transaction_type", "BUY")).upper().strip(), Side.BUY),
             quantity=int(latest.get("quantity", 0)),
-            product=Product[latest.get("product", "MIS")],
+            product=getattr(Product, str(latest.get("product", "MIS")).upper().strip(), Product.UNKNOWN),
             order_type=_map_kite_order_type(latest.get("order_type", "LIMIT")),
             price=float(latest.get("price", 0.0)),
             trigger_price=float(latest.get("trigger_price", 0.0)),
@@ -395,9 +395,9 @@ class KiteAdapter(BrokerInterface):
             order_req = OrderRequest(
                 symbol=o.get("tradingsymbol", ""),
                 exchange=o.get("exchange", "NSE"),
-                side=Side[o.get("transaction_type", "BUY")],
+                side=getattr(Side, str(o.get("transaction_type", "BUY")).upper().strip(), Side.BUY),
                 quantity=int(o.get("quantity", 0)),
-                product=Product[o.get("product", "MIS")],
+                product=getattr(Product, str(o.get("product", "MIS")).upper().strip(), Product.UNKNOWN),
                 order_type=_map_kite_order_type(o.get("order_type", "LIMIT")),
                 price=float(o.get("price", 0.0)),
                 trigger_price=float(o.get("trigger_price", 0.0)),

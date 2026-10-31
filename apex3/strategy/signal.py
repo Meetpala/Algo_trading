@@ -787,6 +787,7 @@ class StockCandidateBar:
     adr14_pct: float                # 14-day Average Daily Range as decimal (e.g., 0.022 = 2.2%)
     bar_high: float = 0.0
     bar_low: float = 0.0
+    tick_size: float = 0.05
 
 
 @dataclass
@@ -798,6 +799,133 @@ class TradeSignal:
     volume_surge_ratio: float
     relative_strength: float
     conviction_score: float
+
+
+@dataclass(frozen=True)
+class LateStartValidityResult:
+    """Explicit validity evaluation for a setup that triggered before or at late-start time."""
+    is_valid: bool
+    reason_code: str
+    explanation: str
+    drift_pct: float = 0.0
+
+
+def _ensure_ist_candle_ts(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=IST)
+    return dt.astimezone(IST)
+
+
+
+def validate_late_start_signal(
+    symbol: str,
+    side: Side,
+    signal_price: float,
+    initial_stop: float,
+    target_price: float,
+    or_high: float,
+    or_low: float,
+    trigger_bar_timestamp: datetime,
+    subsequent_candles: list[Candle],
+    quote: Optional[Quote],
+    now_ist: datetime,
+    entry_start_hhmm: str = "09:35",
+    entry_cutoff_hhmm: str = "12:30",
+    max_price_drift_pct: float = 0.0015,
+) -> LateStartValidityResult:
+    """Validate whether a setup that triggered at or before `now_ist` is still valid to enter.
+
+    Rules enforced:
+    1. Current time `now_ist` must be inside the allowed `[entry_start_hhmm, entry_cutoff_hhmm]` window.
+    2. Live quote must be fresh and > 0.
+    3. Stop-loss must NOT have been hit on any subsequent bar (`ts > trigger_bar_timestamp`) or live quote.
+    4. Target must NOT have already been hit on any subsequent bar or live quote.
+    5. Live price must still be outside the Opening Range breakout boundary and within `max_price_drift_pct`
+       (default 0.15%) of `signal_price`.
+    """
+    now_norm = _ensure_ist_candle_ts(now_ist)
+    trig_norm = _ensure_ist_candle_ts(trigger_bar_timestamp)
+    now_hhmm = now_norm.strftime("%H:%M")
+
+    if not (entry_start_hhmm <= now_hhmm <= entry_cutoff_hhmm):
+        return LateStartValidityResult(
+            is_valid=False,
+            reason_code="OUTSIDE_ENTRY_WINDOW",
+            explanation=f"Current time {now_hhmm} IST is outside entry window [{entry_start_hhmm}, {entry_cutoff_hhmm}]",
+        )
+
+    if quote is None or not getattr(quote, "is_fresh", False) or getattr(quote, "last_price", 0.0) <= 0:
+        return LateStartValidityResult(
+            is_valid=False,
+            reason_code="STALE_QUOTE",
+            explanation=f"Missing or stale live quote for {symbol} during late-start validity check",
+        )
+
+    ltp = float(quote.last_price)
+    post_bars = [c for c in subsequent_candles if _ensure_ist_candle_ts(c.timestamp) > trig_norm]
+
+    # Check stop-loss and target breach on all subsequent bars and live quote
+    if side == Side.BUY:
+        if initial_stop > 0:
+            if any(c.low <= initial_stop for c in post_bars) or ltp <= initial_stop:
+                return LateStartValidityResult(
+                    is_valid=False,
+                    reason_code="LATE_START_STOP_ALREADY_HIT",
+                    explanation=f"Long setup for {symbol} invalidated: price already breached stop {initial_stop:.2f}",
+                )
+        if target_price > 0:
+            if any(c.high >= target_price for c in post_bars) or ltp >= target_price:
+                return LateStartValidityResult(
+                    is_valid=False,
+                    reason_code="LATE_START_TARGET_ALREADY_HIT",
+                    explanation=f"Long setup for {symbol} invalidated: price already reached target {target_price:.2f}",
+                )
+        if or_high > 0 and ltp < or_high:
+            return LateStartValidityResult(
+                is_valid=False,
+                reason_code="LATE_START_BREAKOUT_REVERSED",
+                explanation=f"Long setup for {symbol} invalidated: live price {ltp:.2f} fell back below OR high {or_high:.2f}",
+            )
+    else:
+        if initial_stop > 0:
+            if any(c.high >= initial_stop for c in post_bars) or ltp >= initial_stop:
+                return LateStartValidityResult(
+                    is_valid=False,
+                    reason_code="LATE_START_STOP_ALREADY_HIT",
+                    explanation=f"Short setup for {symbol} invalidated: price already breached stop {initial_stop:.2f}",
+                )
+        if target_price > 0:
+            if any(c.low <= target_price for c in post_bars) or ltp <= target_price:
+                return LateStartValidityResult(
+                    is_valid=False,
+                    reason_code="LATE_START_TARGET_ALREADY_HIT",
+                    explanation=f"Short setup for {symbol} invalidated: price already reached target {target_price:.2f}",
+                )
+        if or_low > 0 and ltp > or_low:
+            return LateStartValidityResult(
+                is_valid=False,
+                reason_code="LATE_START_BREAKOUT_REVERSED",
+                explanation=f"Short setup for {symbol} invalidated: live price {ltp:.2f} rose back above OR low {or_low:.2f}",
+            )
+
+    drift_pct = abs(ltp - signal_price) / signal_price if signal_price > 0 else 0.0
+    if drift_pct > max_price_drift_pct + 1e-9:
+        return LateStartValidityResult(
+            is_valid=False,
+            reason_code="LATE_START_PRICE_DRIFT_EXCEEDED",
+            explanation=(
+                f"Setup for {symbol} skipped: live price {ltp:.2f} drifted {drift_pct*100:.2f}% from trigger "
+                f"{signal_price:.2f} (max allowed {max_price_drift_pct*100:.2f}%)"
+            ),
+            drift_pct=drift_pct,
+        )
+
+    return LateStartValidityResult(
+        is_valid=True,
+        reason_code="LATE_START_SIGNAL_VALID",
+        explanation=f"Setup for {symbol} validated (drift {drift_pct*100:.2f}% <= {max_price_drift_pct*100:.2f}%, stop & target intact)",
+        drift_pct=drift_pct,
+    )
 
 
 def evaluate_candidate_signal(
@@ -908,6 +1036,7 @@ def evaluate_candidate_signal(
         swing_high_5=bar.swing_high_5,
         atr14=bar.atr14,
         cfg=cfg,
+        tick_size=getattr(bar, "tick_size", 0.05) or 0.05,
     )
     min_r_pct = float(gates.get("min_stop_distance_pct", 0.0055))
     max_r_pct = float(gates.get("max_stop_distance_pct", 0.0090))

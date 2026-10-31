@@ -56,25 +56,30 @@ class StopEvaluation:
 TICK_SIZE = 0.05
 
 
-def floor_to_tick(price: float, tick: float = TICK_SIZE) -> float:
-    return round(math.floor(price / tick + 1e-9) * tick, 2)
+def floor_to_tick(price: float, tick: float = TICK_SIZE, tick_size: Optional[float] = None) -> float:
+    t = tick_size if (tick_size is not None and tick_size > 0) else (tick if tick > 0 else TICK_SIZE)
+    decimals = 4 if t < 0.01 else 2
+    return round(math.floor(price / t + 1e-9) * t, decimals)
 
 
-def ceil_to_tick(price: float, tick: float = TICK_SIZE) -> float:
-    return round(math.ceil(price / tick - 1e-9) * tick, 2)
+def ceil_to_tick(price: float, tick: float = TICK_SIZE, tick_size: Optional[float] = None) -> float:
+    t = tick_size if (tick_size is not None and tick_size > 0) else (tick if tick > 0 else TICK_SIZE)
+    decimals = 4 if t < 0.01 else 2
+    return round(math.ceil(price / t - 1e-9) * t, decimals)
 
 
 def round_to_tick(price: float, tick: float = TICK_SIZE, tick_size: Optional[float] = None, round_up: Optional[bool] = None) -> float:
     """Round price to the nearest instrument tick size."""
-    t = tick_size if tick_size is not None else tick
+    t = tick_size if (tick_size is not None and tick_size > 0) else tick
     if t <= 0:
         return price
+    decimals = 4 if t < 0.01 else 2
     ticks = price / t
     if round_up is True:
-        return round(math.ceil(ticks - 1e-9) * t, 2)
+        return round(math.ceil(ticks - 1e-9) * t, decimals)
     elif round_up is False:
-        return round(math.floor(ticks + 1e-9) * t, 2)
-    return round(round(ticks) * t, 2)
+        return round(math.floor(ticks + 1e-9) * t, decimals)
+    return round(round(ticks) * t, decimals)
 
 
 @dataclass
@@ -87,6 +92,7 @@ class StopTargetLevels:
     risk_per_share: float   # R = |Entry - Initial Stop|
     risk_pct: float         # R / Entry Price
     fee_lock_applied: bool = False
+    tick_size: float = TICK_SIZE
 
 
 def compute_initial_stop_and_target(
@@ -96,21 +102,23 @@ def compute_initial_stop_and_target(
     swing_high_5: float,
     atr14: float,
     cfg: dict,
+    tick_size: float = TICK_SIZE,
 ) -> StopTargetLevels:
     """Computes Structural Stop (Swing Low/High +/- 1.5x ATR) and Fixed 2.0R Target."""
     st_cfg = cfg.get("stops_and_targets", cfg.get("stops", {})) if isinstance(cfg, dict) else {}
     atr_mult = float(st_cfg.get("atr_stop_multiplier", st_cfg.get("initial_atr_multiplier", 1.5)))
     target_r = float(st_cfg.get("target_r_multiple", st_cfg.get("target_r", 2.0)))
+    t = tick_size if (tick_size and tick_size > 0) else TICK_SIZE
 
     side_str = side.value if hasattr(side, "value") else str(side).upper()
     if side_str in ("LONG", "BUY"):
-        initial_stop = floor_to_tick(swing_low_5 - (atr_mult * atr14))
+        initial_stop = floor_to_tick(swing_low_5 - (atr_mult * atr14), tick=t)
         risk_r = round(entry_price - initial_stop, 4)
-        target_price = round_to_tick(entry_price + (target_r * risk_r))
+        target_price = round_to_tick(entry_price + (target_r * risk_r), tick=t)
     elif side_str in ("SHORT", "SELL"):
-        initial_stop = ceil_to_tick(swing_high_5 + (atr_mult * atr14))
+        initial_stop = ceil_to_tick(swing_high_5 + (atr_mult * atr14), tick=t)
         risk_r = round(initial_stop - entry_price, 4)
-        target_price = round_to_tick(entry_price - (target_r * risk_r))
+        target_price = round_to_tick(entry_price - (target_r * risk_r), tick=t)
     else:
         raise ValueError(f"Unsupported side: {side}")
 
@@ -125,6 +133,7 @@ def compute_initial_stop_and_target(
         risk_per_share=risk_r,
         risk_pct=risk_pct,
         fee_lock_applied=False,
+        tick_size=t,
     )
 
 
@@ -133,6 +142,7 @@ def evaluate_fee_protected_stop(
     current_price: float,
     current_time_str: str,
     cfg: dict,
+    tick_size: Optional[float] = None,
 ) -> Optional[float]:
     """Continuous trailing is disabled (trail_enabled: false) so winners are not choked.
     However, a single one-time step is triggered if:
@@ -147,6 +157,7 @@ def evaluate_fee_protected_stop(
     if levels.risk_per_share <= 0:
         return None
 
+    t = tick_size if (tick_size is not None and tick_size > 0) else getattr(levels, "tick_size", TICK_SIZE)
     side_str = levels.side.upper()
     if side_str in ("LONG", "BUY"):
         unrealized_r = (current_price - levels.entry_price) / levels.risk_per_share
@@ -175,7 +186,7 @@ def evaluate_fee_protected_stop(
             levels.entry_price * (1.0 + offset_pct),
             levels.entry_price + (target_lock_r * levels.risk_per_share),
         )
-        protected_stop = ceil_to_tick(candidate)
+        protected_stop = ceil_to_tick(candidate, tick=t)
         if protected_stop > levels.current_stop and protected_stop < current_price:
             levels.current_stop = protected_stop
             levels.fee_lock_applied = True
@@ -185,7 +196,7 @@ def evaluate_fee_protected_stop(
             levels.entry_price * (1.0 - offset_pct),
             levels.entry_price - (target_lock_r * levels.risk_per_share),
         )
-        protected_stop = floor_to_tick(candidate)
+        protected_stop = floor_to_tick(candidate, tick=t)
         if protected_stop < levels.current_stop and protected_stop > current_price:
             levels.current_stop = protected_stop
             levels.fee_lock_applied = True

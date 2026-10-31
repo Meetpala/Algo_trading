@@ -1,30 +1,36 @@
-version: '3.8'
-
 services:
-  apex3-engine:
-    build: .
-    image: apex3:latest
-    container_name: apex3-trading-engine
+  apex3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apex3-engine
     restart: unless-stopped
-    ports:
-      - "5000:5000"
+    env_file:
+      - .env
     environment:
       - TZ=Asia/Kolkata
       - PYTHONUNBUFFERED=1
-    env_file:
-      - .env
+    # Bind dashboard strictly to loopback (127.0.0.1:5000) for SSH tunnel / Cloudflare tunnel safety
+    ports:
+      - "127.0.0.1:5000:5000"
     volumes:
-      # Mount application code so git pulls are immediately live without rebuilding
-      - ./apex3:/app/apex3
-      - ./scripts:/app/scripts
-      # Persist SQLite journal database across container updates
-      - ./apex3_journal.db:/app/apex3_journal.db
-      - ./logs:/app/logs
-      # Mount .env so updated daily tokens persist across container restarts
       - ./.env:/app/.env
+      - ./apex3_journal.db:/app/apex3_journal.db
+      - ./info.log:/app/info.log
+      - ./logs:/app/logs
+    command: >
+      python -m apex3.main
+      --mode ${APEX3_MODE:-paper}
+      --host 0.0.0.0
+      --port 5000
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/status"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"

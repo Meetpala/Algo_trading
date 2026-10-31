@@ -410,9 +410,10 @@ class Journal:
         self,
         session_date: Optional[str] = None,
         event_type: Optional[str] = None,
+        symbol: Optional[str] = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
-        """Query events by date and/or type."""
+        """Query events by date, type, and/or symbol."""
         conn = self._get_conn()
         query = "SELECT * FROM events WHERE 1=1"
         params: list[Any] = []
@@ -422,6 +423,9 @@ class Journal:
         if event_type:
             query += " AND event_type = ?"
             params.append(event_type)
+        if symbol:
+            query += " AND symbol = ?"
+            params.append(symbol)
         query += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(query, params).fetchall()

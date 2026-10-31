@@ -161,7 +161,88 @@ class Reconciler:
             strategy_id=self.session_tag,
         )
 
-    def audit_startup_state(self, watched_symbols: list[str]) -> ReconciliationStatus:
+    def reattach_protective_stop(self, pos: Any, tick_size: float = 0.05) -> bool:
+        """Immediately re-attach a protective SL order to an unprotected recovered strategy position."""
+        if pos.quantity <= 0:
+            return False
+        from apex3.strategy.trail import calculate_stop_limit_prices, round_to_tick
+        t = tick_size if (tick_size and tick_size > 0) else 0.05
+        stop_px = pos.current_stop_price if pos.current_stop_price > 0 else pos.initial_stop_price
+        if stop_px <= 0 and pos.average_entry > 0:
+            # Fallback 0.70% structural stop within Gate 9 sweet spot [0.55%, 0.90%]
+            if pos.side == Side.BUY:
+                stop_px = round_to_tick(pos.average_entry * (1.0 - 0.0070), tick_size=t, round_up=False)
+            else:
+                stop_px = round_to_tick(pos.average_entry * (1.0 + 0.0070), tick_size=t, round_up=True)
+            pos.initial_stop_price = stop_px
+            pos.current_stop_price = stop_px
+            pos.r_value = abs(pos.average_entry - stop_px)
+
+        if stop_px <= 0:
+            return False
+
+        # Check if live quote already breached stop_px
+        try:
+            quote = self.broker.get_quote(pos.symbol)
+            ltp = getattr(quote, "last_price", 0.0) if quote else 0.0
+            if isinstance(ltp, (int, float)) and ltp > 0:
+                if pos.side == Side.BUY and ltp <= stop_px:
+                    logger.critical("Cannot re-attach SL for %s: live price %.2f already breached stop %.2f", pos.symbol, ltp, stop_px)
+                    return False
+                if pos.side == Side.SELL and ltp >= stop_px:
+                    logger.critical("Cannot re-attach SL for %s: live price %.2f already breached stop %.2f", pos.symbol, ltp, stop_px)
+                    return False
+        except Exception:
+            pass
+
+        stops_cfg = getattr(self.config, "stops", None)
+        if stops_cfg is not None:
+            trigger_px, limit_px = calculate_stop_limit_prices(pos.side, stop_px, stops_cfg, t)
+        else:
+            trigger_px = round_to_tick(stop_px, tick_size=t, round_up=(pos.side == Side.SELL))
+            buf = max(t, trigger_px * 0.0025)
+            limit_px = round_to_tick(
+                trigger_px - buf if pos.side == Side.BUY else trigger_px + buf,
+                tick_size=t,
+                round_up=(pos.side == Side.SELL),
+            )
+
+        exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
+        sl_req = OrderRequest(
+            symbol=pos.symbol,
+            side=exit_side,
+            quantity=pos.quantity,
+            product=Product.MIS,
+            order_type=OrderType.SL,
+            price=limit_px,
+            trigger_price=trigger_px,
+            tag=make_broker_tag(self.session_tag, pos.symbol, "SLR"),
+            strategy_id=self.session_tag,
+        )
+        try:
+            sl_order_id = self.broker.place_order(sl_req)
+            if not isinstance(sl_order_id, str) or not sl_order_id:
+                return False
+            sl_state = self.broker.get_order_status(sl_order_id)
+            if sl_state and getattr(sl_state, "status", None) == OrderStatus.TRIGGER_PENDING:
+                pos.protective_order_id = sl_order_id
+                pos.current_stop_price = trigger_px
+                pos.phase = PositionPhase.OPEN_PROTECTED
+                logger.info("Re-attached and confirmed protective SL %s for %s @ %.2f on startup", sl_order_id, pos.symbol, trigger_px)
+                if hasattr(self.journal, "log_event"):
+                    self.journal.log_event(
+                        event_type="REATTACHED_PROTECTIVE_STOP_ON_STARTUP",
+                        symbol=pos.symbol,
+                        side=exit_side.value,
+                        data={"sl_order_id": sl_order_id, "trigger_price": trigger_px, "limit_price": limit_px, "quantity": pos.quantity},
+                        explanation=f"Re-attached protective SL {sl_order_id} for {pos.symbol} at {trigger_px:.2f} during startup reconciliation",
+                    )
+                return True
+        except Exception as e:
+            logger.error("Failed to re-attach protective SL for %s on startup: %s", pos.symbol, e)
+        return False
+
+    def audit_startup_state(self, watched_symbols: list[str], reattach_stops: bool = False) -> ReconciliationStatus:
         """Run on startup and reconnect to verify position state against broker.
 
         If any unknown position or external manual MIS trade is open,
@@ -205,6 +286,15 @@ class Reconciler:
                 message=f"Failed to fetch broker orders during startup audit: {oe}",
             )
 
+        # Also query today's broker trades if available
+        broker_trades: list[dict] = []
+        try:
+            raw_t = self.broker.get_trades()
+            if isinstance(raw_t, list):
+                broker_trades = raw_t
+        except Exception:
+            broker_trades = []
+
         for bp in broker_positions:
             if getattr(bp, "product", Product.MIS) != Product.MIS:
                 continue
@@ -239,7 +329,9 @@ class Reconciler:
                     pos.quantity = bp_qty
                     pos.side = bp_side
                     pos.average_entry = bp.average_entry
+                    pos.best_favorable_price = bp.average_entry
                     pos.current_stop_price = bp.protective_stop_price or 0.0
+                    pos.entry_timestamp = getattr(bp, "entry_time", None) or getattr(matching_orders[0], "last_updated", None) or datetime.now(IST)
 
                     # Reconnect resting protective stop order if present
                     matching_stops = [
@@ -256,25 +348,38 @@ class Reconciler:
                         pos.phase = PositionPhase.OPEN_UNPROTECTED
                         logger.warning("Restored strategy position %s (qty=%d) on restart, but resting SL order was not found", bp.symbol, bp_qty)
 
-                    # Restore initial_stop_price, r_value, and target_price on restart recovery
+                    # Fetch dynamic tick size from instrument info
+                    tick_sz = 0.05
+                    try:
+                        inst_info = self.broker.get_instrument_info(bp.symbol)
+                        cand_tick = getattr(inst_info, "tick_size", 0.05)
+                        if isinstance(cand_tick, (int, float)) and not isinstance(cand_tick, bool) and cand_tick > 0:
+                            tick_sz = float(cand_tick)
+                    except Exception:
+                        pass
+
+                    # Restore initial_stop_price, r_value, target_price, and best_favorable_price on restart recovery
                     orig_stop = 0.0
                     orig_target = 0.0
+                    orig_hwm = 0.0
                     if hasattr(self.journal, "get_events"):
                         try:
                             events = self.journal.get_events(symbol=bp.symbol, limit=20)
-                            for ev in events:
-                                ev_data = ev.get("data") if isinstance(ev, dict) else getattr(ev, "data", {})
-                                if isinstance(ev_data, str):
-                                    import json
-                                    try:
-                                        ev_data = json.loads(ev_data)
-                                    except Exception:
-                                        ev_data = {}
-                                if isinstance(ev_data, dict):
-                                    if float(ev_data.get("initial_stop", 0) or 0) > 0:
-                                        orig_stop = float(ev_data["initial_stop"])
-                                        orig_target = float(ev_data.get("target_price", 0) or 0)
-                                        break
+                            if isinstance(events, list):
+                                for ev in events:
+                                    ev_data = ev.get("data") if isinstance(ev, dict) else getattr(ev, "data", {})
+                                    if isinstance(ev_data, str):
+                                        import json
+                                        try:
+                                            ev_data = json.loads(ev_data)
+                                        except Exception:
+                                            ev_data = {}
+                                    if isinstance(ev_data, dict):
+                                        if float(ev_data.get("initial_stop", 0) or 0) > 0:
+                                            orig_stop = float(ev_data["initial_stop"])
+                                            orig_target = float(ev_data.get("target_price", 0) or 0)
+                                            orig_hwm = float(ev_data.get("best_favorable_price", 0) or 0)
+                                            break
                         except Exception as je:
                             logger.debug("Could not inspect journal for initial stop recovery: %s", je)
 
@@ -283,8 +388,16 @@ class Reconciler:
                     elif pos.initial_stop_price <= 0 and pos.current_stop_price > 0:
                         pos.initial_stop_price = pos.current_stop_price
 
+                    if orig_hwm > 0:
+                        pos.best_favorable_price = orig_hwm
+
                     if pos.initial_stop_price > 0 and pos.average_entry > 0:
                         pos.r_value = abs(pos.average_entry - pos.initial_stop_price)
+                        # Check if current_stop_price was already moved past entry (fee lock)
+                        if (pos.side == Side.BUY and pos.current_stop_price > pos.average_entry) or (
+                            pos.side == Side.SELL and 0 < pos.current_stop_price < pos.average_entry
+                        ):
+                            pos.fee_lock_applied = True
 
                     if orig_target > 0:
                         pos.target_price = orig_target
@@ -295,8 +408,12 @@ class Reconciler:
                             entry_price=pos.average_entry,
                             initial_stop=pos.initial_stop_price,
                             target_r=2.0,
-                            tick_size=0.05,
+                            tick_size=tick_sz,
                         )
+
+                    # Re-attach protective stop immediately if missing and reattach_stops is requested
+                    if pos.phase == PositionPhase.OPEN_UNPROTECTED and reattach_stops:
+                        self.reattach_protective_stop(pos, tick_size=tick_sz)
 
                     open_strategy_count += 1
                 else:

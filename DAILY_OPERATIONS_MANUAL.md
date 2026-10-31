@@ -21,12 +21,12 @@
 The system uses **Angel One SmartAPI** as a dedicated, read-only market data provider to stream live tick data, real-time quotes, and 5-minute candles for **`NIFTY 50`** and the **Elite 10 Stocks** (`HINDALCO`, `JSWSTEEL`, `RELIANCE`, `MARUTI`, `ITC`, `TCS`, `SBIN`, `TRENT`, `KOTAKBANK`, `SUNPHARMA`).
 
 ### Required Credentials in `.env`
-All four credentials are permanently stored in your cloud `.env` file:
+All four credentials are permanently stored in your cloud `.env` file (never commit real secrets to git):
 ```ini
-ANGEL_API_KEY=yE81mY3a
-ANGEL_CLIENT_CODE=KEKJ1463
-ANGEL_PIN=1245
-ANGEL_TOTP_SECRET=IRD5RIXPBIZXH5REMQAUPEKH5E
+ANGEL_API_KEY=<YOUR_ANGEL_API_KEY>
+ANGEL_CLIENT_CODE=<YOUR_ANGEL_CLIENT_CODE>
+ANGEL_PIN=<YOUR_ANGEL_PIN>
+ANGEL_TOTP_SECRET=<YOUR_ANGEL_TOTP_SECRET>
 ```
 
 ### How the Engine Authenticates Headlessly (Zero Human Intervention)

@@ -146,7 +146,7 @@ dashboard:
   host: "127.0.0.1"
   port: 5000
   auth_required: true
-  api_token: "apex3_secure_operator_token"
+  api_token: ""  # Set DASHBOARD_API_TOKEN in .env
   refresh_interval_sec: 2
 
 rate_limits:

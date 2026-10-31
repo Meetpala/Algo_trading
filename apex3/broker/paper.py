@@ -500,11 +500,19 @@ class PaperBroker(BrokerInterface):
         if symbol in self._instruments:
             return self._instruments[symbol]
 
+        # Standard NSE price-band tick sizes for radar stocks
+        default_ticks = {
+            "MARUTI": 1.00,
+            "JIOFIN": 0.01,
+            "TATASTEEL": 0.01,
+        }
+        tick = default_ticks.get(symbol.upper(), 0.05)
+
         # Return a generic default for unknown instruments
         return InstrumentInfo(
             symbol=symbol,
             exchange=exchange,
-            tick_size=0.05,
+            tick_size=tick,
             lot_size=1,
             mis_available=True,
         )
