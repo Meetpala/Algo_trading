@@ -1625,6 +1625,7 @@ class StrategyEngine:
         bench_candles = self.broker.get_historical(self.config.regime.benchmark_symbol, "5minute", hist_from_5m, now)
 
         stock_candles_map: dict[str, list[Candle]] = {}
+        inst_map: dict[str, InstrumentInfo] = {}
         session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
         for sym in symbols:
             # Skip if already open or in flight
@@ -1633,6 +1634,7 @@ class StrategyEngine:
                 for p in self.state_machine.positions.values()
             ):
                 continue
+            inst_map[sym] = self.broker.get_instrument_info(sym)
             s_candles = self.broker.get_historical(sym, "5minute", hist_from_5m, now)
             stock_candles_map[sym] = s_candles
             # Pre-build/cache opening range so late starts (e.g. 09:50 IST) reconstruct immediately
@@ -1687,7 +1689,7 @@ class StrategyEngine:
             ):
                 continue
 
-            inst = self.broker.get_instrument_info(sym)
+            inst = inst_map.get(sym) or self.broker.get_instrument_info(sym)
             quote = batch_quotes.get(sym) or self.broker.get_quote(sym)
             stock_candles = stock_candles_map.get(sym) or self.broker.get_historical(sym, "5minute", hist_from_5m, now)
 
@@ -1752,13 +1754,17 @@ class StrategyEngine:
 
         # Completed-bar deduplication: at most 1 entry per 5-minute candle
         if self._last_entry_bar_timestamp is not None:
+            def _latest_completed_ts(c_list: list[Candle]):
+                comp = [c for c in c_list if c.is_complete] or c_list
+                return comp[-1].timestamp if comp else None
+
             qualified_candidates = [
                 sym for sym in qualified_candidates
                 if not (
                     evaluated_signals.get(sym)
                     and len(evaluated_signals[sym]) > 2
                     and evaluated_signals[sym][2]
-                    and evaluated_signals[sym][2][-1].timestamp == self._last_entry_bar_timestamp
+                    and _latest_completed_ts(evaluated_signals[sym][2]) == self._last_entry_bar_timestamp
                 )
             ]
 
@@ -1776,7 +1782,8 @@ class StrategyEngine:
             if len(risk_positions) >= self.config.limits.max_symbols:
                 break
             sig, inst, stock_candles, quote = evaluated_signals[sym]
-            if self._last_entry_bar_timestamp is not None and stock_candles and stock_candles[-1].timestamp == self._last_entry_bar_timestamp:
+            completed_stock_candles = [c for c in stock_candles if c.is_complete] or stock_candles
+            if self._last_entry_bar_timestamp is not None and completed_stock_candles and completed_stock_candles[-1].timestamp == self._last_entry_bar_timestamp:
                 logger.debug("Bar %s already has an entry taken for %s. Skipping.", self._last_entry_bar_timestamp, sym)
                 continue
             sig_price = sig.signal_price
@@ -1823,20 +1830,20 @@ class StrategyEngine:
                 )
                 continue
 
-            # Calculate ATR for initial stop
+            # Calculate ATR for initial stop (strictly on completed bars)
             atr_series = compute_atr(
-                [c.high for c in stock_candles],
-                [c.low for c in stock_candles],
-                [c.close for c in stock_candles],
+                [c.high for c in completed_stock_candles],
+                [c.low for c in completed_stock_candles],
+                [c.close for c in completed_stock_candles],
                 period=self.config.stops.initial_atr_period,
             )
             atr_val = atr_series[-1] if atr_series else (entry_price * 0.01)
 
-            # Structural initial stop (true 5-bar structural swing anchor)
+            # Structural initial stop (true 5-bar structural swing anchor on completed bars)
             lookback_bars = getattr(self.config.stops, "swing_lookback_bars", 5)
-            lookback_candles = stock_candles[-lookback_bars:] if len(stock_candles) >= lookback_bars else stock_candles
-            swing_low_5 = min(c.low for c in lookback_candles) if lookback_candles else stock_candles[-1].low
-            swing_high_5 = max(c.high for c in lookback_candles) if lookback_candles else stock_candles[-1].high
+            lookback_candles = completed_stock_candles[-lookback_bars:] if len(completed_stock_candles) >= lookback_bars else completed_stock_candles
+            swing_low_5 = min(c.low for c in lookback_candles) if lookback_candles else completed_stock_candles[-1].low
+            swing_high_5 = max(c.high for c in lookback_candles) if lookback_candles else completed_stock_candles[-1].high
             initial_stop = calculate_initial_stop(
                 side=side,
                 entry_price=entry_price,
@@ -1988,8 +1995,8 @@ class StrategyEngine:
                     tick_size=inst.tick_size,
                 )
 
-                # Record bar timestamp deduplication
-                self._last_entry_bar_timestamp = stock_candles[-1].timestamp if stock_candles else now
+                # Record bar timestamp deduplication (using completed signal bar)
+                self._last_entry_bar_timestamp = completed_stock_candles[-1].timestamp if completed_stock_candles else now
 
                 entry_filled_qty = getattr(entry_state, "filled_quantity", 0)
                 is_filled_qty_positive = isinstance(entry_filled_qty, (int, float)) and entry_filled_qty > 0

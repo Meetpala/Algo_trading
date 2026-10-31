@@ -81,7 +81,7 @@ class SignalConfig:
     min_breakout_cushion_atr: float = 0.15
     min_clv_ratio: float = 0.70
     min_atr_pct: float = 0.0022
-    max_quote_age_sec: float = 2.0
+    max_quote_age_sec: float = 15.0
 
 
 @dataclass(frozen=True)
@@ -137,7 +137,7 @@ class ScheduleConfig:
     flat_target: str = "14:58"
     market_close: str = "15:30"
     hard_deadline: str = "15:00"
-    stale_threshold_sec: int = 2
+    stale_threshold_sec: int = 15
     holidays: list[str] = field(default_factory=list)
     special_sessions: dict[str, str] = field(default_factory=dict)
 
@@ -296,7 +296,7 @@ def _parse_schedule(raw: dict, fallback_raw: Optional[dict] = None) -> ScheduleC
         flat_target=str(merged.get("flat_verification_time", merged.get("flat_target", "14:58"))),
         market_close=str(merged.get("market_close", "15:30")),
         hard_deadline=str(merged.get("hard_deadline", "15:00")),
-        stale_threshold_sec=int(merged.get("stale_threshold_sec", 2)),
+        stale_threshold_sec=int(merged.get("stale_threshold_sec", 15)),
         holidays=sorted(holidays),
         special_sessions=special_sessions,
     )
@@ -423,6 +423,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             min_breakout_cushion_atr=float(signal_raw.get("min_breakout_cushion_atr", 0.15)),
             min_clv_ratio=float(signal_raw.get("min_clv_ratio", 0.70)),
             min_atr_pct=float(signal_raw.get("min_atr_pct", 0.0022)),
+            max_quote_age_sec=float(signal_raw.get("max_quote_age_sec", 15.0)),
         ),
         entry=EntryConfig(
             order_type=str(entry_raw.get("order_type", "LIMIT")),
@@ -455,7 +456,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         rate_limits=RateLimitsConfig(
             orders_per_second=int(rate_limits_raw.get("orders_per_second", 10)),
             orders_per_minute=int(rate_limits_raw.get("orders_per_minute", 200)),
-            quotes_per_second=int(rate_limits_raw.get("quotes_per_second", 1)),
+            quotes_per_second=int(rate_limits_raw.get("quotes_per_second", 5)),
             historical_per_second=int(rate_limits_raw.get("historical_per_second", 3)),
             general_per_second=int(rate_limits_raw.get("general_per_second", 10)),
         ),

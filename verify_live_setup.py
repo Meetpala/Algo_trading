@@ -9,14 +9,25 @@ Usage:
 """
 import os
 import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent
+_venv_python = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
+if _venv_python.exists() and Path(sys.executable).resolve() != _venv_python.resolve():
+    import subprocess
+    sys.exit(subprocess.run([str(_venv_python), str(Path(__file__).resolve()), *sys.argv[1:]]).returncode)
+
 import time
 from datetime import datetime, date, timedelta, time as dtime
-from zoneinfo import ZoneInfo
+try:
+    from zoneinfo import ZoneInfo
+    IST = ZoneInfo("Asia/Kolkata")
+except Exception:
+    from datetime import timezone, timedelta
+    IST = timezone(timedelta(hours=5, minutes=30))
 from dotenv import load_dotenv
 
-load_dotenv()
-
-IST = ZoneInfo("Asia/Kolkata")
+load_dotenv(ROOT_DIR / ".env")
 
 
 def print_banner(text: str):

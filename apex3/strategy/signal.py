@@ -104,6 +104,8 @@ def build_opening_range(
 
     if filtered:
         completed = filtered
+    elif session_date is not None:
+        return OpeningRange(symbol=symbol, high=0.0, low=0.0, is_complete=False, candle_count=0)
 
     high = max(c.high for c in completed)
     low = min(c.low for c in completed)

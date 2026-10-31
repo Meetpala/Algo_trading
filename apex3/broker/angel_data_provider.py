@@ -18,7 +18,12 @@ from apex3.broker.rate_limiter import RateLimiter
 from apex3.models import Candle, InstrumentInfo, Quote
 
 logger = logging.getLogger(__name__)
-IST = ZoneInfo("Asia/Kolkata")
+try:
+    from zoneinfo import ZoneInfo
+    IST = ZoneInfo("Asia/Kolkata")
+except Exception:
+    from datetime import timezone
+    IST = timezone(timedelta(hours=5, minutes=30))
 
 # Static token mapping for top liquid NIFTY candidates (cached for sub-millisecond lookup)
 DEFAULT_ANGEL_TOKENS: dict[str, str] = {
@@ -35,7 +40,7 @@ DEFAULT_ANGEL_TOKENS: dict[str, str] = {
     "SUNPHARMA": "3351",
     # Tier 2 & Extended Radar Symbols
     "BHARTIARTL": "10604",
-    "JIOFIN": "18147",
+    "JIOFIN": "18143",
     "TATASTEEL": "3499",
     "AXISBANK": "5900",
     "TATAPOWER": "3426",
@@ -84,29 +89,43 @@ class AngelDataProvider:
         if api_key and client_code and pin and totp_secret:
             self.authenticate()
 
-    def authenticate(self) -> bool:
-        """Authenticate with Angel One SmartAPI using TOTP."""
+    def authenticate(self, force: bool = False) -> bool:
+        """Authenticate with Angel One SmartAPI using TOTP (idempotent with rate-limit backoff)."""
+        if self._auth_token and self._smart_api and not force:
+            return True
         try:
             from SmartApi import SmartConnect
             import pyotp
 
-            logger.info("Authenticating with Angel One SmartAPI (Client: %s)...", self.client_code)
-            self._smart_api = SmartConnect(api_key=self.api_key)
+            for attempt in range(3):
+                try:
+                    logger.info("Authenticating with Angel One SmartAPI (Client: %s)...", self.client_code)
+                    self._smart_api = SmartConnect(api_key=self.api_key)
 
-            totp_val = pyotp.TOTP(self.totp_secret).now()
-            session_data = self._smart_api.generateSession(self.client_code, self.pin, totp_val)
+                    totp_val = pyotp.TOTP(self.totp_secret).now()
+                    session_data = self._smart_api.generateSession(self.client_code, self.pin, totp_val)
 
-            if not session_data or not session_data.get("status"):
-                msg = session_data.get("message", "Unknown error") if session_data else "Empty response"
-                logger.error("Angel One session generation failed: %s", msg)
-                return False
+                    if not session_data or not session_data.get("status"):
+                        msg = session_data.get("message", "Unknown error") if session_data else "Empty response"
+                        if "exceeding access rate" in str(msg).lower() and attempt < 2:
+                            time.sleep(3.0 * (attempt + 1))
+                            continue
+                        logger.error("Angel One session generation failed: %s", msg)
+                        return False
 
-            data = session_data.get("data", {})
-            self._auth_token = data.get("jwtToken")
-            self._refresh_token = data.get("refreshToken")
-            self._feed_token = self._smart_api.getfeedToken()
-            logger.info("Angel One SmartAPI authentication SUCCESSFUL! Free market data feed active.")
-            return True
+                    data = session_data.get("data", {})
+                    self._auth_token = data.get("jwtToken")
+                    self._refresh_token = data.get("refreshToken")
+                    self._feed_token = self._smart_api.getfeedToken()
+                    logger.info("Angel One SmartAPI authentication SUCCESSFUL! Free market data feed active.")
+                    return True
+                except Exception as inner_e:
+                    if "exceeding access rate" in str(inner_e).lower() and attempt < 2:
+                        logger.warning("Angel One login rate-limited (attempt %d/3); retrying in %.1fs...", attempt + 1, 3.0 * (attempt + 1))
+                        time.sleep(3.0 * (attempt + 1))
+                        continue
+                    raise inner_e
+            return False
         except ImportError:
             logger.warning("smartapi-python or pyotp not installed. Angel data feed disabled.")
             return False
@@ -133,6 +152,19 @@ class AngelDataProvider:
         clean = symbol.replace("-EQ", "").upper()
         if clean in self._token_cache:
             return self._token_cache[clean]
+        if self._smart_api and self._auth_token and hasattr(self._smart_api, "searchScrip"):
+            try:
+                res = self._smart_api.searchScrip(exchange, clean)
+                if isinstance(res, dict) and res.get("status") and isinstance(res.get("data"), list):
+                    target_ts = f"{clean}-EQ"
+                    for item in res["data"]:
+                        if isinstance(item, dict) and str(item.get("tradingsymbol", "")).upper() == target_ts:
+                            tok = str(item.get("symboltoken", "")).strip()
+                            if tok:
+                                self._token_cache[clean] = tok
+                                return tok
+            except Exception as e:
+                logger.debug("Angel One searchScrip lookup failed for %s: %s", clean, e)
         logger.error("Unknown Angel One token mapping for symbol %s in %s (no default fallback)", clean, exchange)
         return ""
 

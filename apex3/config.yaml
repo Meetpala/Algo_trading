@@ -115,7 +115,7 @@ schedule:
   flat_target: "14:58"
   market_close: "15:30"
   hard_deadline: "15:00"
-  stale_threshold_sec: 2
+  stale_threshold_sec: 15
 
   holidays_2026:
     - "2026-01-15"  # Makar Sankranti / Municipal Election Day

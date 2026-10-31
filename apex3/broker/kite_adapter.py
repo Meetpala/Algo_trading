@@ -122,6 +122,7 @@ class KiteAdapter(BrokerInterface):
     ) -> None:
         self._api_key: str = api_key or os.environ.get("KITE_API_KEY", "")
         self._access_token: str = access_token or os.environ.get("KITE_ACCESS_TOKEN", "")
+        self._explicit_token_passed: bool = access_token is not None
         self._live_enabled: bool = live_enabled
         self.rate_limiter: Optional[RateLimiter] = rate_limiter
 
@@ -129,6 +130,7 @@ class KiteAdapter(BrokerInterface):
         self._instruments_cache: dict[str, dict] = {}
         self._instrument_info_cache: dict[str, InstrumentInfo] = {}
         self._mis_margin_cache: dict[str, bool] = {}
+        self._quote_permission_denied: bool = False
         self._cache_date: Optional[str] = None
 
         if _kiteconnect_available and _KiteConnect is not None:
@@ -630,15 +632,26 @@ class KiteAdapter(BrokerInterface):
 
         # Get circuit limits from live quote with rate limiting
         q_data = {}
-        try:
-            self._acquire_rate_limit("quotes")
-            q_data = self._kite.quote(f"{exchange}:{symbol}").get(f"{exchange}:{symbol}", {})
-            upper_c = float(q_data.get("upper_circuit_limit", 0.0))
-            lower_c = float(q_data.get("lower_circuit_limit", 0.0))
-        except Exception as qe:
-            logger.warning("Could not fetch live quote/circuits for %s: %s", symbol, qe)
-            upper_c = 0.0
-            lower_c = 0.0
+        upper_c = 0.0
+        lower_c = 0.0
+        if not self._quote_permission_denied:
+            try:
+                self._acquire_rate_limit("quotes")
+                q_data = self._kite.quote(f"{exchange}:{symbol}").get(f"{exchange}:{symbol}", {})
+                upper_c = float(q_data.get("upper_circuit_limit", 0.0))
+                lower_c = float(q_data.get("lower_circuit_limit", 0.0))
+            except Exception as qe:
+                if "insufficient permission" in str(qe).lower():
+                    self._quote_permission_denied = True
+                    logger.info(
+                        "Kite quote API permission not enabled on this plan (%s); "
+                        "skipping Kite quote calls in get_instrument_info (Hybrid/Angel feed provides circuits).",
+                        qe,
+                    )
+                else:
+                    logger.warning("Could not fetch live quote/circuits for %s: %s", symbol, qe)
+                upper_c = 0.0
+                lower_c = 0.0
 
         # Do not fabricate synthetic +-10% circuit limits; report 0.0 if not verified from exchange
         if upper_c <= 0.0:
@@ -723,11 +736,32 @@ class KiteAdapter(BrokerInterface):
     # ── Session ──────────────────────────────────────────────────
 
     def is_session_valid(self) -> bool:
-        """Check if the Kite session token is active and valid."""
-        if self._kite is None or not self._access_token:
+        """Check if the Kite session token is active and valid, with .env hot-reload support."""
+        if self._kite is None:
             return False
-        try:
-            profile = self._kite.profile()
-            return bool(profile and profile.get("user_id"))
-        except Exception:
-            return False
+        if self._access_token:
+            try:
+                profile = self._kite.profile()
+                if bool(profile and profile.get("user_id")):
+                    return True
+            except Exception:
+                pass
+
+        # If running in cloud/24x7 mode and token was refreshed in .env, hot-reload it
+        if self._api_key and self._api_key == os.environ.get("KITE_API_KEY", "").strip():
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(override=True)
+                new_token = os.environ.get("KITE_ACCESS_TOKEN", "").strip()
+                if new_token and new_token != self._access_token:
+                    self._access_token = new_token
+                    self._kite.set_access_token(new_token)
+                    self._instrument_info_cache.clear()
+                    self._mis_margin_cache.clear()
+                    profile = self._kite.profile()
+                    if bool(profile and profile.get("user_id")):
+                        logger.info("Hot-reloaded refreshed KITE_ACCESS_TOKEN from .env successfully.")
+                        return True
+            except Exception:
+                pass
+        return False

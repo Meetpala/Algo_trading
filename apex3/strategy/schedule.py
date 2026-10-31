@@ -144,8 +144,8 @@ class SessionScheduler:
         if now_time < self._market_open:
             return SessionState.PRE_OPEN
 
-        # Opening range: 09:15 to 09:30 (exclusive)
-        if self._market_open <= now_time < self._or_end:
+        # Opening range: 09:15 to entry_start (09:30 / 09:35)
+        if self._market_open <= now_time < max(self._or_end, self._entry_start):
             return SessionState.OPENING_RANGE
 
         # Entry window: 09:30 to 14:15
@@ -263,6 +263,7 @@ class SessionScheduler:
             SessionState.POST_CLOSE: "Post-close — reconciling and reporting",
             SessionState.HOLIDAY: "Exchange holiday — no trading",
             SessionState.WEEKEND: "Weekend — no trading",
+            SessionState.SPECIAL_SESSION: "Special session — intraday MIS entries disabled",
         }
 
         return {

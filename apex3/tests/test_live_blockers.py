@@ -2359,8 +2359,71 @@ def test_late_start_at_0950_reconstructs_opening_range_and_trades():
         eng_module.evaluate_market_regime = orig_regime
 
 
+def test_jiofin_token_is_18143():
+    """Verify JIOFIN NSE token in AngelDataProvider is 18143 (not outdated 18147)."""
+    from apex3.broker.angel_data_provider import DEFAULT_ANGEL_TOKENS
+    assert DEFAULT_ANGEL_TOKENS.get("JIOFIN") == "18143"
 
 
+def test_signal_config_max_quote_age_default_15s():
+    """Verify SignalConfig.max_quote_age_sec and ScheduleConfig.stale_threshold_sec default to 15s."""
+    cfg = load_config()
+    assert cfg.signal.max_quote_age_sec == 15.0
+    assert cfg.schedule.stale_threshold_sec == 15
 
+
+def test_kite_adapter_quote_permission_denied_skips_subsequent_quotes():
+    """When Kite quote() raises 'Insufficient permission', KiteAdapter caches flag and skips redundant quote() calls."""
+    from apex3.broker.kite_adapter import KiteAdapter
+    adapter = KiteAdapter(api_key="test_key", access_token="test_tok", live_enabled=False)
+    mock_kite = MagicMock()
+    adapter._kite = mock_kite
+    adapter._instruments_cache = {
+        "RELIANCE": {"tradingsymbol": "RELIANCE", "instrument_token": 738561, "tick_size": 0.10, "lot_size": 1, "segment": "NSE", "instrument_type": "EQ"},
+        "TCS": {"tradingsymbol": "TCS", "instrument_token": 2953217, "tick_size": 0.10, "lot_size": 1, "segment": "NSE", "instrument_type": "EQ"},
+    }
+    adapter._cache_date = datetime.now(IST).strftime("%Y-%m-%d")
+
+    mock_kite.quote.side_effect = Exception("Insufficient permission for that call.")
+    mock_kite.order_margins.return_value = [{"total": 25.0}, {"total": 25.0}]
+
+    info1 = adapter.get_instrument_info("RELIANCE")
+    assert info1.mis_available is True
+    assert info1.tick_size == 0.10
+    assert adapter._quote_permission_denied is True
+    assert mock_kite.quote.call_count == 1
+
+    # Second symbol skips kite.quote() entirely!
+    info2 = adapter.get_instrument_info("TCS")
+    assert info2.mis_available is True
+    assert mock_kite.quote.call_count == 1
+
+
+def test_schedule_0930_to_0935_and_special_session_display():
+    """Verify 09:30-09:35 returns OPENING_RANGE (not POST_CLOSE), SPECIAL_SESSION display works, and build_opening_range blocks prior-day leakage."""
+    from apex3.strategy.schedule import SessionScheduler, SessionState
+    from apex3.strategy.signal import build_opening_range
+    cfg = load_config()
+    sched = SessionScheduler(cfg.schedule)
+
+    # At 09:32 IST on a regular trading Friday, state must be OPENING_RANGE (waiting for 09:35 entry_start), NOT POST_CLOSE
+    dt_0932 = datetime(2026, 3, 20, 9, 32, tzinfo=IST)
+    assert sched.get_session_state(dt_0932) == SessionState.OPENING_RANGE
+
+    # Special session display must not raise KeyError
+    dt_muhurat = datetime(2026, 11, 8, 18, 20, tzinfo=IST)
+    disp = sched.get_state_display(dt_muhurat)
+    assert disp["state"] == "SPECIAL_SESSION"
+
+    # build_opening_range at 09:16 IST with only yesterday's completed bars must return is_complete=False
+    yesterday_bars = [
+        Candle(timestamp=datetime(2026, 3, 19, 9, 15, tzinfo=IST), open=100.0, high=102.0, low=99.0, close=101.0, volume=1000, is_complete=True),
+        Candle(timestamp=datetime(2026, 3, 19, 9, 20, tzinfo=IST), open=101.0, high=103.0, low=100.0, close=102.0, volume=1000, is_complete=True),
+        Candle(timestamp=datetime(2026, 3, 19, 9, 25, tzinfo=IST), open=102.0, high=104.0, low=101.0, close=103.0, volume=1000, is_complete=True),
+        Candle(timestamp=datetime(2026, 3, 20, 9, 15, tzinfo=IST), open=105.0, high=106.0, low=104.0, close=105.5, volume=500, is_complete=False),
+    ]
+    or_today = build_opening_range("RELIANCE", yesterday_bars, session_date=datetime(2026, 3, 20, tzinfo=IST).date())
+    assert or_today.is_complete is False
+    assert or_today.candle_count == 0
 
 
