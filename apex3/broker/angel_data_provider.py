@@ -126,8 +126,8 @@ class AngelDataProvider:
                         continue
                     raise inner_e
             return False
-        except ImportError:
-            logger.warning("smartapi-python or pyotp not installed. Angel data feed disabled.")
+        except ImportError as ie:
+            logger.warning("smartapi-python or pyotp import failed (%s). Angel data feed disabled.", ie)
             return False
         except Exception as e:
             logger.error("Failed to connect to Angel One SmartAPI: %s", e)

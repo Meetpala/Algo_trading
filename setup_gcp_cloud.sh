@@ -29,7 +29,7 @@ fi
 echo "[4/4] Installing APEX-3 dependencies..."
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
-.venv/bin/pip install pandas
+.venv/bin/pip install pandas logzero websocket-client
 
 # Ensure logs directory exists
 mkdir -p logs
