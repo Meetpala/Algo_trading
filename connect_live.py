@@ -116,6 +116,30 @@ def save_env_token(token: str) -> None:
     ENV_PATH.write_text("".join(new_lines), encoding="utf-8")
     os.environ["KITE_ACCESS_TOKEN"] = token
 
+    # If CLOUD_DASHBOARD_URL is configured, automatically push the fresh token to cloud infra
+    cloud_url = os.getenv("CLOUD_DASHBOARD_URL", "").strip()
+    if cloud_url:
+        try:
+            import urllib.request
+            import json
+            op_tok = os.getenv("DASHBOARD_API_TOKEN", "apex3_secure_operator_token").strip()
+            target_ep = f"{cloud_url.rstrip('/')}/api/set_token"
+            req = urllib.request.Request(
+                target_ep,
+                data=json.dumps({"access_token": token}).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {op_tok}",
+                    "Origin": "http://127.0.0.1:5000",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    print(f"  [+] Automatically synced fresh token to cloud instance: {cloud_url}")
+        except Exception as e:
+            print(f"  [!] Note: Could not auto-sync token to cloud ({cloud_url}): {e}")
+
 
 def extract_token_from_string(raw: str) -> str:
     """Extract request_token whether user pasted a full URL or a bare token."""

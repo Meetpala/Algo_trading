@@ -69,9 +69,15 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
     @app.before_request
     def restrict_to_localhost():
-        # Prevent any external exposure: APEX-3 Dashboard must be strictly local loopback
+        # Allow OAuth callback and login initiation from browser / Cloudflare tunnel
+        if request.path in ("/auth/callback", "/login/kite"):
+            return None
+
+        # Prevent any external exposure: APEX-3 Dashboard must be strictly local loopback or configured host
         remote = request.remote_addr or ""
-        if remote not in ("127.0.0.1", "localhost", "::1", "testclient"):
+        is_loopback = remote in ("127.0.0.1", "localhost", "::1", "testclient")
+        allow_external = getattr(getattr(config, "dashboard", None), "host", "127.0.0.1") == "0.0.0.0"
+        if not is_loopback and not allow_external:
             return jsonify({"error": "Forbidden: APEX-3 Dashboard is strictly restricted to local loopback interface."}), 403
 
         # CSRF Protection: For mutating requests, verify Origin or Referer is strictly from loopback
@@ -145,6 +151,53 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             return redirect("/?auth=success")
         except Exception as e:
             return f"Authentication Failed: {e}", 500
+
+    @app.route("/api/set_token", methods=["POST"])
+    def api_set_token():
+        """Allows authorized operator to push a fresh KITE_ACCESS_TOKEN remotely."""
+        if not _is_authorized():
+            return jsonify({"error": "Unauthorized: valid operator token required"}), 401
+        payload = request.get_json(silent=True) or {}
+        token = payload.get("access_token", "").strip()
+        if not token:
+            return jsonify({"error": "Bad request: 'access_token' field is required"}), 400
+
+        try:
+            env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+            lines = []
+            if os.path.exists(env_file):
+                with open(env_file, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+            found = False
+            new_lines = []
+            for line in lines:
+                if line.strip().startswith("KITE_ACCESS_TOKEN="):
+                    new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
+                    found = True
+                else:
+                    new_lines.append(line)
+            if not found:
+                new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
+            with open(env_file, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+
+            os.environ["KITE_ACCESS_TOKEN"] = token
+
+            kite_inst = getattr(engine.broker, "execution_broker", engine.broker)
+            if hasattr(kite_inst, "_kite") and kite_inst._kite:
+                kite_inst._kite.set_access_token(token)
+                kite_inst._access_token = token
+                if hasattr(kite_inst, "_instrument_info_cache"):
+                    kite_inst._instrument_info_cache.clear()
+                if hasattr(kite_inst, "_mis_margin_cache"):
+                    kite_inst._mis_margin_cache.clear()
+
+            return jsonify({
+                "status": "SUCCESS",
+                "message": "KITE_ACCESS_TOKEN updated in .env and live broker session hot-reloaded successfully.",
+            })
+        except Exception as e:
+            return jsonify({"status": "ERROR", "message": str(e)}), 500
 
     @app.route("/api/status")
     def api_status():

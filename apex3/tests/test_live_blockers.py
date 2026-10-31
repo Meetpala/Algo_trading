@@ -2427,3 +2427,29 @@ def test_schedule_0930_to_0935_and_special_session_display():
     assert or_today.candle_count == 0
 
 
+def test_api_set_token_endpoint():
+    """Verify POST /api/set_token updates access token and broker session hot-reload."""
+    from apex3.dashboard.app import create_app
+    cfg = AppConfig()
+    object.__setattr__(cfg.dashboard, "auth_required", True)
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+    app = create_app(engine, cfg, mock_journal)
+    client = app.test_client()
+
+    # Unauthorized request without operator token fails
+    r_unauth = client.post("/api/set_token", json={"access_token": "fresh_tok_123"}, headers={"Origin": "http://127.0.0.1:5000"})
+    assert r_unauth.status_code == 401
+
+    # Authorized request with Bearer token succeeds
+    r_auth = client.post(
+        "/api/set_token",
+        json={"access_token": "fresh_tok_123"},
+        headers={"Origin": "http://127.0.0.1:5000", "Authorization": "Bearer apex3_secure_operator_token"},
+    )
+    assert r_auth.status_code == 200
+    assert r_auth.get_json()["status"] == "SUCCESS"
+
+
+
