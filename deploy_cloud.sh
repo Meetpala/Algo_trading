@@ -41,13 +41,13 @@ else
     echo "[2/6] Docker is already installed."
 fi
 
-# 3. Configure Hardened Firewall (Inbound SSH 22 only; Port 5000 bound to 127.0.0.1)
-echo "[3/6] Configuring hardened UFW firewall rules (SSH 22 inbound, HTTPS/DNS/NTP outbound)..."
+# 3. Configure Firewall (SSH 22 + Kite OAuth/Dashboard 5000 + HTTPS/DNS/NTP outbound)
+echo "[3/6] Configuring UFW firewall rules (SSH 22 + Dashboard/OAuth 5000)..."
 if command -v ufw &> /dev/null; then
     sudo ufw default deny incoming || true
     sudo ufw default allow outgoing || true
     sudo ufw allow 22/tcp comment 'SSH access' || true
-    sudo ufw delete allow 5000/tcp 2>/dev/null || true
+    sudo ufw allow 5000/tcp comment 'APEX-3 Kite OAuth Callback & Dashboard' || true
     sudo ufw allow out 443/tcp comment 'Broker HTTPS/WSS & Telegram API' || true
     sudo ufw allow out 53/udp comment 'DNS' || true
     sudo ufw allow out 53/tcp comment 'DNS TCP' || true
@@ -79,9 +79,14 @@ PUBLIC_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
 
 echo ""
 echo "=================================================================="
-echo "  SUCCESS: APEX-3 IS DEPLOYED & HARDENED ON THE CLOUD!           "
+echo "  SUCCESS: APEX-3 IS NOW RUNNING ON THE CLOUD!                   "
 echo "=================================================================="
-echo "  Cloud Static Public IP : $PUBLIC_IP"
-echo "  Health Check (Local)   : http://127.0.0.1:5000/health"
-echo "  Operator Dashboard     : Access via SSH tunnel (ssh -L 5000:127.0.0.1:5000)"
+echo "  Cloud Public IP: $PUBLIC_IP"
+echo "  Operator Dashboard: http://$PUBLIC_IP:5000"
+echo "  Kite 1-Click Login: http://$PUBLIC_IP:5000/login/kite"
+echo "  Health Check:       http://$PUBLIC_IP:5000/health"
+echo ""
+echo "  Next Step (Zerodha Kite App Console):"
+echo "  Set your Kite App Redirect URL to:"
+echo "    http://$PUBLIC_IP:5000/auth/callback"
 echo "=================================================================="

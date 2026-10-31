@@ -3,16 +3,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: apex3-engine
+    image: apex3:latest
+    container_name: apex3-trading-engine
     restart: unless-stopped
     env_file:
       - .env
     environment:
       - TZ=Asia/Kolkata
       - PYTHONUNBUFFERED=1
-    # Bind dashboard strictly to loopback (127.0.0.1:5000) for SSH tunnel / Cloudflare tunnel safety
     ports:
-      - "127.0.0.1:5000:5000"
+      - "5000:5000"
     volumes:
       - ./.env:/app/.env
       - ./apex3_journal.db:/app/apex3_journal.db
@@ -20,7 +20,7 @@ services:
       - ./logs:/app/logs
     command: >
       python -m apex3.main
-      --mode ${APEX3_MODE:-paper}
+      --mode ${APEX3_MODE:-live}
       --host 0.0.0.0
       --port 5000
     healthcheck:

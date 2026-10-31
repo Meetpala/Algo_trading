@@ -414,21 +414,48 @@ def main():
             return
 
     if should_launch:
-        print("\n" + "=" * 70)
-        print("      BOOTING APEX-3 AUTONOMOUS LIVE ENGINE...")
-        print("      Dashboard URL: http://127.0.0.1:5000")
-        print("      Press Ctrl+C to safely pause or stop live trading")
-        print("=" * 70 + "\n")
-        
-        # Ensure LIVE_TRADING_ENABLED is true
-        os.environ["LIVE_TRADING_ENABLED"] = "true"
-        
         import subprocess
-        python_exe = sys.executable
+        # Check if apex3-trading-engine Docker container is already running on port 5000
+        docker_running = False
         try:
-            subprocess.run([python_exe, "-m", "apex3.main", "--mode", "live"], check=False)
-        except KeyboardInterrupt:
-            print("\n[+] Live engine stopped by operator.")
+            res = subprocess.run(
+                ["docker", "ps", "--filter", "name=apex3", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                docker_running = True
+                container_name = res.stdout.strip().splitlines()[0]
+        except Exception:
+            docker_running = False
+
+        if docker_running:
+            print("\n" + "=" * 70)
+            print(f"      SYNCING TOKEN & RESTARTING DOCKER CONTAINER ({container_name})...")
+            print("      Engine will continue running 24/7 in the background even if SSH closes.")
+            print("      Press Ctrl+C at any time to exit log view (container stays running).")
+            print("=" * 70 + "\n")
+            try:
+                subprocess.run(["docker", "restart", container_name], check=False)
+                subprocess.run(["docker", "logs", "-f", "--tail", "50", container_name], check=False)
+            except KeyboardInterrupt:
+                print(f"\n[+] Detached from logs. Container '{container_name}' is still running in the background.")
+        else:
+            print("\n" + "=" * 70)
+            print("      BOOTING APEX-3 AUTONOMOUS LIVE ENGINE...")
+            print("      Dashboard URL: http://127.0.0.1:5000")
+            print("      Press Ctrl+C to safely pause or stop live trading")
+            print("=" * 70 + "\n")
+
+            # Ensure LIVE_TRADING_ENABLED is true
+            os.environ["LIVE_TRADING_ENABLED"] = "true"
+
+            python_exe = sys.executable
+            try:
+                subprocess.run([python_exe, "-m", "apex3.main", "--mode", "live"], check=False)
+            except KeyboardInterrupt:
+                print("\n[+] Live engine stopped by operator.")
     else:
         print("\n[+] Broker connections established and saved.")
         print("    To start live trading anytime, run:")
