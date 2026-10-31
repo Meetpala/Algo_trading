@@ -660,11 +660,9 @@ class StrategyEngine:
                             try:
                                 sl_order_id = self.broker.place_order(sl_req)
                                 ent_pos.protective_order_id = sl_order_id
-                                sl_check = self.broker.get_order_status(sl_order_id)
-                                sl_check_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
-                                if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_check_qty == ent_pos.quantity:
+                                sl_confirmed = self._confirm_protective_sl(sl_order_id, ent_pos.quantity, timeout_sec=2.0)
+                                if sl_confirmed:
                                     ent_pos.phase = PositionPhase.OPEN_PROTECTED
-                                    sl_confirmed = True
                             except Exception as sl_err:
                                 logger.error("Failed to place stop on timeout fill %s: %s", ent_pos.symbol, sl_err)
 
@@ -1621,9 +1619,27 @@ class StrategyEngine:
             return decisions
 
         # -------------------------------------------------------------
-        # STEP 4: Market Regime Filter Gate
+        # STEP 4: Market Regime Filter Gate & Pre-Warming
         # -------------------------------------------------------------
-        # Batch-fetch quotes for benchmark and all candidate symbols in a single timestamped snapshot
+        # 1. Pre-warm historical candles for benchmark and eligible symbols FIRST
+        bench_candles = self.broker.get_historical(self.config.regime.benchmark_symbol, "5minute", hist_from_5m, now)
+
+        stock_candles_map: dict[str, list[Candle]] = {}
+        session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
+        for sym in symbols:
+            # Skip if already open or in flight
+            if any(
+                p.symbol == sym and (p.quantity > 0 or p.phase in (PositionPhase.ENTERING, PositionPhase.OPEN_UNPROTECTED, PositionPhase.EXITING))
+                for p in self.state_machine.positions.values()
+            ):
+                continue
+            s_candles = self.broker.get_historical(sym, "5minute", hist_from_5m, now)
+            stock_candles_map[sym] = s_candles
+            # Pre-build/cache opening range so late starts (e.g. 09:50 IST) reconstruct immediately
+            if sym not in self.opening_ranges or not self.opening_ranges[sym].is_complete:
+                self.opening_ranges[sym] = build_opening_range(sym, s_candles, session_date=session_date)
+
+        # 2. Batch-fetch quotes IMMEDIATELY AFTER historical pre-warm so quotes are ultra-fresh (< 0.2s old)
         all_symbols_to_quote = [self.config.regime.benchmark_symbol] + [s for s in symbols if s != self.config.regime.benchmark_symbol]
         batch_quotes: dict[str, Quote] = {}
         try:
@@ -1633,7 +1649,6 @@ class StrategyEngine:
         except Exception as bqe:
             logger.warning("Batch quote fetch failed; falling back to individual quotes: %s", bqe)
 
-        bench_candles = self.broker.get_historical(self.config.regime.benchmark_symbol, "5minute", hist_from_5m, now)
         bench_quote = batch_quotes.get(self.config.regime.benchmark_symbol) or self.broker.get_quote(self.config.regime.benchmark_symbol)
         regime_eval = evaluate_market_regime(bench_candles, self.config.regime, bench_quote)
         self.latest_regime_eval = regime_eval
@@ -1674,12 +1689,11 @@ class StrategyEngine:
 
             inst = self.broker.get_instrument_info(sym)
             quote = batch_quotes.get(sym) or self.broker.get_quote(sym)
-            stock_candles = self.broker.get_historical(sym, "5minute", hist_from_5m, now)
+            stock_candles = stock_candles_map.get(sym) or self.broker.get_historical(sym, "5minute", hist_from_5m, now)
 
             # Build/retrieve opening range
             or_range = self.opening_ranges.get(sym)
             if or_range is None or not or_range.is_complete:
-                session_date = (now if now.tzinfo else now.replace(tzinfo=IST)).astimezone(IST).date()
                 or_range = build_opening_range(sym, stock_candles, session_date=session_date)
                 self.opening_ranges[sym] = or_range
 
@@ -2221,6 +2235,8 @@ class StrategyEngine:
                             "entry_order_id": entry_order_id,
                             "quantity": sizing.quantity,
                             "order_price": marketable_entry_price,
+                            "initial_stop": initial_stop,
+                            "target_price": managed.target_price,
                         },
                         explanation=f"Submitted {side.value} entry {sizing.quantity} {sym} @ {marketable_entry_price:.2f}; awaiting fill before placing SL",
                     )

@@ -156,3 +156,52 @@ def test_hybrid_adapter_get_quotes_batch_and_self_healing_session():
     assert valid is True
     mock_data_provider.authenticate.assert_called_once()
 
+
+def test_candle_cache_invalidates_at_five_minute_boundary():
+    """Verify that AngelDataProvider invalidates _candle_cache immediately when crossing a 5-minute clock boundary."""
+    from unittest.mock import patch
+
+    provider = AngelDataProvider(api_key="", client_code="", pin="", totp_secret="")
+    provider._smart_api = MagicMock()
+
+    mock_resp_1 = {
+        "status": True,
+        "data": [
+            ["2026-03-20T09:40:00+05:30", 2500.0, 2510.0, 2495.0, 2505.0, 10000],
+            ["2026-03-20T09:45:00+05:30", 2505.0, 2515.0, 2500.0, 2510.0, 12000],
+        ],
+    }
+    mock_resp_2 = {
+        "status": True,
+        "data": [
+            ["2026-03-20T09:40:00+05:30", 2500.0, 2510.0, 2495.0, 2505.0, 10000],
+            ["2026-03-20T09:45:00+05:30", 2505.0, 2515.0, 2500.0, 2510.0, 12000],
+            ["2026-03-20T09:50:00+05:30", 2510.0, 2525.0, 2508.0, 2520.0, 15000],
+        ],
+    }
+    provider._smart_api.getCandleData.side_effect = [mock_resp_1, mock_resp_2]
+
+    # Call 1: At 09:49:50 (bucket = 09:45 to 09:50)
+    dt_1 = datetime(2026, 3, 20, 9, 49, 50, tzinfo=IST)
+    with patch("apex3.broker.angel_data_provider.datetime") as mock_dt:
+        mock_dt.now.return_value = dt_1
+        mock_dt.fromisoformat = datetime.fromisoformat
+        candles_1 = provider.get_historical("RELIANCE", "5minute")
+        assert len(candles_1) == 2
+        assert provider._smart_api.getCandleData.call_count == 1
+
+        # Call 2: At 09:49:58 (same bucket) -> served from cache!
+        dt_2 = datetime(2026, 3, 20, 9, 49, 58, tzinfo=IST)
+        mock_dt.now.return_value = dt_2
+        candles_cached = provider.get_historical("RELIANCE", "5minute")
+        assert len(candles_cached) == 2
+        assert provider._smart_api.getCandleData.call_count == 1  # No new API call
+
+        # Call 3: Clock crosses boundary to 09:50:02 (new bucket!) -> cache invalidated immediately!
+        dt_3 = datetime(2026, 3, 20, 9, 50, 2, tzinfo=IST)
+        mock_dt.now.return_value = dt_3
+        candles_new = provider.get_historical("RELIANCE", "5minute")
+        assert len(candles_new) == 3
+        assert provider._smart_api.getCandleData.call_count == 2  # New API call made!
+
+

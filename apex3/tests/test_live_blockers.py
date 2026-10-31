@@ -2237,6 +2237,129 @@ def test_dashboard_status_requires_auth_and_serves_cached_regime():
     assert mock_engine.broker.get_historical.call_count == 0
 
 
+def test_late_start_at_0950_reconstructs_opening_range_and_trades():
+    """Verify that starting late at 09:50 IST reconstructs Opening Range from 09:15-09:30 bars and trades breakout."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.get_positions.return_value = []
+    mock_broker.estimate_order_margin.return_value = OrderMarginEstimate(required_margin=3000.0, leverage_available=4.0)
+
+    now = datetime(2026, 3, 20, 9, 50, tzinfo=IST)
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05)
+    trent_quote = Quote(symbol="TRENT", exchange="NSE", last_price=1000.0, bid=999.8, ask=1000.2, volume=10000, timestamp=now, is_fresh=True)
+    nifty_quote = Quote(symbol="NIFTY 50", exchange="NSE", last_price=24500.0, bid=24498.0, ask=24502.0, volume=50000, timestamp=now, is_fresh=True)
+    mock_broker.get_quote.return_value = trent_quote
+    mock_broker.get_quotes_batch.return_value = {"TRENT": trent_quote, "NIFTY 50": nifty_quote}
+
+    placed_orders = []
+    def on_place(req):
+        ord_id = f"ORD_{len(placed_orders) + 1}"
+        placed_orders.append((ord_id, req))
+        return ord_id
+    mock_broker.place_order.side_effect = on_place
+
+    def on_status(ord_id):
+        if "ORD_1" in ord_id:
+            # Immediate entry fill @ 1000.0
+            return OrderState(
+                order_id="ORD_1",
+                request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=10, price=1000.05),
+                status=OrderStatus.COMPLETE,
+                filled_quantity=10,
+                pending_quantity=0,
+                average_price=1000.0,
+            )
+        elif "ORD_2" in ord_id:
+            # Protective SL
+            return OrderState(
+                order_id="ORD_2",
+                request=OrderRequest(symbol="TRENT", side=Side.SELL, quantity=10, order_type=OrderType.SL),
+                status=OrderStatus.TRIGGER_PENDING,
+                pending_quantity=10,
+                filled_quantity=0,
+            )
+        return None
+    mock_broker.get_order_status.side_effect = on_status
+
+    cfg = AppConfig()
+    object.__setattr__(cfg.watchlist, "symbols", ["TRENT"])
+    object.__setattr__(cfg.watchlist, "scanner_enabled", False)
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    # Verify opening ranges starts completely empty on cold / late start
+    assert len(engine.opening_ranges) == 0
+
+    # Build 5m candles spanning 09:15 to 09:50 IST
+    # 09:15, 09:20, 09:25 are the 3 OR bars (High=995.0, Low=985.0)
+    c_0915 = Candle(timestamp=datetime(2026, 3, 20, 9, 15, tzinfo=IST), open=992.0, high=993.0, low=985.0, close=992.0, volume=5000, is_complete=True)
+    c_0920 = Candle(timestamp=datetime(2026, 3, 20, 9, 20, tzinfo=IST), open=992.0, high=994.0, low=990.0, close=993.0, volume=6000, is_complete=True)
+    c_0921 = Candle(timestamp=datetime(2026, 3, 20, 9, 25, tzinfo=IST), open=994.0, high=995.0, low=996.0, close=995.0, volume=7000, is_complete=True)
+    c_0930 = Candle(timestamp=datetime(2026, 3, 20, 9, 30, tzinfo=IST), open=995.0, high=997.0, low=996.0, close=996.0, volume=4000, is_complete=True)
+    c_0935 = Candle(timestamp=datetime(2026, 3, 20, 9, 35, tzinfo=IST), open=996.0, high=998.0, low=996.0, close=997.0, volume=4000, is_complete=True)
+    c_0940 = Candle(timestamp=datetime(2026, 3, 20, 9, 40, tzinfo=IST), open=997.0, high=999.0, low=996.0, close=998.0, volume=4000, is_complete=True)
+    c_0945 = Candle(timestamp=datetime(2026, 3, 20, 9, 45, tzinfo=IST), open=998.0, high=1001.0, low=996.0, close=1000.0, volume=15000, is_complete=True)
+
+    # 20 prior bars around 1000.0 with high-low span ~ 2.0
+    prior_bars = [
+        Candle(timestamp=datetime(2026, 3, 19, 14, 0, tzinfo=IST) + timedelta(minutes=5 * i), open=1000.0, high=1001.0, low=999.0, close=1000.0, volume=5000, is_complete=True)
+        for i in range(20)
+    ]
+    trent_candles = prior_bars + [c_0915, c_0920, c_0921, c_0930, c_0935, c_0940, c_0945]
+    mock_broker.get_historical.return_value = trent_candles
+
+    fake_sig = SignalEvaluation(
+        symbol="TRENT",
+        decision=Decision.PROPOSED_LONG,
+        signal_price=1000.0,
+        side=Side.BUY,
+        gates=[GateResult("TEST", GateStatus.PASS, "OK")],
+        relative_strength=0.05,
+        relative_volume=3.0,
+    )
+
+    import apex3.strategy.engine as eng_module
+    orig_eval = eng_module.evaluate_signal
+    orig_regime = eng_module.evaluate_market_regime
+    try:
+        eng_module.evaluate_signal = MagicMock(return_value=fake_sig)
+        eng_module.evaluate_market_regime = MagicMock(return_value=MagicMock(regime=MarketRegime.BULLISH, is_valid=True))
+
+        engine.evaluate_step(now)
+
+        # 1. Opening Range reconstructed automatically from 09:15-09:30 bars
+        assert "TRENT" in engine.opening_ranges
+        or_res = engine.opening_ranges["TRENT"]
+        assert or_res.is_complete is True
+        assert or_res.high == 995.0
+        assert or_res.low == 985.0
+        assert or_res.candle_count == 3
+
+        # 2. Both entry order and protective SL order were placed on cycle at 09:50
+        assert len(placed_orders) == 2
+        entry_ord = placed_orders[0][1]
+        sl_ord = placed_orders[1][1]
+
+        assert entry_ord.symbol == "TRENT"
+        assert entry_ord.side == Side.BUY
+        assert sl_ord.symbol == "TRENT"
+        assert sl_ord.side == Side.SELL
+        assert sl_ord.order_type == OrderType.SL
+
+        # 3. Position phase is OPEN_PROTECTED
+        pos = engine.state_machine.positions["TRENT"]
+        assert pos.phase == PositionPhase.OPEN_PROTECTED
+        assert pos.quantity == 10
+        assert pos.average_entry == 1000.0
+    finally:
+        eng_module.evaluate_signal = orig_eval
+        eng_module.evaluate_market_regime = orig_regime
+
+
+
 
 
 

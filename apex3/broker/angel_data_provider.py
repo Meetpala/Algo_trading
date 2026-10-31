@@ -77,7 +77,7 @@ class AngelDataProvider:
         self._feed_token: Optional[str] = None
         self._token_cache: dict[str, str] = dict(DEFAULT_ANGEL_TOKENS)
         self._circuit_cache: dict[str, tuple[float, float]] = {}
-        self._candle_cache: dict[tuple[str, str], tuple[float, list[Candle]]] = {}
+        self._candle_cache: dict[tuple[str, str], tuple[float, int, list[Candle]]] = {}
         self._candle_cache_ttl: float = 120.0
         self._error_backoff: dict[tuple[str, str], float] = {}
 
@@ -339,19 +339,30 @@ class AngelDataProvider:
         elif interval in ("1d", "day"):
             angel_interval = "ONE_DAY"
 
+        # Determine bar bucket for clock boundary invalidation
+        now_ts = datetime.now(IST).timestamp()
+        if angel_interval == "FIVE_MINUTE":
+            bar_bucket = int(now_ts) // 300
+        elif angel_interval == "ONE_MINUTE":
+            bar_bucket = int(now_ts) // 60
+        elif angel_interval == "FIFTEEN_MINUTE":
+            bar_bucket = int(now_ts) // 900
+        else:
+            bar_bucket = int(now_ts) // 300
+
         # Check short-term candle cache to prevent burst exhaustion
         cache_key = (clean, interval)
         now_mono = time.monotonic()
         if cache_key in self._candle_cache:
-            cached_t, cached_candles = self._candle_cache[cache_key]
-            if (now_mono - cached_t) < self._candle_cache_ttl and cached_candles:
+            cached_t, cached_bucket, cached_candles = self._candle_cache[cache_key]
+            if (bar_bucket == cached_bucket) and (now_mono - cached_t) < self._candle_cache_ttl and cached_candles:
                 return cached_candles
 
         # Check error backoff cooldown (e.g. rate limit 429)
         if cache_key in self._error_backoff:
             if now_mono < self._error_backoff[cache_key]:
-                if cache_key in self._candle_cache and self._candle_cache[cache_key][1]:
-                    return self._candle_cache[cache_key][1]
+                if cache_key in self._candle_cache and self._candle_cache[cache_key][2]:
+                    return self._candle_cache[cache_key][2]
                 return []
             else:
                 del self._error_backoff[cache_key]
@@ -361,9 +372,9 @@ class AngelDataProvider:
                 acquired = self._rate_limiter.acquire("historical", timeout=4.0)
                 if not acquired:
                     logger.warning("Rate limit timeout acquiring historical token for %s", clean)
-                    if cache_key in self._candle_cache and self._candle_cache[cache_key][1]:
+                    if cache_key in self._candle_cache and self._candle_cache[cache_key][2]:
                         logger.info("Serving stale cached candles for %s due to rate limit timeout", clean)
-                        return self._candle_cache[cache_key][1]
+                        return self._candle_cache[cache_key][2]
                     return []
 
             try:
@@ -411,13 +422,13 @@ class AngelDataProvider:
                             )
                         )
                     if candles:
-                        self._candle_cache[cache_key] = (now_mono, candles)
+                        self._candle_cache[cache_key] = (now_mono, bar_bucket, candles)
                     return candles
             except Exception as e:
                 logger.error("Angel One get_historical error for %s: %s", clean, e)
                 self._error_backoff[cache_key] = now_mono + 10.0  # 10s cooldown
-                if cache_key in self._candle_cache and self._candle_cache[cache_key][1]:
-                    return self._candle_cache[cache_key][1]
+                if cache_key in self._candle_cache and self._candle_cache[cache_key][2]:
+                    return self._candle_cache[cache_key][2]
 
         return []
 
