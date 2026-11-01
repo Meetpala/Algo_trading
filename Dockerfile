@@ -29,12 +29,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application source
 COPY --chown=apex3:apex3 . /app
 
-# Ensure persistent runtime files exist and are owned by apex3
+# Ensure persistent runtime files and directories exist with full permissions
 RUN mkdir -p /app/logs && \
     touch /app/apex3_journal.db /app/info.log && \
-    chown -R apex3:apex3 /app
-
-USER apex3
+    chmod -R 777 /app/logs
 
 EXPOSE 5000
 

@@ -9,6 +9,7 @@ capabilities. All trading orders are routed exclusively through the execution br
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -101,7 +102,20 @@ class AngelDataProvider:
             for attempt in range(3):
                 try:
                     logger.info("Authenticating with Angel One SmartAPI (Client: %s)...", self.client_code)
-                    self._smart_api = SmartConnect(api_key=self.api_key)
+                    orig_cwd = os.getcwd()
+                    try:
+                        test_dir = os.path.join(orig_cwd, "logs", time.strftime("%Y-%m-%d"))
+                        os.makedirs(test_dir, exist_ok=True)
+                    except Exception:
+                        import tempfile
+                        os.chdir(tempfile.gettempdir())
+                    try:
+                        self._smart_api = SmartConnect(api_key=self.api_key)
+                    finally:
+                        try:
+                            os.chdir(orig_cwd)
+                        except Exception:
+                            pass
 
                     totp_val = pyotp.TOTP(self.totp_secret).now()
                     session_data = self._smart_api.generateSession(self.client_code, self.pin, totp_val)
