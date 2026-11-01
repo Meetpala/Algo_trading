@@ -265,9 +265,14 @@ def run_app():
     loop_thread.start()
 
     # Create & Run Flask Local/Cloud Dashboard
-    dashboard_app = create_app(engine, config, journal)
     host = args.host or os.environ.get("APEX3_DASHBOARD_HOST") or config.dashboard.host
     port = args.port or config.dashboard.port
+    try:
+        object.__setattr__(config.dashboard, "host", host)
+        object.__setattr__(config.dashboard, "port", port)
+    except Exception:
+        pass
+    dashboard_app = create_app(engine, config, journal)
     logger.info(
         "Starting APEX-3 Operator Dashboard at http://%s:%d...",
         host,

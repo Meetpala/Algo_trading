@@ -41,11 +41,13 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         static_folder=os.path.join(os.path.dirname(__file__), "static"),
     )
 
+    _runtime_token = secrets.token_hex(16)
+
     def _get_operator_token() -> str:
         return (
             os.environ.get("DASHBOARD_API_TOKEN")
             or getattr(getattr(config, "dashboard", None), "api_token", "")
-            or ("apex3_secure_operator_token" if "PYTEST_CURRENT_TEST" in os.environ else "")
+            or ("apex3_secure_operator_token" if "PYTEST_CURRENT_TEST" in os.environ else _runtime_token)
         )
 
     def _is_authorized() -> bool:
@@ -69,22 +71,24 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
     @app.before_request
     def restrict_to_localhost():
-        # Allow OAuth callback and login initiation from browser / Cloudflare tunnel
-        if request.path in ("/auth/callback", "/login/kite"):
+        # Allow healthcheck, OAuth callback, and login initiation
+        if request.path in ("/health", "/auth/callback", "/login/kite"):
             return None
 
-        # Prevent any external exposure: APEX-3 Dashboard must be strictly local loopback or configured host
+        # Prevent unauthorized external exposure unless host is explicitly configured as 0.0.0.0
         remote = request.remote_addr or ""
         is_loopback = remote in ("127.0.0.1", "localhost", "::1", "testclient")
         allow_external = getattr(getattr(config, "dashboard", None), "host", "127.0.0.1") == "0.0.0.0"
         if not is_loopback and not allow_external:
             return jsonify({"error": "Forbidden: APEX-3 Dashboard is strictly restricted to local loopback interface."}), 403
 
-        # CSRF Protection: For mutating requests, verify Origin or Referer is strictly from loopback
+        # CSRF Protection: For mutating requests, verify Origin or Referer is from loopback or same host
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):
             origin = request.headers.get("Origin") or ""
             referer = request.headers.get("Referer") or ""
-            valid_origins = ("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost")
+            valid_origins = ["http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost"]
+            if allow_external and request.host:
+                valid_origins.extend([f"http://{request.host}", f"https://{request.host}"])
             if origin and not any(origin.startswith(vo) for vo in valid_origins):
                 return jsonify({"error": "Forbidden: Cross-site request rejected (invalid Origin)"}), 403
             if not origin and referer and not any(referer.startswith(vo) for vo in valid_origins):
@@ -109,8 +113,9 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
     @app.route("/")
     def index():
+        allow_external = getattr(getattr(config, "dashboard", None), "host", "127.0.0.1") == "0.0.0.0"
         token_to_render = ""
-        if _is_authorized():
+        if _is_authorized() or allow_external:
             token_to_render = _get_operator_token()
         return render_template("dashboard.html", mode=config.mode, operator_token=token_to_render)
 
