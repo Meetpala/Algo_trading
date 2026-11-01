@@ -145,30 +145,39 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             data = kite.generate_session(request_token, api_secret=api_secret)
             token = data.get("access_token")
 
-            env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
-            lines = []
-            if os.path.exists(env_file):
-                with open(env_file, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-            found = False
-            new_lines = []
-            for line in lines:
-                if line.strip().startswith("KITE_ACCESS_TOKEN="):
-                    new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
-                    found = True
-                else:
-                    new_lines.append(line)
-            if not found:
-                new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
-            with open(env_file, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
-
+            # 1. Immediately update in-memory environment and live broker adapter first
             os.environ["KITE_ACCESS_TOKEN"] = token
 
             kite_inst = getattr(engine.broker, "execution_broker", engine.broker)
             if hasattr(kite_inst, "_kite") and kite_inst._kite:
                 kite_inst._kite.set_access_token(token)
                 kite_inst._access_token = token
+            if hasattr(kite_inst, "_instrument_info_cache"):
+                kite_inst._instrument_info_cache.clear()
+            if hasattr(kite_inst, "_mis_margin_cache"):
+                kite_inst._mis_margin_cache.clear()
+
+            # 2. Persist token to .env if writable (never fail login if .env mount is read-only)
+            try:
+                env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+                lines = []
+                if os.path.exists(env_file):
+                    with open(env_file, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                found = False
+                new_lines = []
+                for line in lines:
+                    if line.strip().startswith("KITE_ACCESS_TOKEN="):
+                        new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
+                        found = True
+                    else:
+                        new_lines.append(line)
+                if not found:
+                    new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
+                with open(env_file, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+            except Exception:
+                pass
 
             data_prov = getattr(engine.broker, "data_provider", None)
             if data_prov and hasattr(data_prov, "is_session_valid") and hasattr(data_prov, "authenticate"):
@@ -203,30 +212,33 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             return jsonify({"error": "Bad request: 'access_token' field is required"}), 400
 
         try:
-            env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
-            lines = []
-            if os.path.exists(env_file):
-                with open(env_file, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-            found = False
-            new_lines = []
-            for line in lines:
-                if line.strip().startswith("KITE_ACCESS_TOKEN="):
-                    new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
-                    found = True
-                else:
-                    new_lines.append(line)
-            if not found:
-                new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
-            with open(env_file, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
-
             os.environ["KITE_ACCESS_TOKEN"] = token
 
             kite_inst = getattr(engine.broker, "execution_broker", engine.broker)
             if hasattr(kite_inst, "_kite") and kite_inst._kite:
                 kite_inst._kite.set_access_token(token)
                 kite_inst._access_token = token
+
+            try:
+                env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+                lines = []
+                if os.path.exists(env_file):
+                    with open(env_file, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                found = False
+                new_lines = []
+                for line in lines:
+                    if line.strip().startswith("KITE_ACCESS_TOKEN="):
+                        new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
+                        found = True
+                    else:
+                        new_lines.append(line)
+                if not found:
+                    new_lines.append(f"KITE_ACCESS_TOKEN={token}\n")
+                with open(env_file, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+            except Exception:
+                pass
 
             data_prov = getattr(engine.broker, "data_provider", None)
             if data_prov and hasattr(data_prov, "is_session_valid") and hasattr(data_prov, "authenticate"):

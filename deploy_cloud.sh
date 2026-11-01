@@ -66,10 +66,12 @@ if [ -f "$APP_DIR/apex3.service" ]; then
     sudo systemctl daemon-reload
 fi
 
-# 5. Create database and log directories
+# 5. Create database and log directories with container write permissions
 echo "[5/6] Preparing persistent data volumes..."
 mkdir -p "$APP_DIR/logs"
-touch "$APP_DIR/apex3_journal.db" "$APP_DIR/info.log"
+touch "$APP_DIR/apex3_journal.db" "$APP_DIR/info.log" "$APP_DIR/.env"
+chmod 666 "$APP_DIR/apex3_journal.db" "$APP_DIR/info.log" "$APP_DIR/.env" 2>/dev/null || true
+chmod -R 777 "$APP_DIR/logs" 2>/dev/null || true
 
 # 6. Build and launch APEX-3 container
 echo "[6/6] Building and launching APEX-3 Docker container..."
