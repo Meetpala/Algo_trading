@@ -165,6 +165,16 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 kite_inst._kite.set_access_token(token)
                 kite_inst._access_token = token
 
+            try:
+                engine.is_halted = False
+                engine.halt_reason = ""
+                if getattr(engine, "pause_reason", "") == "BROKER_SESSION_INVALID":
+                    engine.is_paused = False
+                    engine.pause_reason = ""
+                engine.reconcile_and_backfill_late_start()
+            except Exception:
+                pass
+
             return redirect("/?auth=success")
         except Exception as e:
             return f"Authentication Failed: {e}", 500
@@ -208,6 +218,16 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                     kite_inst._instrument_info_cache.clear()
                 if hasattr(kite_inst, "_mis_margin_cache"):
                     kite_inst._mis_margin_cache.clear()
+
+            try:
+                engine.is_halted = False
+                engine.halt_reason = ""
+                if getattr(engine, "pause_reason", "") == "BROKER_SESSION_INVALID":
+                    engine.is_paused = False
+                    engine.pause_reason = ""
+                engine.reconcile_and_backfill_late_start()
+            except Exception:
+                pass
 
             return jsonify({
                 "status": "SUCCESS",

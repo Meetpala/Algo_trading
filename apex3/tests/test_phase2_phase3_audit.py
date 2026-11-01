@@ -507,3 +507,80 @@ def test_health_endpoint_and_alert_notifier():
         assert ok is True
         assert mock_post.call_count == 1
         assert "TRENT" in mock_post.call_args.kwargs["json"]["text"]
+
+
+def test_late_start_first_scan_catches_valid_earlier_breakout():
+    """Verify that starting at 09:50 IST catches a valid 09:35 breakout that is still within 0.15% drift."""
+    mock_broker = MagicMock()
+    mock_journal = MagicMock()
+    mock_broker.is_session_valid.return_value = True
+    mock_broker.get_margins.return_value = MarginInfo(equity_available=15000.0, net_value=15000.0)
+    mock_broker.get_positions.return_value = []
+    mock_broker.get_orders.return_value = []
+    mock_broker.get_trades.return_value = []
+    mock_broker.estimate_order_margin.return_value = OrderMarginEstimate(required_margin=2820.0, leverage_available=4.0)
+    mock_broker.get_instrument_info.return_value = InstrumentInfo(symbol="TRENT", exchange="NSE", lot_size=1, tick_size=0.05)
+
+    now = datetime(2026, 3, 20, 9, 50, tzinfo=IST)
+    trent_q = Quote(symbol="TRENT", exchange="NSE", last_price=1000.5, bid=1000.4, ask=1000.6, volume=15000, timestamp=now, is_fresh=True)
+    mock_broker.get_quote.return_value = trent_q
+    mock_broker.get_quotes_batch.return_value = {"TRENT": trent_q, "NIFTY 50": trent_q}
+
+    # Build candles where 09:30 bar (closed at 09:35) broke out at 1000.0, and 09:35, 09:40, 09:45 consolidated around 1000.5
+    candles = []
+    for i in range(15):
+        ts = datetime(2026, 3, 19, 14, 0, tzinfo=IST) + timedelta(minutes=5 * i)
+        candles.append(Candle(timestamp=ts, open=998.0, high=999.0, low=997.0, close=998.0, volume=10000, is_complete=True))
+    candles.append(Candle(timestamp=datetime(2026, 3, 20, 9, 15, tzinfo=IST), open=997.5, high=999.0, low=997.0, close=998.0, volume=12000, is_complete=True))
+    candles.append(Candle(timestamp=datetime(2026, 3, 20, 9, 20, tzinfo=IST), open=998.0, high=999.5, low=997.5, close=998.5, volume=11000, is_complete=True))
+    candles.append(Candle(timestamp=datetime(2026, 3, 20, 9, 25, tzinfo=IST), open=998.5, high=999.8, low=997.8, close=999.0, volume=11500, is_complete=True))
+    # 09:30 bar (breakout bar, swing_low_5=996.0, ATR=2.0 -> stop=993.0, stop_width=0.70%)
+    candles.append(Candle(timestamp=datetime(2026, 3, 20, 9, 30, tzinfo=IST), open=999.0, high=1000.5, low=996.0, close=1000.0, volume=30000, is_complete=True))
+    # 09:35, 09:40, 09:45 bars (tight consolidation above OR high 999.8, within 0.15% of 1000.0)
+    candles.append(Candle(timestamp=datetime(2026, 3, 20, 9, 35, tzinfo=IST), open=1000.0, high=1000.8, low=999.9, close=1000.4, volume=9000, is_complete=True))
+    candles.append(Candle(timestamp=datetime(2026, 3, 20, 9, 40, tzinfo=IST), open=1000.4, high=1000.9, low=1000.0, close=1000.5, volume=8500, is_complete=True))
+    candles.append(Candle(timestamp=datetime(2026, 3, 20, 9, 45, tzinfo=IST), open=1000.5, high=1000.8, low=1000.1, close=1000.5, volume=8000, is_complete=True))
+    mock_broker.get_historical.return_value = candles
+
+    mock_broker.place_order.side_effect = ["ENT_CATCHUP_1", "SL_CATCHUP_1"]
+    mock_broker.get_order_status.side_effect = lambda oid: (
+        OrderState(order_id=oid, request=OrderRequest(symbol="TRENT", side=Side.BUY, quantity=10), status=OrderStatus.COMPLETE, filled_quantity=10, average_price=1000.05)
+        if oid == "ENT_CATCHUP_1"
+        else OrderState(order_id=oid, request=OrderRequest(symbol="TRENT", side=Side.SELL, quantity=10), status=OrderStatus.TRIGGER_PENDING, pending_quantity=10)
+    )
+
+    cfg = AppConfig()
+    object.__setattr__(cfg.watchlist, "symbols", ["TRENT"])
+    object.__setattr__(cfg.watchlist, "scanner_enabled", False)
+    engine = StrategyEngine(cfg, mock_broker, mock_journal)
+
+    wait_sig = SignalEvaluation(symbol="TRENT", decision=Decision.WAIT, explanation="Volume low on latest consolidation bar")
+    trig_sig = SignalEvaluation(
+        symbol="TRENT",
+        decision=Decision.PROPOSED_LONG,
+        signal_price=1000.0,
+        side=Side.BUY,
+        gates=[GateResult("TEST", GateStatus.PASS, "OK")],
+        relative_strength=0.25,
+        relative_volume=2.6,
+    )
+
+    def fake_eval_signal(symbol, stock_candles_5m, **kwargs):
+        if stock_candles_5m[-1].timestamp == datetime(2026, 3, 20, 9, 30, tzinfo=IST):
+            return trig_sig
+        return wait_sig
+
+    import apex3.strategy.engine as eng_module
+    orig_eval = eng_module.evaluate_signal
+    orig_regime = eng_module.evaluate_market_regime
+    try:
+        eng_module.evaluate_signal = fake_eval_signal
+        eng_module.evaluate_market_regime = MagicMock(return_value=MagicMock(regime=MarketRegime.BULLISH, is_valid=True))
+
+        decisions = engine.evaluate_step(now)
+        assert any(d.decision == Decision.PROPOSED_LONG and "ENTRY_SUBMITTED" in d.reason_codes for d in decisions)
+        assert mock_broker.place_order.call_count >= 1
+    finally:
+        eng_module.evaluate_signal = orig_eval
+        eng_module.evaluate_market_regime = orig_regime
+

@@ -133,6 +133,7 @@ class StrategyEngine:
         # Opening ranges cache: symbol -> OpeningRange
         self.opening_ranges: dict[str, OpeningRange] = {}
         self.latest_regime_eval: Optional[Any] = None
+        self._late_start_catchup_done: set[str] = set()
 
     def _ensure_ist(self, dt: datetime) -> datetime:
         """Normalize any naive or aware datetime to Asia/Kolkata (IST)."""
@@ -308,6 +309,7 @@ class StrategyEngine:
             now = self._ensure_ist(current_time or self.scheduler.now_ist())
             session_date = now.date()
             self._current_session_date = session_date
+            self._late_start_catchup_done.clear()
             symbols = self.get_active_watchlist()
 
             # 1. Reconcile positions, orders, and trades; re-attach missing SL orders
@@ -411,6 +413,7 @@ class StrategyEngine:
         if self._current_session_date != session_date:
             self._current_session_date = session_date
             self.opening_ranges.clear()
+            self._late_start_catchup_done.clear()
             self._last_entry_bar_timestamp = None
             self._flatten_completed = False
         if self._daily_loss_halt_date is not None and self._daily_loss_halt_date != session_date:
@@ -1828,7 +1831,104 @@ class StrategyEngine:
                 is_entry_window=True,
                 is_core_symbol=is_core,
             )
-            evaluated_signals[sym] = (sig, inst, stock_candles, quote)
+            eval_candles = stock_candles
+
+            # Late-Start First-Scan Catch-Up Evaluation:
+            # If the engine started late (e.g., 09:50 IST) and the latest bar is WAIT, scan earlier
+            # post-OR bars of today once per session to catch valid earlier breakouts or reject stale ones.
+            if sym not in self._late_start_catchup_done:
+                self._late_start_catchup_done.add(sym)
+                now_ist_time = self._ensure_ist(now).time()
+                if sig.decision == Decision.WAIT and now_ist_time >= time(9, 40):
+                    comp_c = [c for c in stock_candles if c.is_complete] or stock_candles
+                    if len(comp_c) >= 2:
+                        for idx in range(len(comp_c) - 2, -1, -1):
+                            cand_bar = comp_c[idx]
+                            cand_ts = self._ensure_ist(cand_bar.timestamp)
+                            if cand_ts.date() != session_date or cand_ts.time() < time(9, 30):
+                                break
+                            sub_stock = comp_c[: idx + 1]
+                            sub_bench = [bc for bc in bench_candles if self._ensure_ist(bc.timestamp) <= cand_ts] or bench_candles
+                            catchup_sig = evaluate_signal(
+                                symbol=sym,
+                                stock_candles_5m=sub_stock,
+                                benchmark_candles_5m=sub_bench,
+                                opening_range=or_range,
+                                market_regime=regime_eval.regime,
+                                instrument=inst,
+                                quote=quote,
+                                config=self.config.signal,
+                                is_entry_window=True,
+                                is_core_symbol=is_core,
+                            )
+                            if catchup_sig.decision in (Decision.PROPOSED_LONG, Decision.PROPOSED_SHORT):
+                                c_tick = inst.tick_size if inst and inst.tick_size > 0 else 0.05
+                                slip_cfg = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15)
+                                slip_pct = (slip_cfg / 100.0) if slip_cfg >= 0.01 else (slip_cfg if slip_cfg > 0 else 0.0015)
+                                c_side = catchup_sig.side
+                                c_price = catchup_sig.signal_price
+                                if c_side == Side.BUY:
+                                    c_entry = min(round_to_tick(c_price + c_tick, c_tick), round_to_tick(c_price * (1.0 + slip_pct), c_tick))
+                                else:
+                                    c_entry = max(round_to_tick(c_price - c_tick, c_tick), round_to_tick(c_price * (1.0 - slip_pct), c_tick))
+                                c_atr_series = compute_atr(
+                                    [c.high for c in sub_stock],
+                                    [c.low for c in sub_stock],
+                                    [c.close for c in sub_stock],
+                                    period=self.config.stops.initial_atr_period,
+                                )
+                                c_atr = c_atr_series[-1] if c_atr_series else (c_entry * 0.01)
+                                lb_bars = getattr(self.config.stops, "swing_lookback_bars", 5)
+                                lb_c = sub_stock[-lb_bars:] if len(sub_stock) >= lb_bars else sub_stock
+                                c_stop = calculate_initial_stop(
+                                    side=c_side,
+                                    entry_price=c_entry,
+                                    signal_low=min(c.low for c in lb_c),
+                                    signal_high=max(c.high for c in lb_c),
+                                    atr_value=c_atr,
+                                    config=self.config.stops,
+                                    tick_size=c_tick,
+                                )
+                                c_target = calculate_target_price(
+                                    side=c_side,
+                                    entry_price=c_entry,
+                                    initial_stop=c_stop,
+                                    target_r=self.config.stops.target_r,
+                                    tick_size=c_tick,
+                                )
+                                late_val = validate_late_start_signal(
+                                    symbol=sym,
+                                    side=c_side,
+                                    signal_price=c_price,
+                                    initial_stop=c_stop,
+                                    target_price=c_target,
+                                    or_high=or_range.high if or_range else 0.0,
+                                    or_low=or_range.low if or_range else 0.0,
+                                    trigger_bar_timestamp=cand_ts,
+                                    subsequent_candles=stock_candles,
+                                    quote=quote,
+                                    now_ist=now,
+                                    entry_start_hhmm=self.config.schedule.entry_start,
+                                    entry_cutoff_hhmm=self.config.schedule.entry_cutoff,
+                                    max_price_drift_pct=slip_pct,
+                                )
+                                if late_val.is_valid:
+                                    sig = catchup_sig
+                                    eval_candles = sub_stock
+                                else:
+                                    decisions.append(
+                                        StrategyDecision(
+                                            decision=Decision.WAIT,
+                                            symbol=sym,
+                                            side=c_side,
+                                            timestamp_ist=now,
+                                            reason_codes=[late_val.reason_code, "STALE_SIGNAL_SKIPPED"],
+                                            explanation=late_val.explanation,
+                                        )
+                                    )
+                                break
+
+            evaluated_signals[sym] = (sig, inst, eval_candles, quote)
             if sig.decision in (Decision.PROPOSED_LONG, Decision.PROPOSED_SHORT):
                 qualified_candidates.append(sym)
 
@@ -2011,7 +2111,7 @@ class StrategyEngine:
                         or_high=or_obj.high if or_obj else 0.0,
                         or_low=or_obj.low if or_obj else 0.0,
                         trigger_bar_timestamp=trig_ts,
-                        subsequent_candles=stock_candles,
+                        subsequent_candles=stock_candles_map.get(sym) or stock_candles,
                         quote=quote,
                         now_ist=now,
                         entry_start_hhmm=self.config.schedule.entry_start,
