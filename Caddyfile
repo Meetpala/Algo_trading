@@ -1,0 +1,3 @@
+34-14-147-10.sslip.io, 34.14.147.10.sslip.io {
+    reverse_proxy apex3:5000
+}

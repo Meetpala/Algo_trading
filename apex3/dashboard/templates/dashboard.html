@@ -17,8 +17,10 @@
             <span id="badge-clock" class="badge badge-neutral">--:--:-- IST</span>
             <span id="badge-session" class="badge badge-info">SESSION: --</span>
         </div>
-        <div class="header-actions">
-            <a href="/login/kite" class="btn btn-info" style="text-decoration:none; display:inline-flex; align-items:center; font-weight:600;">🔑 Login Zerodha</a>
+        <div class="header-actions" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <a href="/login/kite" target="_blank" class="btn btn-info" style="text-decoration:none; display:inline-flex; align-items:center; font-weight:600;">🔑 Login Zerodha</a>
+            <input type="text" id="input-request-token" placeholder="Paste Redirect URL or request_token" style="padding:6px 10px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#f8fafc; font-size:0.85rem; width:240px;" />
+            <button class="btn btn-primary" onclick="submitRedirectToken()">⚡ Activate Token</button>
             <button id="btn-pause" class="btn btn-warning" onclick="togglePause()">Pause Strategy</button>
             <button id="btn-flatten" class="btn btn-danger" onclick="emergencyFlatten()">⚠️ Emergency Flatten</button>
         </div>
@@ -224,7 +226,21 @@
             }
         }
 
-        const OPERATOR_TOKEN = "{{ operator_token }}";
+        function submitRedirectToken() {
+            const raw = (document.getElementById('input-request-token').value || '').trim();
+            if (!raw) {
+                alert("Paste the redirected URL (containing request_token=...) or the request_token itself.");
+                return;
+            }
+            let reqToken = raw;
+            if (raw.includes("request_token=")) {
+                const match = raw.match(/[?&]request_token=([^&#\s]+)/);
+                if (match && match[1]) {
+                    reqToken = match[1];
+                }
+            }
+            window.location.href = "/auth/callback?request_token=" + encodeURIComponent(reqToken);
+        }
 
         async function togglePause() {
             await fetch('/api/pause', {
