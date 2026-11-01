@@ -2428,28 +2428,39 @@ def test_schedule_0930_to_0935_and_special_session_display():
 
 
 def test_api_set_token_endpoint():
-    """Verify POST /api/set_token updates access token and broker session hot-reload."""
+    """Verify POST /api/set_token updates access token and broker session hot-reload without mutating live .env."""
+    import os
     from apex3.dashboard.app import create_app
-    cfg = AppConfig()
-    object.__setattr__(cfg.dashboard, "auth_required", True)
-    mock_broker = MagicMock()
-    mock_journal = MagicMock()
-    engine = StrategyEngine(cfg, mock_broker, mock_journal)
-    app = create_app(engine, cfg, mock_journal)
-    client = app.test_client()
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+    orig_env_content = open(env_path, "r", encoding="utf-8").read() if os.path.exists(env_path) else None
+    orig_env_var = os.environ.get("KITE_ACCESS_TOKEN")
+    try:
+        cfg = AppConfig()
+        object.__setattr__(cfg.dashboard, "auth_required", True)
+        mock_broker = MagicMock()
+        mock_journal = MagicMock()
+        engine = StrategyEngine(cfg, mock_broker, mock_journal)
+        app = create_app(engine, cfg, mock_journal)
+        client = app.test_client()
 
-    # Unauthorized request without operator token fails
-    r_unauth = client.post("/api/set_token", json={"access_token": "fresh_tok_123"}, headers={"Origin": "http://127.0.0.1:5000"})
-    assert r_unauth.status_code == 401
+        # Unauthorized request without operator token fails
+        r_unauth = client.post("/api/set_token", json={"access_token": "fresh_tok_123"}, headers={"Origin": "http://127.0.0.1:5000"})
+        assert r_unauth.status_code == 401
 
-    # Authorized request with Bearer token succeeds
-    r_auth = client.post(
-        "/api/set_token",
-        json={"access_token": "fresh_tok_123"},
-        headers={"Origin": "http://127.0.0.1:5000", "Authorization": "Bearer apex3_secure_operator_token"},
-    )
-    assert r_auth.status_code == 200
-    assert r_auth.get_json()["status"] == "SUCCESS"
+        # Authorized request with Bearer token succeeds
+        r_auth = client.post(
+            "/api/set_token",
+            json={"access_token": "fresh_tok_123"},
+            headers={"Origin": "http://127.0.0.1:5000", "Authorization": "Bearer apex3_secure_operator_token"},
+        )
+        assert r_auth.status_code == 200
+        assert r_auth.get_json()["status"] == "SUCCESS"
+    finally:
+        if orig_env_content is not None:
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(orig_env_content)
+        if orig_env_var is not None:
+            os.environ["KITE_ACCESS_TOKEN"] = orig_env_var
 
 
 

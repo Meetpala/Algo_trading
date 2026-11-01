@@ -142,19 +142,16 @@ def run_app():
             broker = kite_broker
 
         # Pre-flight session check
-        if broker.is_session_valid():
+        session_valid_at_boot = broker.is_session_valid()
+        if session_valid_at_boot:
             logger.info("SUCCESS: Broker live session(s) ACTIVE and authenticated.")
         else:
             msg = (
-                "CRITICAL PRE-FLIGHT ERROR: Broker session authentication check failed. "
-                "Verify API credentials, TOTP, and access tokens before starting autonomous live trading."
+                "STANDBY MODE: Zerodha daily session token is expired or awaiting login. "
+                "Starting Operator Dashboard & /login/kite OAuth listener in standby mode..."
             )
-            logger.critical(msg)
+            logger.warning(msg)
             notifier.notify_connection_lost("Zerodha/AngelOne", msg)
-            if not getattr(args, "simulate", False):
-                release_instance_lock()
-                logger.critical("Aborting live autonomous startup. Engine will NOT start.")
-                sys.exit(1)
     else:
         logger.info("Operating in PAPER TRADING mode. Real orders are impossible.")
         paper_broker = PaperBroker(starting_margin=config.paper_starting_capital)
@@ -202,39 +199,41 @@ def run_app():
     engine = StrategyEngine(config=config, broker=broker, journal=journal, trade_logger=trade_logger)
 
     if config.mode == "live":
-        from apex3.reconciliation.reconciler import Reconciler
-        logger.info("Executing mandatory pre-flight account state and position reconciliation audit...")
-        reconciler = Reconciler(
-            broker=broker,
-            state_machine=engine.state_machine,
-            journal=journal,
-            session_tag=engine.session_tag,
-            config=config,
-        )
-        radar_cfg = getattr(config, "raw_dict", {}).get("radar", {}) if hasattr(config, "raw_dict") else {}
-        watched = list(radar_cfg.get("core_watchlist", [])) + list(radar_cfg.get("extended_pool", []))
-        if not watched:
-            watched = list(config.watchlist.symbols) + list(config.watchlist.scanner_universe)
-        rec_status = reconciler.audit_startup_state(watched_symbols=watched, reattach_stops=True)
-        if not rec_status.is_clean:
-            msg = (
-                f"CRITICAL PRE-FLIGHT AUDIT FAILED: {rec_status.message}. "
-                "Account state is unverified or has conflicting external positions/orders. "
-                "Log into the Kite app, resolve orders and positions manually, and restart."
+        if broker.is_session_valid():
+            from apex3.reconciliation.reconciler import Reconciler
+            logger.info("Executing mandatory pre-flight account state and position reconciliation audit...")
+            reconciler = Reconciler(
+                broker=broker,
+                state_machine=engine.state_machine,
+                journal=journal,
+                session_tag=engine.session_tag,
+                config=config,
             )
-            logger.critical(msg)
-            if not getattr(args, "simulate", False):
-                release_instance_lock()
-                logger.critical("Aborting live autonomous startup. Engine will NOT start.")
-                sys.exit(1)
+            radar_cfg = getattr(config, "raw_dict", {}).get("radar", {}) if hasattr(config, "raw_dict") else {}
+            watched = list(radar_cfg.get("core_watchlist", [])) + list(radar_cfg.get("extended_pool", []))
+            if not watched:
+                watched = list(config.watchlist.symbols) + list(config.watchlist.scanner_universe)
+            rec_status = reconciler.audit_startup_state(watched_symbols=watched, reattach_stops=True)
+            if not rec_status.is_clean:
+                msg = (
+                    f"CRITICAL PRE-FLIGHT AUDIT WARNING: {rec_status.message}. "
+                    "Engine paused until conflicting external positions/orders are resolved."
+                )
+                logger.critical(msg)
+                engine.is_paused = True
+                engine.pause_reason = "UNKNOWN_MANUAL_POSITIONS"
+            else:
+                logger.info("PRE-FLIGHT AUDIT PASSED: Account state verified. Flat=%s", rec_status.is_flat)
+                try:
+                    backfill_res = engine.reconcile_and_backfill_late_start()
+                    if backfill_res.get("recovered_positions"):
+                        notifier.notify_unexpected_restart(config.mode, backfill_res["recovered_positions"])
+                except Exception as bfe:
+                    logger.warning("Late-start backfill warning: %s", bfe)
         else:
-            logger.info("PRE-FLIGHT AUDIT PASSED: Account state verified. Flat=%s", rec_status.is_flat)
-            try:
-                backfill_res = engine.reconcile_and_backfill_late_start()
-                if backfill_res.get("recovered_positions"):
-                    notifier.notify_unexpected_restart(config.mode, backfill_res["recovered_positions"])
-            except Exception as bfe:
-                logger.warning("Late-start backfill warning: %s", bfe)
+            engine.is_paused = True
+            engine.pause_reason = "BROKER_SESSION_INVALID"
+            logger.info("Engine paused in STANDBY (BROKER_SESSION_INVALID). Log in via /login/kite to activate live trading.")
 
     if args.simulate:
         logger.info("Running simulated trading session...")
@@ -265,18 +264,9 @@ def run_app():
     loop_thread = threading.Thread(target=_trading_loop, daemon=True, name="Apex3TradingLoop")
     loop_thread.start()
 
-    # Create & Run Flask Local Dashboard
+    # Create & Run Flask Local/Cloud Dashboard
     dashboard_app = create_app(engine, config, journal)
-    requested_host = args.host or config.dashboard.host
-    if requested_host not in ("127.0.0.1", "localhost", "::1"):
-        logger.warning(
-            "Security Warning: APEX-3 Dashboard requested non-loopback host '%s'. "
-            "Enforcing loopback binding (127.0.0.1) for security compliance.",
-            requested_host,
-        )
-        host = "127.0.0.1"
-    else:
-        host = requested_host
+    host = args.host or os.environ.get("APEX3_DASHBOARD_HOST") or config.dashboard.host
     port = args.port or config.dashboard.port
     logger.info(
         "Starting APEX-3 Operator Dashboard at http://%s:%d...",
