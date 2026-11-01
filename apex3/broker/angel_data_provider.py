@@ -85,6 +85,7 @@ class AngelDataProvider:
         self._candle_cache: dict[tuple[str, str], tuple[float, int, list[Candle]]] = {}
         self._candle_cache_ttl: float = 120.0
         self._error_backoff: dict[tuple[str, str], float] = {}
+        self._last_reauth_mono: float = 0.0
 
         if api_key and client_code and pin and totp_secret:
             self.authenticate()
@@ -134,13 +135,24 @@ class AngelDataProvider:
             return False
 
     def is_session_valid(self) -> bool:
-        """Verify that Angel One SmartAPI session is active and authenticated."""
+        """Verify that Angel One SmartAPI session is active, auto-refreshing via TOTP after daily reset."""
         if not self._smart_api or not self._auth_token:
+            if self.api_key and self.client_code and self.pin and self.totp_secret:
+                now_m = time.monotonic()
+                if now_m - self._last_reauth_mono > 60.0:
+                    self._last_reauth_mono = now_m
+                    return self.authenticate(force=True)
             return False
         try:
             if hasattr(self._smart_api, "getProfile"):
                 prof = self._smart_api.getProfile(self._refresh_token)
                 if prof and prof.get("status") is False:
+                    if self.api_key and self.client_code and self.pin and self.totp_secret:
+                        now_m = time.monotonic()
+                        if now_m - self._last_reauth_mono > 60.0:
+                            logger.info("Angel One daily token expired; auto-refreshing session via TOTP...")
+                            self._last_reauth_mono = now_m
+                            return self.authenticate(force=True)
                     return False
             return True
         except Exception as e:

@@ -165,6 +165,14 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 kite_inst._kite.set_access_token(token)
                 kite_inst._access_token = token
 
+            data_prov = getattr(engine.broker, "data_provider", None)
+            if data_prov and hasattr(data_prov, "is_session_valid") and hasattr(data_prov, "authenticate"):
+                try:
+                    if not data_prov.is_session_valid():
+                        data_prov.authenticate(force=True)
+                except Exception:
+                    pass
+
             try:
                 engine.is_halted = False
                 engine.halt_reason = ""
@@ -214,10 +222,18 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             if hasattr(kite_inst, "_kite") and kite_inst._kite:
                 kite_inst._kite.set_access_token(token)
                 kite_inst._access_token = token
-                if hasattr(kite_inst, "_instrument_info_cache"):
-                    kite_inst._instrument_info_cache.clear()
-                if hasattr(kite_inst, "_mis_margin_cache"):
-                    kite_inst._mis_margin_cache.clear()
+
+            data_prov = getattr(engine.broker, "data_provider", None)
+            if data_prov and hasattr(data_prov, "is_session_valid") and hasattr(data_prov, "authenticate"):
+                try:
+                    if not data_prov.is_session_valid():
+                        data_prov.authenticate(force=True)
+                except Exception:
+                    pass
+            if hasattr(kite_inst, "_instrument_info_cache"):
+                kite_inst._instrument_info_cache.clear()
+            if hasattr(kite_inst, "_mis_margin_cache"):
+                kite_inst._mis_margin_cache.clear()
 
             try:
                 engine.is_halted = False
