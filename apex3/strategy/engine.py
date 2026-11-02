@@ -124,6 +124,7 @@ class StrategyEngine:
         self.is_paused = False
         self.pause_reason = ""
         self._daily_loss_halt_date: Optional[date] = None
+        self._consecutive_pnl_failures: int = 0
         self._current_session_date: Optional[date] = None
         self._flatten_completed: bool = False
         self._last_entry_bar_timestamp: Optional[datetime] = None
@@ -1537,14 +1538,31 @@ class StrategyEngine:
                 additional_realized_pnl=session_pnl.realized_pnl,
                 estimated_charges=session_pnl.estimated_charges,
             )
+            self._consecutive_pnl_failures = 0
         except Exception as exc:
+            self._consecutive_pnl_failures += 1
+            if self._consecutive_pnl_failures < 5:
+                logger.warning(
+                    "Transient P&L accounting error (%d/5): %s. Waiting for next tick.",
+                    self._consecutive_pnl_failures,
+                    exc,
+                )
+                return decisions + [
+                    StrategyDecision(
+                        decision=Decision.WAIT,
+                        timestamp_ist=now,
+                        reason_codes=["TRANSIENT_ACCOUNTING_WAIT"],
+                        explanation=f"Waiting for broker accounting sync (attempt {self._consecutive_pnl_failures}/5): {exc}",
+                    )
+                ]
+
             self._daily_loss_halt_date = session_date
             self.is_paused = True
             self.pause_reason = "DAILY_PNL_ACCOUNTING_FAILED"
             self.journal.log_warning(
                 severity="CRITICAL",
                 code="DAILY_PNL_ACCOUNTING_FAILED",
-                message=f"Could not safely calculate today's strategy P&L: {exc}",
+                message=f"Could not safely calculate today's strategy P&L after 5 attempts: {exc}",
             )
             return decisions + [
                 StrategyDecision(

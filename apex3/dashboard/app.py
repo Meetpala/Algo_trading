@@ -370,6 +370,12 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         except Exception:
             events = []
 
+        try:
+            raw_w = engine.journal.get_warnings(limit=10) if hasattr(engine.journal, "get_warnings") else []
+            warnings = [dict(w) for w in raw_w if isinstance(w, dict) or hasattr(w, "keys")]
+        except Exception:
+            warnings = []
+
         # Read latest decisions from engine background thread (strictly read-only, side-effect free)
         decisions = getattr(engine, "last_decisions", [])
         decisions_summary = [
@@ -411,6 +417,7 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 "journal_orders": journal_orders[:10],
                 "recent_orders": (live_orders if live_orders else journal_orders)[:10],
                 "recent_events": events[:10],
+                "warnings": warnings[:10],
             }
         )
 
@@ -436,6 +443,9 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         pause_req = data.get("pause", not engine.is_paused)
         engine.is_paused = pause_req
         engine.pause_reason = "Manual operator pause" if engine.is_paused else ""
+        if not engine.is_paused:
+            engine._daily_loss_halt_date = None
+            setattr(engine, "_consecutive_pnl_failures", 0)
         return jsonify({"status": "success", "is_paused": engine.is_paused})
 
     @app.route("/api/emergency_flatten", methods=["POST"])

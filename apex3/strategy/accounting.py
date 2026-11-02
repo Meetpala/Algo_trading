@@ -182,7 +182,9 @@ def build_session_pnl(
 
         order_id = str(trade.get("order_id", ""))
         if not order_id or order_id not in all_order_ids:
-            raise ValueError(f"Broker execution {trade_id or '(unknown id)'} has no matching order")
+            # If the trade does not match any current session order, it is not a known strategy order.
+            # Skipping it prevents manual or external broker executions from crashing strategy risk accounting.
+            continue
         if order_id not in strategy_order_ids:
             continue
 

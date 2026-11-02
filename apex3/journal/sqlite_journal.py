@@ -431,6 +431,27 @@ class Journal:
         rows = conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
+    def get_warnings(
+        self,
+        session_date: Optional[str] = None,
+        severity: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Query warning and critical error events by date and/or severity."""
+        conn = self._get_conn()
+        query = "SELECT * FROM warnings WHERE 1=1"
+        params: list[Any] = []
+        if session_date:
+            query += " AND session_date = ?"
+            params.append(session_date)
+        if severity:
+            query += " AND severity = ?"
+            params.append(severity)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
     def get_orders(
         self,
         session_date: Optional[str] = None,

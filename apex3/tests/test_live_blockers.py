@@ -2463,4 +2463,101 @@ def test_api_set_token_endpoint():
             os.environ["KITE_ACCESS_TOKEN"] = orig_env_var
 
 
+def test_build_session_pnl_skips_unmapped_or_manual_executions():
+    """Verify that external, manual, or unmapped trades do NOT crash strategy session PnL calculation."""
+    from apex3.strategy.accounting import build_session_pnl
+    from apex3.config import CostsConfig
+    from apex3.models import Side, Product, OrderType, OrderState, OrderRequest
+    from datetime import date
+
+    costs = CostsConfig()
+    today = date(2026, 11, 2)
+    session_tag = "APEX3_TEST"
+
+    # Suppose broker reports external or manual trades whose order_id is NOT in strategy orders
+    unmapped_trade = {
+        "trade_id": "TRD_EXT_999",
+        "order_id": "ORD_EXT_UNKNOWN",
+        "symbol": "INFY",
+        "side": "BUY",
+        "quantity": 10,
+        "price": 1800.0,
+    }
+    pnl = build_session_pnl(
+        trades=[unmapped_trade],
+        orders=[],
+        open_positions=[],
+        session_tag=session_tag,
+        session_date=today,
+        costs=costs,
+    )
+    assert pnl.trade_count == 0
+    assert pnl.realized_pnl == 0.0
+    assert pnl.estimated_charges == 0.0
+
+
+def test_pnl_accounting_transient_resilience():
+    """Verify that a transient network/broker error does not immediately lock the engine for the day."""
+    from unittest.mock import MagicMock
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from apex3.config import load_config
+    from apex3.strategy.engine import StrategyEngine
+    from apex3.models import Decision
+
+    ist_zone = ZoneInfo("Asia/Kolkata")
+    cfg = load_config()
+    broker = MagicMock()
+    journal = MagicMock()
+    broker.is_session_valid.return_value = True
+    broker.get_positions.return_value = []
+    broker.get_orders.return_value = []
+    # Simulate broker.get_trades raising transient network timeout
+    broker.get_trades.side_effect = ConnectionError("Transient Zerodha API timeout")
+
+    engine = StrategyEngine(cfg, broker, journal)
+    engine._consecutive_pnl_failures = 0
+
+    now = datetime(2026, 11, 2, 10, 0, 0, tzinfo=ist_zone)
+    decisions = engine.evaluate_step(now)
+
+    # Engine must NOT be permanently paused on first failure
+    assert engine.is_paused is False
+    assert engine._daily_loss_halt_date is None
+    assert engine._consecutive_pnl_failures == 1
+    assert any("TRANSIENT_ACCOUNTING_WAIT" in d.reason_codes for d in decisions)
+
+
+def test_toggle_pause_clears_daily_loss_halt_date():
+    """Verify that operator unpausing clears daily halt date and failure counters."""
+    from unittest.mock import MagicMock
+    from datetime import date
+    from apex3.config import load_config
+    from apex3.strategy.engine import StrategyEngine
+    from apex3.dashboard.app import create_app
+
+    cfg = load_config()
+    broker = MagicMock()
+    journal = MagicMock()
+    engine = StrategyEngine(cfg, broker, journal)
+    engine.is_paused = True
+    engine.pause_reason = "DAILY_PNL_ACCOUNTING_FAILED"
+    engine._daily_loss_halt_date = date(2026, 11, 2)
+    engine._consecutive_pnl_failures = 5
+
+    app = create_app(engine, cfg, journal)
+    client = app.test_client()
+
+    r = client.post(
+        "/api/pause",
+        json={"pause": False},
+        headers={"Origin": "http://127.0.0.1:5000", "Authorization": "Bearer apex3_secure_operator_token"},
+    )
+    assert r.status_code == 200
+    assert engine.is_paused is False
+    assert engine._daily_loss_halt_date is None
+    assert engine._consecutive_pnl_failures == 0
+
+
+
 
