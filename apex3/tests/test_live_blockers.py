@@ -2559,5 +2559,47 @@ def test_toggle_pause_clears_daily_loss_halt_date():
     assert engine._consecutive_pnl_failures == 0
 
 
+def test_manual_order_in_zerodha_does_not_halt_algo():
+    """Verify that manual orders/positions on Zerodha do NOT halt the strategy or block other symbols."""
+    from unittest.mock import MagicMock
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from apex3.config import load_config
+    from apex3.strategy.engine import StrategyEngine
+    from apex3.models import PositionState, Side, Product, Decision, MarginInfo
+
+    ist_zone = ZoneInfo("Asia/Kolkata")
+    cfg = load_config()
+    broker = MagicMock()
+    journal = MagicMock()
+
+    broker.is_session_valid.return_value = True
+    # User holds a manual MIS position in INFY
+    broker.get_positions.return_value = [
+        PositionState(symbol="INFY", side=Side.BUY, quantity=10, average_entry=1500.0, product=Product.MIS)
+    ]
+    broker.get_orders.return_value = []
+    broker.get_trades.return_value = []
+    broker.get_margins.return_value = MarginInfo(
+        equity_available=12000.0,
+        equity_used=3000.0,
+        collateral=0.0,
+        net_value=15000.0,
+        timestamp=datetime(2026, 11, 2, 10, 0, 0, tzinfo=ist_zone),
+    )
+
+    engine = StrategyEngine(cfg, broker, journal)
+    # Radar monitors INFY and RELIANCE
+    engine.get_active_watchlist = MagicMock(return_value=["INFY", "RELIANCE"])
+
+    now = datetime(2026, 11, 2, 10, 0, 0, tzinfo=ist_zone)
+    decisions = engine.evaluate_step(now)
+
+    # Strategy must NOT halt on UNKNOWN_MANUAL_POSITIONS
+    assert not any("UNKNOWN_MANUAL_POSITIONS" in d.reason_codes for d in decisions)
+    assert not any(d.decision == Decision.HALT for d in decisions)
+
+
+
 
 

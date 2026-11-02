@@ -486,15 +486,32 @@ class StrategyEngine:
         # -------------------------------------------------------------
         # STEP 3: Account & Order Reconciliation Gate
         # -------------------------------------------------------------
-        symbols = self.get_active_watchlist()
-        audit = self.reconciler.audit_startup_state(symbols)
-        if audit.has_unknown_positions:
+        raw_symbols = self.get_active_watchlist()
+        audit = self.reconciler.audit_startup_state(raw_symbols)
+        if not audit.is_clean and not audit.unknown_symbols:
+            # Broker fetch failure during reconciliation: wait for next tick rather than locking engine
             return [
                 StrategyDecision(
-                    decision=Decision.HALT,
+                    decision=Decision.WAIT,
                     timestamp_ist=now,
-                    reason_codes=["UNKNOWN_MANUAL_POSITIONS"],
+                    reason_codes=["RECONCILIATION_FETCH_WAIT"],
                     explanation=audit.message,
+                )
+            ]
+
+        # Manual / foreign positions on Zerodha do NOT halt the algo; instead, the manual symbols
+        # are safely excluded from algo scanning so manual user trading never interferes with algo operation.
+        manual_symbols = set(audit.unknown_symbols) if audit.unknown_symbols else set()
+        symbols = [s for s in raw_symbols if s not in manual_symbols]
+        if manual_symbols:
+            logger.info("Manual/foreign positions detected on Zerodha in %s; excluding from strategy radar", manual_symbols)
+        if not symbols and raw_symbols:
+            return [
+                StrategyDecision(
+                    decision=Decision.WAIT,
+                    timestamp_ist=now,
+                    reason_codes=["MANUAL_POSITIONS_ACTIVE"],
+                    explanation=f"All monitored symbols currently traded manually by operator: {sorted(manual_symbols)}",
                 )
             ]
 

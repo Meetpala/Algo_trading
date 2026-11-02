@@ -628,15 +628,10 @@ class Reconciler:
                 continue
 
             managed = self.sm.positions.get(bp.symbol)
-            if managed is None:
-                managed = self.sm.get_or_create_position(bp.symbol)
-                logger.warning("Adopted unmanaged broker MIS position %s (qty=%d) for square-off during flatten", bp.symbol, bp_qty)
-                self.journal.log_warning(
-                    severity="HIGH",
-                    code="MANUAL_MIS_POSITION_FLATTENED",
-                    message=f"Manual/unmanaged MIS position {bp.symbol} (qty={bp_qty}) included in emergency flatten.",
-                    data={"symbol": bp.symbol, "quantity": bp_qty},
-                )
+            if managed is None or managed.phase in (PositionPhase.FLAT, PositionPhase.CLOSED):
+                # Never liquidate user manual orders placed in Zerodha. The algo strictly flattens its own strategy positions.
+                logger.info("Preserving manual broker position %s; algo only flattens its own strategy trades", bp.symbol)
+                continue
 
             managed.quantity = bp_qty
             bp_side = Side.SELL if bp.quantity < 0 else (getattr(bp, "side", None) or managed.side or Side.BUY)
