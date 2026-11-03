@@ -153,6 +153,11 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             }
         }), (200 if session_valid else 503)
 
+    @app.route("/ping")
+    def ping():
+        """Liveness probe for Docker container healthcheck. Always returns 200 if process is responsive."""
+        return jsonify({"status": "ok", "timestamp_ist": _now_ist().isoformat()}), 200
+
     @app.route("/")
     def index():
         token_to_render = _get_operator_token() if _is_authorized() else ""

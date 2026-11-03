@@ -52,5 +52,6 @@ def test_valid_operator_token_still_authorizes(monkeypatch):
 
 def test_health_and_oauth_callback_stay_reachable_without_token(monkeypatch):
     client = _client(monkeypatch)
+    assert client.get("/ping", environ_overrides=EXTERNAL).status_code == 200
     assert client.get("/health", environ_overrides=EXTERNAL).status_code in (200, 503)
     assert client.get("/login/kite", environ_overrides=EXTERNAL).status_code in (302, 400)
