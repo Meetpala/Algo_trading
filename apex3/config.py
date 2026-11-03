@@ -262,7 +262,7 @@ class DashboardConfig:
     port: int = 5000
     refresh_interval_sec: int = 2
     auth_required: bool = False
-    api_token: str = ""
+    api_token: str = "apex3_operator_live_2026"
 
 
 @dataclass(frozen=True)

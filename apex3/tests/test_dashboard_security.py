@@ -55,3 +55,21 @@ def test_health_and_oauth_callback_stay_reachable_without_token(monkeypatch):
     assert client.get("/ping", environ_overrides=EXTERNAL).status_code == 200
     assert client.get("/health", environ_overrides=EXTERNAL).status_code in (200, 503)
     assert client.get("/login/kite", environ_overrides=EXTERNAL).status_code in (302, 400)
+
+
+def test_stream_and_cookie_authorization(monkeypatch):
+    client = _client(monkeypatch)
+    # 1. Unauthenticated external client cannot access stream
+    assert client.get("/api/stream", environ_overrides=EXTERNAL).status_code == 401
+
+    # 2. Authenticated with query param token
+    res_query = client.get("/api/stream?token=s3cret-operator-token&limit=1", environ_overrides=EXTERNAL)
+    assert res_query.status_code == 200
+    assert "text/event-stream" in res_query.content_type
+
+    # 3. Cookie authorization works without headers
+    client.set_cookie("apex3_auth", "s3cret-operator-token")
+    res_cookie = client.get("/api/status", environ_overrides=EXTERNAL)
+    assert res_cookie.status_code == 200
+    assert res_cookie.get_json()["timestamp_ist"] is not None
+
