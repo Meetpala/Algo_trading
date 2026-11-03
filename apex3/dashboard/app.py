@@ -461,4 +461,67 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             success, msg = engine.reconciler.execute_flatten_sequence()
         return jsonify({"status": "success" if success else "error", "message": msg})
 
+    @app.route("/api/test_order", methods=["POST"])
+    def api_test_order():
+        """Places a safe 1-share AMO test order on Zerodha directly from the VM and cancels it immediately."""
+        if not _is_authorized():
+            return jsonify({"status": "error", "message": "Unauthorized: valid operator token required"}), 401
+
+        api_key = config.secrets.kite_api_key or os.environ.get("KITE_API_KEY", "")
+        access_token = os.environ.get("KITE_ACCESS_TOKEN", "")
+
+        kite_inst = getattr(engine.broker, "execution_broker", engine.broker)
+        kite = getattr(kite_inst, "_kite", None)
+
+        if kite is None:
+            if not api_key or not access_token:
+                return jsonify({"status": "error", "message": "KITE_API_KEY or KITE_ACCESS_TOKEN not configured"}), 400
+            from kiteconnect import KiteConnect
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(access_token)
+
+        try:
+            import time
+            order_id = kite.place_order(
+                variety="amo",
+                exchange="NSE",
+                tradingsymbol="IDEA",
+                transaction_type="BUY",
+                quantity=1,
+                product="CNC",
+                order_type="LIMIT",
+                price=11.10,
+                tag="VM_TEST",
+            )
+
+            time.sleep(1)
+            cancel_result = "UNKNOWN"
+            try:
+                kite.cancel_order(variety="amo", order_id=order_id)
+                cancel_result = "CANCELLED"
+            except Exception as cancel_err:
+                cancel_result = f"CANCEL_ERROR: {cancel_err}"
+
+            order_status = "UNKNOWN"
+            try:
+                orders = kite.orders()
+                matched = [o for o in orders if str(o.get("order_id")) == str(order_id)]
+                if matched:
+                    order_status = matched[0].get("status", "UNKNOWN")
+            except Exception:
+                pass
+
+            return jsonify({
+                "status": "success",
+                "message": "VM real order test completed successfully",
+                "order_id": str(order_id),
+                "placed_symbol": "IDEA",
+                "placed_price": 11.10,
+                "cancel_attempt": cancel_result,
+                "orderbook_status": order_status,
+                "origin": "Google Cloud VM",
+            })
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+
     return app

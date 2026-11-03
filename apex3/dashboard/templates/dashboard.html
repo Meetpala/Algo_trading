@@ -21,6 +21,7 @@
             <a href="/login/kite" target="_blank" class="btn btn-info" style="text-decoration:none; display:inline-flex; align-items:center; font-weight:600;">🔑 Login Zerodha</a>
             <input type="text" id="input-request-token" placeholder="Paste Redirect URL or request_token" style="padding:6px 10px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#f8fafc; font-size:0.85rem; width:240px;" />
             <button class="btn btn-primary" onclick="submitRedirectToken()">⚡ Activate Token</button>
+            <button id="btn-test-order" class="btn btn-secondary" onclick="testVmOrder()" style="background:#2563eb; color:#ffffff; font-weight:600; border:none; padding:6px 12px; border-radius:6px; cursor:pointer;">🧪 Test Order on VM</button>
             <button id="btn-pause" class="btn btn-warning" onclick="togglePause()">Pause Strategy</button>
             <button id="btn-flatten" class="btn btn-danger" onclick="emergencyFlatten()">⚠️ Emergency Flatten</button>
         </div>
@@ -240,6 +241,34 @@
                 }
             }
             window.location.href = "/auth/callback?request_token=" + encodeURIComponent(reqToken);
+        }
+
+        async function testVmOrder() {
+            if (!confirm("Run real 1-share AMO order test directly from this VM?\n(Places 1-share IDEA LIMIT @ ₹11.10 and immediately cancels it)")) {
+                return;
+            }
+            const btn = document.getElementById('btn-test-order');
+            if (btn) btn.innerText = "⏳ Placing on Zerodha...";
+            try {
+                const res = await fetch('/api/test_order', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Operator-Token': OPERATOR_TOKEN
+                    }
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert(`✅ VM ORDER TEST SUCCESS!\n\nOrder ID: ${data.order_id}\nSymbol: ${data.placed_symbol} @ ₹${data.placed_price}\nCancellation: ${data.cancel_attempt}\nOrder Book Status: ${data.orderbook_status}\nExecuted By: ${data.origin}`);
+                } else {
+                    alert(`❌ VM Order Test Failed: ${data.message}`);
+                }
+                fetchStatus();
+            } catch (err) {
+                alert(`Error executing test order: ${err}`);
+            } finally {
+                if (btn) btn.innerText = "🧪 Test Order on VM";
+            }
         }
 
         async function togglePause() {
