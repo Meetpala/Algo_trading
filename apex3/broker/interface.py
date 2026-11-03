@@ -248,7 +248,7 @@ class BrokerInterface(ABC):
         return {}
 
     @abstractmethod
-    def get_instrument_info(self, symbol: str, exchange: str = "MCX") -> InstrumentInfo:
+    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
         """Fetch exchange instrument metadata.
 
         Args:

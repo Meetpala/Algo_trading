@@ -538,7 +538,7 @@ class PaperBroker(BrokerInterface):
             if _is_between(c.timestamp, from_dt, to_dt)
         ]
 
-    def get_instrument_info(self, symbol: str, exchange: str = "MCX") -> InstrumentInfo:
+    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
         """Return instrument metadata from internal registry."""
         if symbol in self._instruments:
             return self._instruments[symbol]

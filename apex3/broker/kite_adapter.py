@@ -273,7 +273,7 @@ class KiteAdapter(BrokerInterface):
                 "and KITE_API_KEY / KITE_ACCESS_TOKEN env vars are set."
             )
 
-    def _get_instruments(self, exchange: str = "MCX") -> dict[str, dict]:
+    def _get_instruments(self, exchange: str = "NSE") -> dict[str, dict]:
         """Fetch and cache daily instruments dump from Kite."""
         # Backward compatibility for flat symbol dictionary assignments in unit tests
         if self._instruments_cache and not any(k in self._instruments_cache for k in ("NSE", "MCX", "NFO", "BSE")):
@@ -293,7 +293,7 @@ class KiteAdapter(BrokerInterface):
             logger.error("Failed to fetch instruments from Kite for %s: %s", exchange, e)
         return self._instruments_cache.get(exchange, {})
 
-    def _resolve_instrument_token(self, symbol: str, exchange: str = "MCX") -> int:
+    def _resolve_instrument_token(self, symbol: str, exchange: str = "NSE") -> int:
         """Resolve instrument token for a given symbol."""
         cache = self._get_instruments(exchange)
         inst = cache.get(symbol)

@@ -293,13 +293,13 @@ class StrategyDecision:
 
 @dataclass(frozen=True)
 class InstrumentInfo:
-    """Exchange instrument metadata."""
+    """Exchange instrument metadata for NSE Equities."""
     symbol: str
-    exchange: str = "MCX"
-    tick_size: float = 1.0   # Default MCX tick size
+    exchange: str = "NSE"
+    tick_size: float = 0.05  # NSE Equity tick size is 5 paise
     lot_size: int = 1
-    order_lot_size: int = 1  # Exact lot_size from Zerodha kite.instruments("MCX") used in place_order
-    lot_multiplier: int = 1  # Rupee P&L per Rs 1.00 move in quoted price per 1 lot
+    order_lot_size: int = 1
+    lot_multiplier: int = 1  # 1.0 for Equities (1 share = 1 rupee per point)
     expiry_date: Optional[date] = None
     days_to_expiry: int = 999
     exchange_token: str = ""

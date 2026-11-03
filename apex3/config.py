@@ -290,16 +290,16 @@ class SecretsConfig:
 class AppConfig:
     """Complete application configuration."""
     mode: str = "paper"
-    paper_starting_capital: float = 30_000.0
-    exchange: str = "MCX"
-    margin_segment: str = "commodity"
+    paper_starting_capital: float = 15_000.0
+    exchange: str = "NSE"
+    margin_segment: str = "equity"
     fetch_live_zerodha_margin: bool = True
-    base_capital_inr: float = 30_000.0
+    base_capital_inr: float = 15_000.0
     safety_reserve_buffer_pct: float = 0.05
     max_concurrent_positions: int = 2
     max_new_entries_per_bar: int = 1
-    per_trade_risk_pct: float = 0.0125
-    daily_max_loss_pct: float = 0.0250
+    per_trade_risk_pct: float = 0.0080
+    daily_max_loss_pct: float = 0.0160
     bound_loss_with_charges: bool = True
     max_fee_to_profit_ratio: float = 0.18
     universe: UniverseConfig = field(default_factory=UniverseConfig)
@@ -420,16 +420,16 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     journal_raw = raw.get("journal", {})
     dashboard_raw = raw.get("dashboard", {})
 
-    # MCX Production Fields
-    exchange = str(raw.get("exchange", "MCX"))
-    margin_segment = str(raw.get("margin_segment", "commodity"))
+    # NSE Equity Production Fields
+    exchange = str(raw.get("exchange", "NSE"))
+    margin_segment = str(raw.get("margin_segment", "equity"))
     fetch_live_margin = bool(raw.get("fetch_live_zerodha_margin", True))
-    base_cap = float(raw.get("base_capital_inr", acc_raw.get("starting_capital", raw.get("paper_starting_capital", 30000.0))))
+    base_cap = float(raw.get("base_capital_inr", acc_raw.get("starting_capital", raw.get("paper_starting_capital", 15000.0))))
     safety_buffer = float(raw.get("safety_reserve_buffer_pct", acc_raw.get("safety_reserve_buffer_pct", limits_raw.get("safety_reserve_pct", 0.05))))
     max_positions = int(raw.get("max_concurrent_positions", risk_raw.get("max_concurrent_positions", 2)))
     max_entries = int(raw.get("max_new_entries_per_bar", risk_raw.get("max_new_entries_per_bar", 1)))
-    per_trade_risk = float(raw.get("per_trade_risk_pct", risk_raw.get("risk_per_trade_pct", 0.0125)))
-    daily_max_loss = float(raw.get("daily_max_loss_pct", risk_raw.get("daily_loss_limit_pct", 0.0250)))
+    per_trade_risk = float(raw.get("per_trade_risk_pct", risk_raw.get("risk_per_trade_pct", 0.0080)))
+    daily_max_loss = float(raw.get("daily_max_loss_pct", risk_raw.get("daily_loss_limit_pct", 0.0160)))
     bound_loss = bool(raw.get("bound_loss_with_charges", risk_raw.get("bound_loss_with_charges", True)))
     max_fee_ratio = float(raw.get("max_fee_to_profit_ratio", 0.18))
 
@@ -581,8 +581,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             second_slot_requires_slot1_profit_r=float(risk_raw.get("second_slot_requires_slot1_profit_r", 0.0)),
         ),
         regime=RegimeConfig(
-            benchmark_symbol=str(regime_raw.get("benchmark_symbol", "MCX GOLD")),
-            benchmark_exchange=str(regime_raw.get("benchmark_exchange", "MCX")),
+            benchmark_symbol=str(regime_raw.get("benchmark_symbol", "NIFTY 50")),
+            benchmark_exchange=str(regime_raw.get("benchmark_exchange", "NSE")),
             ema_period=int(regime_raw.get("ema_period", 20)),
             ema_fast_period=int(regime_raw.get("ema_fast_period", 20)),
             ema_slow_period=int(regime_raw.get("ema_slow_period", 50)),

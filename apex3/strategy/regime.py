@@ -5,7 +5,6 @@ Supports both BenchmarkSnapshot (high-speed radar scanning) and Candle series.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Union
@@ -13,7 +12,7 @@ from typing import Optional, Union
 from apex3.config import RegimeConfig
 from apex3.indicators.adx import compute_adx
 from apex3.indicators.ema import compute_ema, ema_slope
-from apex3.models import Candle, GateResult, GateStatus, Quote, Side
+from apex3.models import Candle, GateResult, GateStatus, Quote
 
 
 class MarketRegime(str, Enum):
@@ -21,115 +20,6 @@ class MarketRegime(str, Enum):
     BULLISH = "BULLISH"
     BEARISH = "BEARISH"
     NEUTRAL = "NEUTRAL"
-    WAITING = "WAITING"
-
-
-Regime = MarketRegime
-
-
-def calculate_choppiness_index(candles_15m: list[Candle], period: int = 14) -> float:
-    """Computes Choppiness Index (CI_14) on 15m candles:
-    CI = 100 * LOG10(Sum(TR_14) / (MaxHigh_14 - MinLow_14)) / LOG10(period)
-    """
-    if len(candles_15m) < period + 1:
-        return 50.0
-
-    window = candles_15m[-period:]
-    true_ranges = []
-    for i in range(len(window)):
-        curr = window[i]
-        idx_in_all = len(candles_15m) - period + i
-        prev_c = candles_15m[idx_in_all - 1].close
-        tr = max(curr.high - curr.low, abs(curr.high - prev_c), abs(curr.low - prev_c))
-        true_ranges.append(tr)
-
-    sum_tr = sum(true_ranges)
-    max_h = max(c.high for c in window)
-    min_l = min(c.low for c in window)
-    high_low_span = max_h - min_l
-
-    if high_low_span <= 1e-6 or sum_tr <= 1e-6:
-        return 50.0
-
-    ci = 100.0 * (math.log10(sum_tr / high_low_span) / math.log10(period))
-    return min(max(ci, 0.0), 100.0)
-
-
-compute_choppiness_index = calculate_choppiness_index
-
-
-def evaluate_bullion_alignment(
-    gold_candles: list[Candle],
-    silver_candles: list[Candle],
-    intended_side: Optional[Side] = None,
-) -> tuple[bool, str]:
-    """Verify that MCX Gold and Silver directionally agree on EMA_20 and Session VWAP."""
-    if len(gold_candles) < 20 or len(silver_candles) < 20:
-        return True, "Insufficient candles to verify bullion alignment; defaulting to pass"
-
-    gold_closes = [c.close for c in gold_candles]
-    silver_closes = [c.close for c in silver_candles]
-
-    gold_ema20 = compute_ema(gold_closes, 20)[-1]
-    silver_ema20 = compute_ema(silver_closes, 20)[-1]
-
-    from apex3.indicators.vwap import compute_session_vwap
-
-    today = gold_candles[-1].timestamp.date()
-    gold_today = [c for c in gold_candles if c.timestamp.date() == today] or gold_candles[-20:]
-    silver_today = [c for c in silver_candles if c.timestamp.date() == today] or silver_candles[-20:]
-
-    gold_vol = sum(c.volume for c in gold_today)
-    silver_vol = sum(c.volume for c in silver_today)
-
-    gold_vwap = (
-        compute_session_vwap(
-            [c.high for c in gold_today],
-            [c.low for c in gold_today],
-            [c.close for c in gold_today],
-            [c.volume for c in gold_today],
-        )
-        if gold_vol > 0
-        else (sum(c.close for c in gold_today) / len(gold_today))
-    )
-    silver_vwap = (
-        compute_session_vwap(
-            [c.high for c in silver_today],
-            [c.low for c in silver_today],
-            [c.close for c in silver_today],
-            [c.volume for c in silver_today],
-        )
-        if silver_vol > 0
-        else (sum(c.close for c in silver_today) / len(silver_today))
-    )
-
-    gold_close = gold_closes[-1]
-    silver_close = silver_closes[-1]
-
-    gold_bull = (gold_close > gold_ema20) and (gold_close > gold_vwap)
-    gold_bear = (gold_close < gold_ema20) and (gold_close < gold_vwap)
-
-    silver_bull = (silver_close > silver_ema20) and (silver_close > silver_vwap)
-    silver_bear = (silver_close < silver_ema20) and (silver_close < silver_vwap)
-
-    if intended_side == Side.BUY:
-        if not gold_bull:
-            return False, f"Gold not bullish: Close={gold_close} (EMA20={gold_ema20:.1f}, VWAP={gold_vwap:.1f})"
-        if not silver_bull:
-            return False, f"Silver not bullish: Close={silver_close} (EMA20={silver_ema20:.1f}, VWAP={silver_vwap:.1f})"
-        return True, "Bullion alignment confirmed (Gold & Silver Bullish)"
-
-    if intended_side == Side.SELL:
-        if not gold_bear:
-            return False, f"Gold not bearish: Close={gold_close} (EMA20={gold_ema20:.1f}, VWAP={gold_vwap:.1f})"
-        if not silver_bear:
-            return False, f"Silver not bearish: Close={silver_close} (EMA20={silver_ema20:.1f}, VWAP={silver_vwap:.1f})"
-        return True, "Bullion alignment confirmed (Gold & Silver Bearish)"
-
-    if (gold_bull and silver_bull) or (gold_bear and silver_bear):
-        return True, "Bullion alignment confirmed"
-
-    return False, f"Bullion cross-metal divergence: Gold(bull={gold_bull}, bear={gold_bear}) vs Silver(bull={silver_bull}, bear={silver_bear})"
 
 
 @dataclass
@@ -162,9 +52,8 @@ def evaluate_market_regime(
     cfg_or_config: Union[dict, RegimeConfig],
     benchmark_quote: Optional[Quote] = None,
     stale_threshold_sec: float = 2.0,
-    candles_15m: Optional[list[Candle]] = None,
 ) -> Union[MarketRegime, RegimeEvaluation]:
-    """Evaluate market regime.
+    """Evaluate NIFTY 50 5-minute regime.
 
     Supports:
       1. evaluate_market_regime(snapshot: BenchmarkSnapshot, cfg: dict) -> MarketRegime
@@ -176,11 +65,6 @@ def evaluate_market_regime(
         min_adx = float(regime_cfg.get("min_adx", 22.0))
         require_vwap = bool(regime_cfg.get("require_vwap_alignment", True))
         require_rising_adx = bool(regime_cfg.get("require_rising_adx", True))
-
-        # Choppiness check on snapshot if present
-        ci_val = getattr(target, "ci14", None) or getattr(target, "choppiness_index", None)
-        if ci_val is not None and float(ci_val) >= 50.0:
-            return MarketRegime.WAITING
 
         snapshot_slope = target.ema20 - target.prev_ema20
         adx_strong = target.adx14 >= min_adx
@@ -206,22 +90,6 @@ def evaluate_market_regime(
     # Candle series processing
     candles_5m = target
     config = cfg_or_config if isinstance(cfg_or_config, RegimeConfig) else RegimeConfig()
-
-    # Enforce Choppiness Index Gate (< 50.0) if 15m candles provided
-    if candles_15m:
-        completed_15m = [c for c in candles_15m if c.is_complete]
-        if len(completed_15m) >= 14:
-            ci_14 = calculate_choppiness_index(completed_15m, period=14)
-            if ci_14 >= 50.0:
-                return RegimeEvaluation(
-                    regime=MarketRegime.WAITING,
-                    gate=GateResult(
-                        name="CHOPPINESS_INDEX",
-                        status=GateStatus.FAIL,
-                        reason=f"Choppiness Index ({ci_14:.1f}) >= 50.0 indicates choppy/sideways regime; entering REGIME.WAITING",
-                        data={"ci_14": round(ci_14, 2), "max_allowed": 50.0},
-                    ),
-                )
 
     # Check quote freshness if provided
     if benchmark_quote is not None:
