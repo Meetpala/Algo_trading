@@ -5,9 +5,10 @@ the strategy engine, broker adapters, and journal.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING, ROUND_HALF_UP
 from enum import Enum, auto
-from typing import Optional
+from typing import Literal, Optional
 
 
 class Side(Enum):
@@ -87,14 +88,58 @@ class Quote:
     is_fresh: bool = True  # False if older than stale threshold
 
 
+MCX_LOT_MULTIPLIERS: dict[str, int] = {
+    "SILVERMIC": 1,
+    "GOLDGUINEA": 1,
+    "GOLDPETAL": 1,
+    "GOLDTEN": 1,
+    "SILVERM": 5,
+    "GOLDM": 10,
+    "SILVER": 30,
+    "GOLD": 100,
+}
+
+
+def get_mcx_lot_multiplier(symbol_or_root: str) -> int:
+    """Return the P&L rupee multiplier per ₹1.00 move for MCX precious metals."""
+    clean = symbol_or_root.upper().strip()
+    for root in sorted(MCX_LOT_MULTIPLIERS.keys(), key=len, reverse=True):
+        if clean.startswith(root):
+            return MCX_LOT_MULTIPLIERS[root]
+    return 1
+
+
+def round_to_tick(price: float, tick_size: float, direction: str = "nearest") -> float:
+    """Rounds price to tick_size using Decimal arithmetic.
+
+    Supports:
+    - 'floor': floor to previous tick
+    - 'ceil': ceil to next tick
+    - 'nearest': round to nearest tick (ties rounded away from zero)
+    """
+    if tick_size <= 0:
+        return price
+    d_price = Decimal(str(price))
+    d_tick = Decimal(str(tick_size))
+    num_ticks = d_price / d_tick
+    if direction == "floor":
+        rounded_ticks = num_ticks.to_integral_value(rounding=ROUND_FLOOR)
+    elif direction == "ceil":
+        rounded_ticks = num_ticks.to_integral_value(rounding=ROUND_CEILING)
+    else:
+        rounded_ticks = num_ticks.to_integral_value(rounding=ROUND_HALF_UP)
+    return float(rounded_ticks * d_tick)
+
+
 @dataclass(frozen=True)
 class OpeningRange:
-    """First 15-minute (09:15-09:30 IST) range."""
+    """Opening range definition (MORNING or COMEX session)."""
     symbol: str
     high: float
     low: float
     is_complete: bool = False
     candle_count: int = 0
+    session_type: Literal["MORNING", "COMEX"] = "MORNING"
 
 
 @dataclass
@@ -249,9 +294,13 @@ class StrategyDecision:
 class InstrumentInfo:
     """Exchange instrument metadata."""
     symbol: str
-    exchange: str = "NSE"
-    tick_size: float = 0.05   # NSE equity default
+    exchange: str = "MCX"
+    tick_size: float = 1.0   # Default MCX tick size
     lot_size: int = 1
+    order_lot_size: int = 1  # Exact lot_size from Zerodha kite.instruments("MCX") used in place_order
+    lot_multiplier: int = 1  # Rupee P&L per Rs 1.00 move in quoted price per 1 lot
+    expiry_date: Optional[date] = None
+    days_to_expiry: int = 999
     exchange_token: str = ""
     instrument_token: str = ""
     upper_circuit: float = 0.0

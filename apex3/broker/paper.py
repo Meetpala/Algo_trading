@@ -214,7 +214,7 @@ class PaperBroker(BrokerInterface):
 
     # ── BrokerInterface Implementation ───────────────────────────
 
-    def get_margins(self) -> MarginInfo:
+    def get_margins(self, segment: str = "commodity") -> MarginInfo:
         """Return current simulated margin state."""
         now = datetime.now(IST)
         return MarginInfo(
@@ -225,13 +225,56 @@ class PaperBroker(BrokerInterface):
             timestamp=now,
         )
 
+    def resolve_active_mcx_futures(
+        self,
+        symbol_roots: list[str],
+        min_days_to_expiry: int = 5,
+        as_of: Optional[date] = None,
+    ) -> dict[str, InstrumentInfo]:
+        """Simulate active front-month MCX futures contracts for paper trading."""
+        today = as_of or datetime.now(IST).date()
+        target_expiry = today + timedelta(days=25)
+        results = {}
+        for root in symbol_roots:
+            clean = root.upper().strip()
+            exp_str = target_expiry.strftime("%d%b%y").upper()
+            tsym = f"{clean}{exp_str}FUT"
+            lot_mult = 1
+            if "SILVERM" in clean:
+                lot_mult = 5
+            elif "GOLDM" in clean:
+                lot_mult = 10
+            elif "SILVER" in clean:
+                lot_mult = 30
+            elif "GOLD" in clean and clean not in ("GOLDGUINEA", "GOLDPETAL", "GOLDTEN"):
+                lot_mult = 100
+
+            info = InstrumentInfo(
+                symbol=tsym,
+                exchange="MCX",
+                tick_size=1.0,
+                lot_size=1,
+                order_lot_size=1,
+                lot_multiplier=lot_mult,
+                expiry_date=target_expiry,
+                days_to_expiry=(target_expiry - today).days,
+                instrument_token=f"PAPER-{clean}",
+                mis_available=True,
+            )
+            self._instruments[tsym] = info
+            self._instruments[clean] = info
+            results[clean] = info
+        return results
+
     def estimate_order_margin(self, request: OrderRequest) -> OrderMarginEstimate:
         """Estimate margin for a proposed order using simulated leverage.
 
         Uses a conservative fixed leverage factor. Real leverage varies
         by symbol and broker policy — 4× is a ceiling, never assumed.
         """
-        notional = request.price * request.quantity if request.price > 0 else 0.0
+        inst = self._instruments.get(request.symbol)
+        lot_mult = inst.lot_multiplier if inst else (5 if "SILVERM" in request.symbol else (10 if "GOLDM" in request.symbol else 1))
+        notional = request.price * lot_mult * request.quantity if request.price > 0 else 0.0
         # Simulate MIS leverage: margin = notional / leverage
         leverage = min(_DEFAULT_MIS_LEVERAGE, 4.0)  # Cap at 4×
         required = notional / leverage if leverage > 0 else notional
@@ -495,7 +538,7 @@ class PaperBroker(BrokerInterface):
             if _is_between(c.timestamp, from_dt, to_dt)
         ]
 
-    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
+    def get_instrument_info(self, symbol: str, exchange: str = "MCX") -> InstrumentInfo:
         """Return instrument metadata from internal registry."""
         if symbol in self._instruments:
             return self._instruments[symbol]
@@ -506,7 +549,17 @@ class PaperBroker(BrokerInterface):
             "JIOFIN": 0.01,
             "TATASTEEL": 0.01,
         }
-        tick = default_ticks.get(symbol.upper(), 0.05)
+        tick = 1.0 if exchange == "MCX" else default_ticks.get(symbol.upper(), 0.05)
+        lot_mult = 1
+        if exchange == "MCX":
+            if "SILVERM" in symbol.upper():
+                lot_mult = 5
+            elif "GOLDM" in symbol.upper():
+                lot_mult = 10
+            elif "SILVER" in symbol.upper():
+                lot_mult = 30
+            elif "GOLD" in symbol.upper() and not any(p in symbol.upper() for p in ("GUINEA", "PETAL", "TEN")):
+                lot_mult = 100
 
         # Return a generic default for unknown instruments
         return InstrumentInfo(
@@ -514,6 +567,8 @@ class PaperBroker(BrokerInterface):
             exchange=exchange,
             tick_size=tick,
             lot_size=1,
+            order_lot_size=1,
+            lot_multiplier=lot_mult,
             mis_available=True,
         )
 

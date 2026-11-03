@@ -10,8 +10,9 @@ to Zerodha. Angel One is used solely as a read-only market data stream.
 """
 from __future__ import annotations
 
+import inspect
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from apex3.broker.angel_data_provider import AngelDataProvider
@@ -120,11 +121,20 @@ class HybridBrokerAdapter(BrokerInterface):
                     up_c = round(round(ref_px * 1.10 / t_size) * t_size, 2) if up_c <= 0 else up_c
                     low_c = round(round(ref_px * 0.90 / t_size) * t_size, 2) if low_c <= 0 else low_c
 
+            order_lot = exec_info.order_lot_size if exec_info.order_lot_size > 0 else getattr(data_info, "order_lot_size", 1)
+            lot_mult = exec_info.lot_multiplier if exec_info.lot_multiplier > 0 else getattr(data_info, "lot_multiplier", 1)
+            exp_d = exec_info.expiry_date or getattr(data_info, "expiry_date", None)
+            dte = exec_info.days_to_expiry if exec_info.days_to_expiry < 999 else getattr(data_info, "days_to_expiry", 999)
+
             return InstrumentInfo(
                 symbol=exec_info.symbol,
                 exchange=exec_info.exchange,
                 tick_size=t_size,
                 lot_size=exec_info.lot_size if exec_info.lot_size > 0 else data_info.lot_size,
+                order_lot_size=order_lot,
+                lot_multiplier=lot_mult,
+                expiry_date=exp_d,
+                days_to_expiry=dte,
                 exchange_token=angel_token,
                 instrument_token=exec_info.instrument_token or angel_token,
                 upper_circuit=up_c,
@@ -139,6 +149,10 @@ class HybridBrokerAdapter(BrokerInterface):
             exchange=data_info.exchange,
             tick_size=data_info.tick_size,
             lot_size=data_info.lot_size,
+            order_lot_size=getattr(data_info, "order_lot_size", 1),
+            lot_multiplier=getattr(data_info, "lot_multiplier", 1),
+            expiry_date=getattr(data_info, "expiry_date", None),
+            days_to_expiry=getattr(data_info, "days_to_expiry", 999),
             exchange_token=getattr(data_info, "instrument_token", ""),
             instrument_token=getattr(data_info, "instrument_token", ""),
             upper_circuit=data_info.upper_circuit,
@@ -146,10 +160,33 @@ class HybridBrokerAdapter(BrokerInterface):
             mis_available=False,
         )
 
+    def resolve_active_mcx_futures(
+        self,
+        symbol_roots: list[str],
+        min_days_to_expiry: int = 5,
+        as_of: Optional[date] = None,
+    ) -> dict[str, InstrumentInfo]:
+        """Resolve active front-month MCX futures and synchronize tokens across providers."""
+        exec_resolved: dict[str, InstrumentInfo] = {}
+        if hasattr(self.execution_broker, "resolve_active_mcx_futures"):
+            exec_resolved = self.execution_broker.resolve_active_mcx_futures(
+                symbol_roots, min_days_to_expiry=min_days_to_expiry, as_of=as_of
+            )
+        data_resolved: dict[str, InstrumentInfo] = {}
+        if hasattr(self.data_provider, "resolve_active_mcx_futures"):
+            data_resolved = self.data_provider.resolve_active_mcx_futures(
+                symbol_roots, min_days_to_expiry=min_days_to_expiry, as_of=as_of
+            )
+        return exec_resolved or data_resolved
+
     # ── Order Execution & Portfolio (Delegated to Zerodha Personal) ──
 
-    def get_margins(self) -> MarginInfo:
+    def get_margins(self, segment: str = "commodity") -> MarginInfo:
         """Fetch margin from Zerodha."""
+        if hasattr(self.execution_broker, "get_margins"):
+            sig = inspect.signature(self.execution_broker.get_margins)
+            if "segment" in sig.parameters:
+                return self.execution_broker.get_margins(segment=segment)
         return self.execution_broker.get_margins()
 
     def estimate_order_margin(self, request: OrderRequest) -> OrderMarginEstimate:

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -56,8 +56,113 @@ DEFAULT_ANGEL_TOKENS: dict[str, str] = {
     "LT": "11483",
     "BAJFINANCE": "317",
     "HINDUNILVR": "1394",
-    "ASIANPAINT": "236",
+    # MCX Precious Metals Watchlist Defaults
+    "SILVERMIC": "256265",
+    "GOLDGUINEA": "256266",
+    "SILVERM": "256267",
+    "GOLDM": "256268",
+    "SILVER": "256269",
+    "GOLD": "256270",
 }
+
+
+MCX_LOT_MULTIPLIERS: dict[str, int] = {
+    "SILVERMIC": 1,
+    "GOLDGUINEA": 1,
+    "GOLDPETAL": 1,
+    "GOLDTEN": 1,
+    "SILVERM": 5,
+    "GOLDM": 10,
+    "SILVER": 30,
+    "GOLD": 100,
+}
+
+
+def get_mcx_lot_multiplier(symbol_or_root: str) -> int:
+    """Return the P&L rupee multiplier per ₹1.00 move for MCX precious metals."""
+    clean = symbol_or_root.upper().strip()
+    for root in sorted(MCX_LOT_MULTIPLIERS.keys(), key=len, reverse=True):
+        if clean.startswith(root):
+            return MCX_LOT_MULTIPLIERS[root]
+    return 1
+
+
+def parse_expiry_date(expiry_val: Any) -> Optional[date]:
+    """Parse expiry date from date, datetime, or standard exchange string formats."""
+    if expiry_val is None:
+        return None
+    if isinstance(expiry_val, datetime):
+        return expiry_val.date()
+    if isinstance(expiry_val, date):
+        return expiry_val
+    if isinstance(expiry_val, str):
+        s = expiry_val.strip()
+        for fmt in ("%Y-%m-%d", "%d%b%Y", "%d-%b-%Y", "%d-%m-%Y", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                pass
+    return None
+
+
+def resolve_active_mcx_futures(
+    scrip_list: list[dict[str, Any]],
+    symbol_roots: list[str],
+    min_days_to_expiry: int = 5,
+    as_of: Optional[date] = None,
+) -> dict[str, dict[str, Any]]:
+    """Resolve the active front-month MCX futures contract for each symbol root from Angel One scrip records.
+
+    Filters contracts where exch_seg == 'MCX' and instrumenttype in ('FUTCOM', 'FUT'), where
+    (expiry - as_of).days >= min_days_to_expiry, and selects the nearest active expiry.
+    """
+    today = as_of or datetime.now(IST).date()
+    results: dict[str, dict[str, Any]] = {}
+
+    for root in symbol_roots:
+        clean_root = root.upper().strip()
+        candidates: list[tuple[date, dict[str, Any]]] = []
+        for item in scrip_list:
+            seg = str(item.get("exch_seg", "") or item.get("segment", "") or item.get("exchange", "")).upper()
+            if seg and "MCX" not in seg:
+                continue
+
+            itype = str(item.get("instrumenttype", "") or item.get("instrument_type", "")).upper()
+            if itype and itype not in ("FUTCOM", "FUT"):
+                continue
+
+            name = str(item.get("name", "")).upper().strip()
+            symbol = str(item.get("symbol", "") or item.get("tradingsymbol", "")).upper().strip()
+
+            matched = False
+            if name == clean_root:
+                matched = True
+            elif symbol.startswith(clean_root):
+                longer_matches = [
+                    k for k in MCX_LOT_MULTIPLIERS
+                    if len(k) > len(clean_root) and symbol.startswith(k)
+                ]
+                if not longer_matches:
+                    matched = True
+
+            if matched:
+                exp = parse_expiry_date(item.get("expiry"))
+                if exp is not None:
+                    days_left = (exp - today).days
+                    if days_left >= min_days_to_expiry:
+                        candidates.append((exp, item))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            results[clean_root] = candidates[0][1]
+        else:
+            logger.warning(
+                "No active Angel One front-month MCX contract found for %s (min_days_to_expiry=%d)",
+                clean_root,
+                min_days_to_expiry,
+            )
+
+    return results
 
 
 class AngelDataProvider:
@@ -490,17 +595,71 @@ class AngelDataProvider:
 
         return []
 
-    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
+    def resolve_active_mcx_futures(
+        self,
+        symbol_roots: list[str],
+        min_days_to_expiry: int = 5,
+        as_of: Optional[date] = None,
+        scrip_master: Optional[list[dict[str, Any]]] = None,
+    ) -> dict[str, InstrumentInfo]:
+        """Resolve active front-month MCX futures contracts and populate token cache."""
+        today = as_of or datetime.now(IST).date()
+        scrip_list = scrip_master or []
+        if not scrip_list and self._smart_api and self._auth_token and hasattr(self._smart_api, "searchScrip"):
+            for root in symbol_roots:
+                try:
+                    res = self._smart_api.searchScrip("MCX", root)
+                    if isinstance(res, dict) and res.get("status") and isinstance(res.get("data"), list):
+                        scrip_list.extend(res["data"])
+                except Exception as e:
+                    logger.debug("searchScrip failed for root %s: %s", root, e)
+
+        resolved_raw = resolve_active_mcx_futures(scrip_list, symbol_roots, min_days_to_expiry, today)
+        results: dict[str, InstrumentInfo] = {}
+
+        for root, raw in resolved_raw.items():
+            tradingsymbol = str(raw.get("symbol", "") or raw.get("tradingsymbol", "")).upper()
+            token = str(raw.get("token", "") or raw.get("symboltoken", "") or raw.get("instrument_token", "")).strip()
+            if tradingsymbol and token:
+                self._token_cache[tradingsymbol] = token
+                self._token_cache[root] = token
+
+            exp_date = parse_expiry_date(raw.get("expiry"))
+            dte = (exp_date - today).days if exp_date else 999
+            order_lot = int(raw.get("lotsize", 1) or 1)
+            lot_mult = get_mcx_lot_multiplier(tradingsymbol or root)
+
+            info = InstrumentInfo(
+                symbol=tradingsymbol or root,
+                exchange="MCX",
+                tick_size=1.0,
+                lot_size=order_lot,
+                order_lot_size=order_lot,
+                lot_multiplier=lot_mult,
+                expiry_date=exp_date,
+                days_to_expiry=dte,
+                instrument_token=token,
+                mis_available=True,
+            )
+            results[root] = info
+
+        return results
+
+    def get_instrument_info(self, symbol: str, exchange: str = "MCX") -> InstrumentInfo:
         """Fetch instrument info with verified circuit limits from exchange."""
         clean = symbol.replace("-EQ", "").upper()
         token = self.resolve_token(clean, exchange)
         low_c, up_c = self._circuit_cache.get(clean, (0.0, 0.0))
+        tick = 1.0 if exchange == "MCX" else 0.05
+        lot_mult = get_mcx_lot_multiplier(clean) if exchange == "MCX" else 1
 
         return InstrumentInfo(
             symbol=clean,
             exchange=exchange,
-            tick_size=0.05,
+            tick_size=tick,
             lot_size=1,
+            order_lot_size=1,
+            lot_multiplier=lot_mult,
             instrument_token=token,
             upper_circuit=up_c,
             lower_circuit=low_c,
