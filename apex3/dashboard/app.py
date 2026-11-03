@@ -243,7 +243,24 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
             return redirect("/?auth=success")
         except Exception as e:
-            return f"Authentication Failed: {e}", 500
+            try:
+                kite_inst = getattr(engine.broker, "execution_broker", engine.broker)
+                if hasattr(kite_inst, "is_session_valid") and kite_inst.is_session_valid():
+                    return redirect("/?auth=already_active")
+            except Exception:
+                pass
+            return (
+                f"<html><body style='font-family:sans-serif;padding:30px;background:#121212;color:#eee;'>"
+                f"<h2 style='color:#ff5252;'>Authentication Notice</h2>"
+                f"<p>{e}</p>"
+                f"<p style='color:#aaa;'>Each Zerodha <code>request_token</code> can only be used <strong>once</strong> and expires within 2–3 minutes. "
+                f"If you refreshed the callback page or took a moment on the login screen, the temporary token was already consumed or timed out.</p>"
+                f"<p style='color:#4caf50;'><strong>Current Status:</strong> Check your dashboard to verify if the session is already active.</p>"
+                f"<a href='/login/kite' style='display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:4px;margin-right:12px;'>Log In Again with Kite</a>"
+                f"<a href='/' style='display:inline-block;padding:10px 20px;background:#333;color:#fff;text-decoration:none;border-radius:4px;'>Go to Dashboard</a>"
+                f"</body></html>",
+                500,
+            )
 
     @app.route("/api/set_token", methods=["POST"])
     def api_set_token():
