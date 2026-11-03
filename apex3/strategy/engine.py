@@ -280,23 +280,31 @@ class StrategyEngine:
         return getattr(self, "latest_regime_eval", None)
 
     def get_active_watchlist(self) -> list[str]:
-        """Return manual symbols or the full scanner candidate universe."""
+        """Return manual symbols or the full scanner candidate universe dynamically."""
+        if getattr(self, "_manual_watchlist_override", None):
+            return self._manual_watchlist_override
         if hasattr(self.config, "raw_dict") and isinstance(self.config.raw_dict, dict) and "radar" in self.config.raw_dict:
             radar_symbols = build_active_radar(self.config.raw_dict)
             if radar_symbols:
                 return radar_symbols
         if not self.config.watchlist.scanner_enabled:
             # Manual mode: user selected symbols
-            return self.config.watchlist.symbols[: self.config.limits.max_symbols]
+            return self.config.watchlist.symbols
         else:
             # Scanner mode evaluates the full universe, then ranks valid signals.
             return list(self.config.watchlist.scanner_universe)
 
     def set_manual_symbols(self, symbols: list[str]) -> list[str]:
-        """Update the manual watchlist (max 3 symbols)."""
-        valid_symbols = [s.strip().upper() for s in symbols if s.strip()][: self.config.limits.max_symbols]
-        # In a real app we mutate config or create new one; here we update watchlist symbols
+        """Update the active watchlist dynamically without artificial caps."""
+        valid_symbols = [s.strip().upper() for s in symbols if s.strip()]
+        if not valid_symbols or "ALL" in valid_symbols or "DEFAULT" in valid_symbols or "RESET" in valid_symbols:
+            self._manual_watchlist_override = None
+            object.__setattr__(self.config.watchlist, "scanner_enabled", True)
+            return self.get_active_watchlist()
+
+        self._manual_watchlist_override = valid_symbols
         object.__setattr__(self.config.watchlist, "symbols", valid_symbols)
+        object.__setattr__(self.config.watchlist, "scanner_enabled", False)
         return valid_symbols
 
     def reconcile_and_backfill_late_start(self, current_time: Optional[datetime] = None) -> dict:

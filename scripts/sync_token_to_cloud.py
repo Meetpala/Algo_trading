@@ -10,7 +10,8 @@ import urllib.request
 from dotenv import load_dotenv, set_key
 from kiteconnect import KiteConnect
 
-CLOUD_BASE_URL = "http://34.14.147.10:5000"
+load_dotenv(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env")), override=True)
+CLOUD_BASE_URL = os.environ.get("CLOUD_BASE_URL") or os.environ.get("APEX3_CLOUD_URL") or "http://34.14.147.10:5000"
 
 
 def extract_request_token(raw_input: str) -> str:
@@ -62,14 +63,24 @@ def verify_cloud_status() -> dict:
 
 
 def main() -> None:
+    global CLOUD_BASE_URL
+    import argparse
+    parser = argparse.ArgumentParser(description="Sync Zerodha access token to Cloud VM")
+    parser.add_argument("url_or_token", nargs="?", default=None, help="Redirect URL or request token")
+    parser.add_argument("--cloud-url", type=str, default=None, help="Cloud VM base URL")
+    args = parser.parse_args()
+
     env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
     load_dotenv(env_path, override=True)
+
+    if args.cloud_url:
+        CLOUD_BASE_URL = args.cloud_url.rstrip("/")
 
     api_key = os.environ.get("KITE_API_KEY", "")
     api_secret = os.environ.get("KITE_API_SECRET", "")
 
-    if len(sys.argv) > 1:
-        req_token = extract_request_token(sys.argv[1])
+    if args.url_or_token:
+        req_token = extract_request_token(args.url_or_token)
         print(f"[1/3] Exchanging request_token ({req_token[:8]}...) with Zerodha Kite Connect...")
         kite = KiteConnect(api_key=api_key)
         data = kite.generate_session(req_token, api_secret=api_secret)

@@ -517,24 +517,63 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             kite = KiteConnect(api_key=api_key)
             kite.set_access_token(access_token)
 
+        payload = request.get_json(silent=True) or {}
+        symbol = str(payload.get("symbol") or "IDEA").strip().upper()
+        quantity = int(payload.get("quantity") or 1)
+        product = str(payload.get("product") or "CNC").strip().upper()
+        tag = str(payload.get("tag") or "VM_TEST").strip()
+
+        # Dynamic Market Hours vs AMO detection
+        from datetime import time as dtime
+        now_ist = engine.scheduler.now_ist() if hasattr(engine, "scheduler") else datetime.now(IST)
+        is_weekday = now_ist.weekday() < 5
+        is_market_open = is_weekday and (dtime(9, 15) <= now_ist.time() <= dtime(15, 30))
+        variety = str(payload.get("variety") or ("regular" if is_market_open else "amo")).strip().lower()
+
+        # Dynamic Price and Circuit Band Resolution
+        custom_price = payload.get("price")
+        if custom_price is not None and float(custom_price) > 0:
+            test_price = float(custom_price)
+        else:
+            inst = None
+            quote = None
+            try:
+                inst = engine.broker.get_instrument_info(symbol)
+                quote = engine.broker.get_quote(symbol)
+            except Exception:
+                pass
+
+            tick = float(getattr(inst, "tick_size", 0.05) or 0.05)
+            low_c = float(getattr(inst, "lower_circuit", 0.0) or 0.0)
+            up_c = float(getattr(inst, "upper_circuit", 0.0) or 0.0)
+            ltp = float(getattr(quote, "last_price", 0.0) or 0.0)
+
+            from apex3.strategy.trail import round_to_tick
+            if low_c > 0 and up_c > 0:
+                test_price = round_to_tick(low_c + (2 * tick), tick_size=tick)
+            elif ltp > 0:
+                test_price = round_to_tick(ltp * 0.95, tick_size=tick)
+            else:
+                test_price = 11.10 if symbol == "IDEA" else 100.0
+
         try:
             import time
             order_id = kite.place_order(
-                variety="amo",
+                variety=variety,
                 exchange="NSE",
-                tradingsymbol="IDEA",
+                tradingsymbol=symbol,
                 transaction_type="BUY",
-                quantity=1,
-                product="CNC",
+                quantity=quantity,
+                product=product,
                 order_type="LIMIT",
-                price=11.10,
-                tag="VM_TEST",
+                price=test_price,
+                tag=tag,
             )
 
             time.sleep(1)
             cancel_result = "UNKNOWN"
             try:
-                kite.cancel_order(variety="amo", order_id=order_id)
+                kite.cancel_order(variety=variety, order_id=order_id)
                 cancel_result = "CANCELLED"
             except Exception as cancel_err:
                 cancel_result = f"CANCEL_ERROR: {cancel_err}"
@@ -552,8 +591,9 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 "status": "success",
                 "message": "VM real order test completed successfully",
                 "order_id": str(order_id),
-                "placed_symbol": "IDEA",
-                "placed_price": 11.10,
+                "placed_symbol": symbol,
+                "placed_price": test_price,
+                "placed_variety": variety,
                 "cancel_attempt": cancel_result,
                 "orderbook_status": order_status,
                 "origin": "Google Cloud VM",

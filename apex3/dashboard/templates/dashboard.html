@@ -428,9 +428,10 @@
         }
 
         async function testVmOrder() {
-            if (!confirm("Run real 1-share AMO order test directly from this VM?\n(Places 1-share IDEA LIMIT @ ₹11.10 and immediately cancels it)")) {
-                return;
-            }
+            const sym = prompt("Enter stock symbol to test order placement on Zerodha (or leave empty for default 'IDEA'):", "IDEA");
+            if (sym === null) return;
+            const targetSym = (sym.trim().toUpperCase() || "IDEA");
+
             const btn = document.getElementById('btn-test-order');
             if (btn) btn.innerText = "⏳ Placing on Zerodha...";
             try {
@@ -439,11 +440,12 @@
                     headers: {
                         'Content-Type': 'application/json',
                         'X-Operator-Token': OPERATOR_TOKEN
-                    }
+                    },
+                    body: JSON.stringify({ symbol: targetSym })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert(`✅ VM ORDER TEST SUCCESS!\n\nOrder ID: ${data.order_id}\nSymbol: ${data.placed_symbol} @ ₹${data.placed_price}\nCancellation: ${data.cancel_attempt}\nOrder Book Status: ${data.orderbook_status}\nExecuted By: ${data.origin}`);
+                    alert(`✅ VM ORDER TEST SUCCESS!\n\nOrder ID: ${data.order_id}\nSymbol: ${data.placed_symbol} @ ₹${data.placed_price}\nVariety: ${data.placed_variety}\nCancellation: ${data.cancel_attempt}\nOrder Book Status: ${data.orderbook_status}\nExecuted By: ${data.origin}`);
                 } else {
                     alert(`❌ VM Order Test Failed: ${data.message}`);
                 }

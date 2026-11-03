@@ -110,10 +110,20 @@ class HybridBrokerAdapter(BrokerInterface):
         if exec_info is not None:
             up_c = data_info.upper_circuit if data_info.upper_circuit > 0 else exec_info.upper_circuit
             low_c = data_info.lower_circuit if data_info.lower_circuit > 0 else exec_info.lower_circuit
+            t_size = exec_info.tick_size if exec_info.tick_size > 0 else data_info.tick_size
+            if (up_c <= 0 or low_c <= 0) and t_size > 0:
+                cached_q = getattr(self.data_provider, "_quote_cache", {}).get(symbol)
+                ref_px = 0.0
+                if cached_q:
+                    ref_px = cached_q.close if cached_q.close > 0 else cached_q.last_price
+                if ref_px > 0:
+                    up_c = round(round(ref_px * 1.10 / t_size) * t_size, 2) if up_c <= 0 else up_c
+                    low_c = round(round(ref_px * 0.90 / t_size) * t_size, 2) if low_c <= 0 else low_c
+
             return InstrumentInfo(
                 symbol=exec_info.symbol,
                 exchange=exec_info.exchange,
-                tick_size=exec_info.tick_size if exec_info.tick_size > 0 else data_info.tick_size,
+                tick_size=t_size,
                 lot_size=exec_info.lot_size if exec_info.lot_size > 0 else data_info.lot_size,
                 exchange_token=angel_token,
                 instrument_token=exec_info.instrument_token or angel_token,
