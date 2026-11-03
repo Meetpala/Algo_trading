@@ -134,6 +134,7 @@ class StrategyEngine:
         # Opening ranges cache: symbol -> OpeningRange
         self.opening_ranges: dict[str, OpeningRange] = {}
         self.latest_regime_eval: Optional[Any] = None
+        self.latest_session_pnl: Optional[Any] = None
         self._late_start_catchup_done: set[str] = set()
 
     def _ensure_ist(self, dt: datetime) -> datetime:
@@ -1555,6 +1556,7 @@ class StrategyEngine:
                 session_date=session_date,
                 costs=self.config.costs,
             )
+            self.latest_session_pnl = session_pnl
             margin_info = self.broker.get_margins()
             daily_risk_status = evaluate_portfolio_risk(
                 open_positions=risk_positions,

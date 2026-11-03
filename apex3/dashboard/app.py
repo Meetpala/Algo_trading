@@ -376,6 +376,39 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         except Exception:
             warnings = []
 
+        # Broker session authorization status
+        session_valid = False
+        kite_valid = False
+        angel_valid = False
+        try:
+            session_valid = bool(engine.broker.is_session_valid())
+        except Exception:
+            session_valid = False
+
+        try:
+            exec_b = getattr(engine.broker, "execution_broker", engine.broker)
+            kite_valid = bool(exec_b.is_session_valid())
+        except Exception:
+            kite_valid = False
+
+        try:
+            dp = getattr(engine.broker, "data_provider", None)
+            if dp and hasattr(dp, "is_session_valid"):
+                angel_valid = bool(dp.is_session_valid())
+            else:
+                angel_valid = kite_valid
+        except Exception:
+            angel_valid = False
+
+        pnl_obj = getattr(engine, "latest_session_pnl", None)
+        pnl_data = {
+            "realized": round(float(getattr(pnl_obj, "realized_pnl", 0.0) or 0.0), 2) if pnl_obj else 0.0,
+            "unrealized": round(float(getattr(pnl_obj, "unrealized_pnl", 0.0) or 0.0), 2) if pnl_obj else 0.0,
+            "net": round(float(getattr(pnl_obj, "net_pnl", 0.0) or 0.0), 2) if pnl_obj else 0.0,
+            "charges": round(float(getattr(pnl_obj, "estimated_charges", 0.0) or 0.0), 2) if pnl_obj else 0.0,
+            "trade_count": int(getattr(pnl_obj, "trade_count", 0) or 0) if pnl_obj else 0,
+        }
+
         # Read latest decisions from engine background thread (strictly read-only, side-effect free)
         decisions = getattr(engine, "last_decisions", [])
         decisions_summary = [
@@ -396,6 +429,10 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 "session": session_info,
                 "is_paused": engine.is_paused,
                 "pause_reason": engine.pause_reason,
+                "broker_session_valid": session_valid,
+                "kite_authorized": kite_valid,
+                "angel_connected": angel_valid,
+                "pnl": pnl_data,
                 "watchlist": engine.get_active_watchlist(),
                 "scanner_enabled": config.watchlist.scanner_enabled,
                 "regime": {
