@@ -280,13 +280,16 @@ class HybridBrokerAdapter(BrokerInterface):
         if hasattr(self.data_provider, "is_session_valid"):
             data_valid = bool(self.data_provider.is_session_valid())
             if not data_valid and hasattr(self.data_provider, "authenticate"):
-                logger.warning("Angel One data session invalid; attempting automatic self-heal authentication...")
-                try:
-                    self.data_provider.authenticate()
-                    data_valid = bool(self.data_provider.is_session_valid())
-                except Exception as auth_err:
-                    logger.error("Angel One auto self-heal authentication failed: %s", auth_err)
-                    data_valid = False
+                now_m = time.monotonic()
+                if now_m - getattr(self, "_last_angel_reauth_attempt", 0.0) > 60.0:
+                    self._last_angel_reauth_attempt = now_m
+                    logger.warning("Angel One data session invalid; attempting automatic self-heal authentication (cooldown 60s)...")
+                    try:
+                        self.data_provider.authenticate()
+                        data_valid = bool(self.data_provider.is_session_valid())
+                    except Exception as auth_err:
+                        logger.error("Angel One auto self-heal authentication failed: %s", auth_err)
+                        data_valid = False
 
         if not data_valid:
             logger.critical("Hybrid session check FAILED: Angel One market data session is invalid or unauthenticated.")

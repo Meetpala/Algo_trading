@@ -505,25 +505,36 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         session_valid = False
         kite_valid = False
         angel_valid = False
-        try:
-            session_valid = bool(engine.broker.is_session_valid())
-        except Exception:
-            session_valid = False
 
-        try:
-            exec_b = getattr(engine.broker, "execution_broker", engine.broker)
-            kite_valid = bool(exec_b.is_session_valid())
-        except Exception:
-            kite_valid = False
+        providers_status = None
+        if hasattr(engine.broker, "get_providers_status"):
+            try:
+                providers_status = engine.broker.get_providers_status(max_age_sec=15.0)
+            except Exception:
+                providers_status = None
 
-        try:
-            dp = getattr(engine.broker, "data_provider", None)
-            if dp and hasattr(dp, "is_session_valid"):
-                angel_valid = bool(dp.is_session_valid())
-            else:
-                angel_valid = kite_valid
-        except Exception:
-            angel_valid = False
+        if isinstance(providers_status, dict):
+            kite_valid = bool(providers_status.get("zerodha", {}).get("session_valid", False))
+            angel_valid = bool(providers_status.get("angel_one", {}).get("session_valid", False))
+            session_valid = kite_valid and angel_valid
+        else:
+            try:
+                session_valid = bool(engine.broker.is_session_valid())
+            except Exception:
+                session_valid = False
+            try:
+                exec_b = getattr(engine.broker, "execution_broker", engine.broker)
+                kite_valid = bool(exec_b.is_session_valid())
+            except Exception:
+                kite_valid = False
+            try:
+                dp = getattr(engine.broker, "data_provider", None)
+                if dp and hasattr(dp, "is_session_valid"):
+                    angel_valid = bool(dp.is_session_valid())
+                else:
+                    angel_valid = kite_valid
+            except Exception:
+                angel_valid = False
 
         pnl_obj = getattr(engine, "latest_session_pnl", None)
         pnl_data = {

@@ -104,6 +104,10 @@ class AngelDataProvider:
         self._candle_cache_ttl: float = 120.0
         self._error_backoff: dict[tuple[str, str], float] = {}
         self._last_reauth_mono: float = 0.0
+        self._last_session_check_mono: float = 0.0
+        self._last_session_valid_cache: bool = False
+        self._last_diag_mono: float = 0.0
+        self._last_diag_cache: Optional[dict] = None
 
         if api_key and client_code and pin and totp_secret:
             self.authenticate()
@@ -149,6 +153,8 @@ class AngelDataProvider:
                     self._auth_token = data.get("jwtToken")
                     self._refresh_token = data.get("refreshToken")
                     self._feed_token = self._smart_api.getfeedToken()
+                    self._last_session_check_mono = time.monotonic()
+                    self._last_session_valid_cache = True
                     logger.info("Angel One SmartAPI authentication SUCCESSFUL! Free market data feed active.")
                     return True
                 except Exception as inner_e:
@@ -166,7 +172,9 @@ class AngelDataProvider:
             return False
 
     def get_session_diagnostics(self) -> dict:
-        """Read-only session diagnostics for Angel One. Never triggers re-authentication."""
+        """Read-only session diagnostics for Angel One. Never triggers re-authentication.
+        Uses 60s cache to avoid SmartAPI rate limits.
+        """
         if not self._smart_api or not self._auth_token:
             return {
                 "session_valid": False,
@@ -174,55 +182,104 @@ class AngelDataProvider:
                 "client_code": self.client_code,
                 "error": "Not authenticated",
             }
+        now_m = time.monotonic()
+        if self._last_diag_cache is not None and (now_m - self._last_diag_mono) < 60.0:
+            import copy
+            return copy.deepcopy(self._last_diag_cache)
+
         try:
             if hasattr(self._smart_api, "getProfile"):
                 prof = self._smart_api.getProfile(self._refresh_token)
                 if isinstance(prof, dict) and prof.get("status") is False:
-                    return {
+                    res = {
                         "session_valid": False,
                         "status": "SESSION_EXPIRED",
                         "client_code": self.client_code,
                         "error": prof.get("message", "Session expired"),
                     }
-            return {
+                    self._last_diag_mono = now_m
+                    self._last_diag_cache = res
+                    return res
+            res = {
                 "session_valid": True,
                 "status": "CONNECTED",
                 "client_code": self.client_code,
                 "error": None,
             }
+            self._last_diag_mono = now_m
+            self._last_diag_cache = res
+            return res
         except Exception as e:
             err_str = str(e)
+            if "exceeding access rate" in err_str.lower():
+                res = {
+                    "session_valid": bool(self._auth_token),
+                    "status": "CONNECTED" if self._auth_token else "RATE_LIMITED",
+                    "client_code": self.client_code,
+                    "error": None if self._auth_token else "Rate limited on profile endpoint",
+                }
+                self._last_diag_mono = now_m
+                self._last_diag_cache = res
+                return res
+
             status = "NETWORK_ERROR" if any(k in err_str.lower() for k in ("connection", "timeout", "reset", "network")) else "ERROR"
-            return {
+            res = {
                 "session_valid": False,
                 "status": status,
                 "client_code": self.client_code,
                 "error": err_str[:160],
             }
+            self._last_diag_mono = now_m
+            self._last_diag_cache = res
+            return res
 
     def is_session_valid(self) -> bool:
-        """Verify that Angel One SmartAPI session is active, auto-refreshing via TOTP after daily reset."""
+        """Verify that Angel One SmartAPI session is active, auto-refreshing via TOTP after daily reset.
+        Uses 60s cache to avoid hammering SmartAPI rate limits.
+        """
         if not self._smart_api or not self._auth_token:
             if self.api_key and self.client_code and self.pin and self.totp_secret:
                 now_m = time.monotonic()
                 if now_m - self._last_reauth_mono > 60.0:
                     self._last_reauth_mono = now_m
-                    return self.authenticate(force=True)
+                    ok = self.authenticate(force=True)
+                    self._last_session_check_mono = now_m
+                    self._last_session_valid_cache = ok
+                    return ok
             return False
+
+        now_m = time.monotonic()
+        if (now_m - self._last_session_check_mono) < 60.0:
+            return self._last_session_valid_cache
+
         try:
             if hasattr(self._smart_api, "getProfile"):
                 prof = self._smart_api.getProfile(self._refresh_token)
-                if prof and prof.get("status") is False:
+                if isinstance(prof, dict) and prof.get("status") is False:
                     if self.api_key and self.client_code and self.pin and self.totp_secret:
-                        now_m = time.monotonic()
                         if now_m - self._last_reauth_mono > 60.0:
                             logger.info("Angel One daily token expired; auto-refreshing session via TOTP...")
                             self._last_reauth_mono = now_m
-                            return self.authenticate(force=True)
+                            ok = self.authenticate(force=True)
+                            self._last_session_check_mono = now_m
+                            self._last_session_valid_cache = ok
+                            return ok
+                    self._last_session_check_mono = now_m
+                    self._last_session_valid_cache = False
                     return False
+            self._last_session_check_mono = now_m
+            self._last_session_valid_cache = True
             return True
         except Exception as e:
+            err_str = str(e)
+            if "exceeding access rate" in err_str.lower():
+                logger.warning("Angel One rate limit encountered on profile check; retaining valid session token state and backing off for 60s.")
+                self._last_session_check_mono = now_m
+                self._last_session_valid_cache = bool(self._auth_token)
+                return bool(self._auth_token)
             logger.warning("Angel One session validity check failed: %s", e)
+            self._last_session_check_mono = now_m
+            self._last_session_valid_cache = False
             return False
 
     def resolve_token(self, symbol: str, exchange: str = "NSE") -> str:
