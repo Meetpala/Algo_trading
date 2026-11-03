@@ -126,7 +126,7 @@ def main():
     print("  Side       : BUY")
     print("  Quantity   : 1 share")
     print("  Product    : CNC (Delivery / Zero Leverage)")
-    print("  Order Type : LIMIT @ Rs. 5.00 (Safe, far below market ~Rs. 7.50)")
+    print("  Order Type : LIMIT @ Rs. 11.10 (Within circuit band > 11.04)")
     print("  Variety    : AMO (After Market Order)")
 
     try:
@@ -138,7 +138,7 @@ def main():
             quantity=1,
             product="CNC",
             order_type="LIMIT",
-            price=5.00,
+            price=11.10,
             tag="APEX3_TEST",
         )
         print(f"\n>>> [SUCCESS] REAL ZERODHA ORDER PLACED! <<<")
@@ -173,3 +173,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
