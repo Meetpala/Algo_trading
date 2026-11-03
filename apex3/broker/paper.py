@@ -538,10 +538,8 @@ class PaperBroker(BrokerInterface):
             if _is_between(c.timestamp, from_dt, to_dt)
         ]
 
-    def get_instrument_info(self, symbol: str, exchange: Optional[str] = None) -> InstrumentInfo:
+    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
         """Return instrument metadata from internal registry."""
-        if exchange is None:
-            exchange = "MCX" if symbol.upper().startswith(("SILVER", "GOLD")) else "NSE"
         if symbol in self._instruments:
             return self._instruments[symbol]
 

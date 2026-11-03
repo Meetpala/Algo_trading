@@ -27,7 +27,7 @@ Exact mirror conditions for Long and Short:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Optional
 
 from apex3.config import SignalConfig
 from apex3.indicators.atr import compute_atr
@@ -41,7 +41,6 @@ from apex3.models import (
     OpeningRange,
     Quote,
     Side,
-    round_to_tick,
 )
 from apex3.strategy.regime import MarketRegime
 
@@ -76,106 +75,51 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 
 
-def is_us_dst(dt: Union[date, datetime]) -> bool:
-    """Return True if the given date falls within US Daylight Saving Time (EDT).
-
-    US DST begins on the 2nd Sunday of March and ends on the 1st Sunday of November.
-    """
-    d = dt.date() if isinstance(dt, datetime) else dt
-    year = d.year
-
-    # 2nd Sunday of March
-    first_mar = date(year, 3, 1)
-    first_sun_mar = 1 + (6 - first_mar.weekday()) % 7
-    second_sun_mar = first_sun_mar + 7
-    dst_start = date(year, 3, second_sun_mar)
-
-    # 1st Sunday of November
-    first_nov = date(year, 11, 1)
-    first_sun_nov = 1 + (6 - first_nov.weekday()) % 7
-    dst_end = date(year, 11, first_sun_nov)
-
-    return dst_start <= d < dst_end
-
-
 def build_opening_range(
     symbol: str,
     candles_0915_0930: list[Candle],
     session_date: Optional[date] = None,
-    session_type: Literal["MORNING", "COMEX"] = "MORNING",
 ) -> OpeningRange:
-    """Build opening range from completed candles for MORNING or COMEX session.
+    """Build the 09:15 - 09:30 IST opening range from completed candles.
 
-    - MORNING: 09:00 - 09:15 IST (or 09:15 - 09:30 for legacy equity)
-    - COMEX: 17:00 - 17:30 IST (EDT) or 18:00 - 18:30 IST (EST)
+    Args:
+        symbol: Instrument symbol
+        candles_0915_0930: Candles strictly within 09:15 to 09:30 IST.
+        session_date: Target session date (default: date of last candle).
+
+    Returns:
+        OpeningRange with high, low, candle_count, and is_complete.
     """
     completed = [c for c in candles_0915_0930 if c.is_complete]
     if not completed:
-        return OpeningRange(
-            symbol=symbol,
-            high=0.0,
-            low=0.0,
-            is_complete=False,
-            candle_count=0,
-            session_type=session_type,
-        )
+        return OpeningRange(symbol=symbol, high=0.0, low=0.0, is_complete=False, candle_count=0)
 
-    target_d = session_date or (
-        completed[-1].timestamp if completed[-1].timestamp.tzinfo else completed[-1].timestamp.replace(tzinfo=IST)
-    ).astimezone(IST).date()
-
-    if session_type == "COMEX":
-        if is_us_dst(target_d):
-            start_t = time(17, 0)
-            end_t = time(17, 30)
-        else:
-            start_t = time(18, 0)
-            end_t = time(18, 30)
-        expected_bars = 6
-    else:  # MORNING
-        has_0900 = any(
-            (c.timestamp if c.timestamp.tzinfo else c.timestamp.replace(tzinfo=IST)).astimezone(IST).time() < time(9, 15)
-            for c in completed
-        )
-        if has_0900:
-            start_t = time(9, 0)
-            end_t = time(9, 15)
-        else:
-            start_t = time(9, 15)
-            end_t = time(9, 30)
-        expected_bars = 3
-
+    # If candles span beyond 09:15-09:30 or multiple days, isolate the true opening range window
+    target_d = session_date or (completed[-1].timestamp if completed[-1].timestamp.tzinfo else completed[-1].timestamp.replace(tzinfo=IST)).astimezone(IST).date()
     filtered = []
     for c in completed:
         c_dt = (c.timestamp if c.timestamp.tzinfo else c.timestamp.replace(tzinfo=IST)).astimezone(IST)
-        if c_dt.date() == target_d and start_t <= c_dt.time() < end_t:
+        if c_dt.date() == target_d and time(9, 15) <= c_dt.time() < time(9, 30):
             filtered.append(c)
 
-    if not filtered:
-        return OpeningRange(
-            symbol=symbol,
-            high=0.0,
-            low=0.0,
-            is_complete=False,
-            candle_count=0,
-            session_type=session_type,
-        )
+    if filtered:
+        completed = filtered
+    elif session_date is not None:
+        return OpeningRange(symbol=symbol, high=0.0, low=0.0, is_complete=False, candle_count=0)
 
-    high = max(c.high for c in filtered)
-    low = min(c.low for c in filtered)
-    is_complete = len(filtered) >= expected_bars
+    high = max(c.high for c in completed)
+    low = min(c.low for c in completed)
+
+    # 15 minutes of 5-min bars = 3 bars; or 1-min bars = 15 bars
+    is_complete = len(completed) >= 3
 
     return OpeningRange(
         symbol=symbol,
         high=high,
         low=low,
         is_complete=is_complete,
-        candle_count=len(filtered),
-        session_type=session_type,
+        candle_count=len(completed),
     )
-
-
-build_mcx_opening_range = build_opening_range
 
 
 def compute_relative_strength(
@@ -873,6 +817,16 @@ def _ensure_ist_candle_ts(dt: datetime) -> datetime:
 
 
 
+def _normalize_hhmm(s: str) -> str:
+    """Normalize HH:MM, converting 12h afternoon times like '1:30' into 24h '13:30'."""
+    parts = s.strip().split(":")
+    h = int(parts[0])
+    m = int(parts[1]) if len(parts) > 1 else 0
+    if 1 <= h <= 5:
+        h += 12
+    return f"{h:02d}:{m:02d}"
+
+
 def validate_late_start_signal(
     symbol: str,
     side: Side,
@@ -892,7 +846,7 @@ def validate_late_start_signal(
     """Validate whether a setup that triggered at or before `now_ist` is still valid to enter.
 
     Rules enforced:
-    1. Current time `now_ist` must be inside the allowed `[entry_start_hhmm, entry_cutoff_hhmm]` window.
+    1. Current time `now_ist` must be inside the allowed `[entry_start_hhmm, entry_cutoff_hhmm)` window.
     2. Live quote must be fresh and > 0.
     3. Stop-loss must NOT have been hit on any subsequent bar (`ts > trigger_bar_timestamp`) or live quote.
     4. Target must NOT have already been hit on any subsequent bar or live quote.
@@ -903,7 +857,10 @@ def validate_late_start_signal(
     trig_norm = _ensure_ist_candle_ts(trigger_bar_timestamp)
     now_hhmm = now_norm.strftime("%H:%M")
 
-    if not (entry_start_hhmm <= now_hhmm <= entry_cutoff_hhmm):
+    start_norm = _normalize_hhmm(entry_start_hhmm)
+    cutoff_norm = _normalize_hhmm(entry_cutoff_hhmm)
+
+    if not (start_norm <= now_hhmm < cutoff_norm):
         return LateStartValidityResult(
             is_valid=False,
             reason_code="OUTSIDE_ENTRY_WINDOW",
@@ -1003,7 +960,7 @@ def evaluate_candidate_signal(
     start_t = sched.get("entry_start_time", sched.get("entry_start", "09:35"))
     cutoff_t = sched.get("entry_cutoff_time", sched.get("entry_cutoff", "12:30"))
     # Gate 0: Session Window [09:35, 12:30] IST
-    if not (start_t <= bar.timestamp_hhmm <= cutoff_t):
+    if not (start_t <= bar.timestamp_hhmm < cutoff_t):
         return None
 
     # Active Position Capacity Check

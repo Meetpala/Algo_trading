@@ -210,10 +210,14 @@ class ScheduleConfig:
     special_sessions: dict[str, str] = field(default_factory=dict)
 
     def get_time(self, field_name: str) -> time:
-        """Parse an HH:MM time string from the config."""
+        """Parse an HH:MM time string from the config, auto-adjusting 12h afternoon strings (e.g. 1:30 -> 13:30)."""
         val = getattr(self, field_name)
         parts = val.split(":")
-        return time(int(parts[0]), int(parts[1]))
+        h = int(parts[0])
+        m = int(parts[1]) if len(parts) > 1 else 0
+        if 1 <= h <= 5:
+            h += 12
+        return time(h, m)
 
     def is_holiday(self, check_date: date) -> bool:
         """Check if a date is in the configured holiday list."""
@@ -290,16 +294,16 @@ class SecretsConfig:
 class AppConfig:
     """Complete application configuration."""
     mode: str = "paper"
-    paper_starting_capital: float = 30_000.0
-    exchange: str = "MCX"
-    margin_segment: str = "commodity"
+    paper_starting_capital: float = 15_000.0
+    exchange: str = "NSE"
+    margin_segment: str = "equity"
     fetch_live_zerodha_margin: bool = True
-    base_capital_inr: float = 30_000.0
+    base_capital_inr: float = 15_000.0
     safety_reserve_buffer_pct: float = 0.05
     max_concurrent_positions: int = 2
     max_new_entries_per_bar: int = 1
-    per_trade_risk_pct: float = 0.0125
-    daily_max_loss_pct: float = 0.0250
+    per_trade_risk_pct: float = 0.0080
+    daily_max_loss_pct: float = 0.0160
     bound_loss_with_charges: bool = True
     max_fee_to_profit_ratio: float = 0.18
     universe: UniverseConfig = field(default_factory=UniverseConfig)
@@ -420,16 +424,16 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     journal_raw = raw.get("journal", {})
     dashboard_raw = raw.get("dashboard", {})
 
-    # MCX Production Fields
-    exchange = str(raw.get("exchange", "MCX"))
-    margin_segment = str(raw.get("margin_segment", "commodity"))
+    # NSE Equity Production Fields
+    exchange = str(raw.get("exchange", "NSE"))
+    margin_segment = str(raw.get("margin_segment", "equity"))
     fetch_live_margin = bool(raw.get("fetch_live_zerodha_margin", True))
-    base_cap = float(raw.get("base_capital_inr", acc_raw.get("starting_capital", raw.get("paper_starting_capital", 30000.0))))
+    base_cap = float(raw.get("base_capital_inr", acc_raw.get("starting_capital", raw.get("paper_starting_capital", 15000.0))))
     safety_buffer = float(raw.get("safety_reserve_buffer_pct", acc_raw.get("safety_reserve_buffer_pct", limits_raw.get("safety_reserve_pct", 0.05))))
     max_positions = int(raw.get("max_concurrent_positions", risk_raw.get("max_concurrent_positions", 2)))
     max_entries = int(raw.get("max_new_entries_per_bar", risk_raw.get("max_new_entries_per_bar", 1)))
-    per_trade_risk = float(raw.get("per_trade_risk_pct", risk_raw.get("risk_per_trade_pct", 0.0125)))
-    daily_max_loss = float(raw.get("daily_max_loss_pct", risk_raw.get("daily_loss_limit_pct", 0.0250)))
+    per_trade_risk = float(raw.get("per_trade_risk_pct", risk_raw.get("risk_per_trade_pct", 0.0080)))
+    daily_max_loss = float(raw.get("daily_max_loss_pct", risk_raw.get("daily_loss_limit_pct", 0.0160)))
     bound_loss = bool(raw.get("bound_loss_with_charges", risk_raw.get("bound_loss_with_charges", True)))
     max_fee_ratio = float(raw.get("max_fee_to_profit_ratio", 0.18))
 
@@ -490,16 +494,16 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
 
     ratchet_raw = raw.get("ratchet", {})
     ratchet_config = RatchetConfig(
-        target_r=float(ratchet_raw.get("target_r", 2.50)),
-        stage1_trigger_r=float(ratchet_raw.get("stage1_trigger_r", 1.00)),
-        stage1_lock_r=float(ratchet_raw.get("stage1_lock_r", 0.15)),
+        target_r=float(stops_raw.get("target_r_multiple", stops_raw.get("target_r", ratchet_raw.get("target_r", 2.0)))),
+        stage1_trigger_r=float(stops_raw.get("fee_lock_trigger_r", ratchet_raw.get("stage1_trigger_r", 1.60))),
+        stage1_lock_r=float(stops_raw.get("fee_lock_profit_r", ratchet_raw.get("stage1_lock_r", 0.60))),
         stage2_trigger_r=float(ratchet_raw.get("stage2_trigger_r", 1.50)),
         stage2_lock_r=float(ratchet_raw.get("stage2_lock_r", 0.65)),
         stage3_trigger_r=float(ratchet_raw.get("stage3_trigger_r", 2.00)),
         stage3_lock_r=float(ratchet_raw.get("stage3_lock_r", 1.25)),
         stage4_step_r=float(ratchet_raw.get("stage4_step_r", 0.50)),
         stage4_trail_offset_r=float(ratchet_raw.get("stage4_trail_offset_r", 0.65)),
-        max_stop_modifications=int(ratchet_raw.get("max_stop_modifications", 20)),
+        max_stop_modifications=int(stops_raw.get("max_modifications_per_order", ratchet_raw.get("max_stop_modifications", 25))),
     )
 
     # Build merged watchlist from radar tiers or universe core watchlist
@@ -620,7 +624,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             initial_atr_period=int(stops_raw.get("atr_period", stops_raw.get("initial_atr_period", 14))),
             swing_lookback_bars=int(stops_raw.get("swing_lookback_bars", 5)),
             sl_limit_buffer_pct=float(stops_raw.get("sl_limit_buffer_pct", 0.25)),
-            target_r=float(stops_raw.get("target_r_multiple", stops_raw.get("target_r", 2.0))),
+            target_r=float(stops_raw.get("target_r_multiple", stops_raw.get("target_r", ratchet_config.target_r))),
             use_fixed_target=bool(stops_raw.get("use_fixed_target", True)),
             trail_enabled=bool(stops_raw.get("trail_enabled", False)),
             fee_lock_enabled=bool(stops_raw.get("fee_lock_enabled", True)),
@@ -631,7 +635,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             late_day_protection_time=str(sessions_config.morning_profit_lock_time),
             fee_lock_offset_pct=float(stops_raw.get("fee_lock_offset_pct", 0.0015)),
             trail=trail_config,
-            max_modifications_per_order=int(ratchet_config.max_stop_modifications),
+            max_modifications_per_order=int(stops_raw.get("max_modifications_per_order", ratchet_config.max_stop_modifications)),
             modification_headroom=int(stops_raw.get("modification_headroom", 3)),
         ),
         schedule=_parse_schedule(session_sched, sched_section),

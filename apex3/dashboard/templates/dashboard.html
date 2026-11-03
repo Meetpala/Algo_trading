@@ -190,7 +190,7 @@
         let OPERATOR_TOKEN = "{{ operator_token }}" || sessionStorage.getItem('apex3_operator_token') || "";
 
         function setOperatorToken() {
-            const t = prompt('Enter the operator token (DASHBOARD_API_TOKEN from the VM .env):');
+            const t = prompt('Enter the operator token (DASHBOARD_API_TOKEN from VM .env):');
             if (t && t.trim()) {
                 OPERATOR_TOKEN = t.trim();
                 sessionStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
@@ -208,7 +208,7 @@
                     document.getElementById('alerts-container').innerHTML = `
                         <div class="alert-banner">
                             <span>🔒 <strong>OPERATOR UNAUTHORIZED</strong>: Dashboard API token missing or mismatched.
-                            <button onclick="setOperatorToken()" style="margin-left:8px;cursor:pointer;">Enter operator token</button></span>
+                            <button onclick="setOperatorToken()" style="margin-left:8px;padding:2px 8px;cursor:pointer;border-radius:4px;border:1px solid #ff4444;background:#1e1e1e;color:#fff;">Enter operator token</button></span>
                         </div>
                     `;
                     return;

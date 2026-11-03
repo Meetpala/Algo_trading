@@ -8,7 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from apex3.config import CostsConfig
-from apex3.models import OrderState, PositionState, Side, get_mcx_lot_multiplier
+from apex3.models import OrderState, PositionState, Side
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -89,11 +89,10 @@ def _calculate_realized_pnl(fills: list[dict[str, Any]]) -> float:
             continue
 
         closed_quantity = min(abs(current_quantity), quantity)
-        mult = get_mcx_lot_multiplier(symbol)
         realized += (
-            (price - average_price) * closed_quantity * mult
+            (price - average_price) * closed_quantity
             if current_quantity > 0
-            else (average_price - price) * closed_quantity * mult
+            else (average_price - price) * closed_quantity
         )
         new_quantity = current_quantity + signed_fill
         if new_quantity == 0:
@@ -104,33 +103,6 @@ def _calculate_realized_pnl(fills: list[dict[str, Any]]) -> float:
             positions[symbol] = (new_quantity, average_price)
 
     return round(realized, 2)
-
-
-def calculate_mcx_intraday_charges(
-    buy_price: float,
-    sell_price: float,
-    lots: int,
-    lot_multiplier: int = 1,
-) -> float:
-    """Exact MCX + Zerodha commodity futures statutory fee calculator."""
-    if lots <= 0 or buy_price <= 0 or sell_price <= 0:
-        return 0.0
-
-    buy_turnover = buy_price * lots * lot_multiplier
-    sell_turnover = sell_price * lots * lot_multiplier
-    total_turnover = buy_turnover + sell_turnover
-
-    brok_buy = min(20.0, buy_turnover * 0.0003)
-    brok_sell = min(20.0, sell_turnover * 0.0003)
-    brokerage = brok_buy + brok_sell
-
-    ctt = 0.0001 * sell_turnover
-    exchange_fee = 0.000021 * total_turnover
-    sebi_fee = 0.000001 * total_turnover
-    stamp_duty = 0.00002 * buy_turnover
-    gst = 0.18 * (brokerage + exchange_fee + sebi_fee)
-
-    return round(brokerage + ctt + exchange_fee + sebi_fee + stamp_duty + gst, 2)
 
 
 def _calculate_estimated_charges(
@@ -144,8 +116,7 @@ def _calculate_estimated_charges(
     for fill in fills:
         order_id = str(fill["order_id"])
         side = _side(fill["side"])
-        mult = get_mcx_lot_multiplier(str(fill["symbol"]))
-        turnover = float(fill["price"]) * int(fill["quantity"]) * mult
+        turnover = float(fill["price"]) * int(fill["quantity"])
         order_turnover[order_id] += turnover
         if side == Side.BUY:
             buy_turnover += turnover
@@ -157,26 +128,25 @@ def _calculate_estimated_charges(
         for order_id, turnover in order_turnover.items()
     )
     total_turnover = buy_turnover + sell_turnover
-    ctt = sell_turnover * 0.0001
-    exchange_txn = total_turnover * 0.000021
-    sebi = total_turnover * 0.000001
-    gst = (brokerage + exchange_txn + sebi) * 0.18
-    stamp_duty = buy_turnover * 0.00002
-    return round(brokerage + ctt + exchange_txn + sebi + gst + stamp_duty, 2)
+    stt = sell_turnover * costs.stt_pct / 100.0
+    exchange_txn = total_turnover * costs.exchange_txn_pct / 100.0
+    sebi = total_turnover * costs.sebi_turnover_pct / 100.0
+    gst = (brokerage + exchange_txn + sebi) * costs.gst_pct / 100.0
+    stamp_duty = buy_turnover * costs.stamp_duty_pct / 100.0
+    return round(brokerage + stt + exchange_txn + sebi + gst + stamp_duty, 2)
 
 
 def _estimate_closing_charge(position: PositionState, costs: CostsConfig) -> float:
     """Include the expected fee for closing an open MIS position."""
     side = Side.SELL if position.side == Side.BUY else Side.BUY
-    mult = getattr(position, "lot_multiplier", 1) or get_mcx_lot_multiplier(position.symbol)
-    turnover = position.current_price * position.quantity * mult
+    turnover = position.current_price * position.quantity
     brokerage = min(costs.brokerage_per_order, turnover * 0.0003)
-    ctt = turnover * 0.0001 if side == Side.SELL else 0.0
-    exchange_txn = turnover * 0.000021
-    sebi = turnover * 0.000001
-    gst = (brokerage + exchange_txn + sebi) * 0.18
-    stamp_duty = turnover * 0.00002 if side == Side.BUY else 0.0
-    return brokerage + ctt + exchange_txn + sebi + gst + stamp_duty
+    stt = turnover * costs.stt_pct / 100.0 if side == Side.SELL else 0.0
+    exchange_txn = turnover * costs.exchange_txn_pct / 100.0
+    sebi = turnover * costs.sebi_turnover_pct / 100.0
+    gst = (brokerage + exchange_txn + sebi) * costs.gst_pct / 100.0
+    stamp_duty = turnover * costs.stamp_duty_pct / 100.0 if side == Side.BUY else 0.0
+    return brokerage + stt + exchange_txn + sebi + gst + stamp_duty
 
 
 def build_session_pnl(
@@ -248,8 +218,7 @@ def build_session_pnl(
         if position.current_price <= 0 or position.average_entry <= 0:
             raise ValueError(f"Missing current mark for open position {position.symbol}")
         sign = 1.0 if position.side == Side.BUY else -1.0
-        mult = getattr(position, "lot_multiplier", 1) or get_mcx_lot_multiplier(position.symbol)
-        unrealized += (position.current_price - position.average_entry) * position.quantity * mult * sign
+        unrealized += (position.current_price - position.average_entry) * position.quantity * sign
         expected_exit_charges += _estimate_closing_charge(position, costs)
 
     return SessionPnL(

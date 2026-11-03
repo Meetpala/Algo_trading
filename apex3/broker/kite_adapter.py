@@ -754,10 +754,10 @@ class KiteAdapter(BrokerInterface):
             )
         return candles
 
-    def get_instrument_info(self, symbol: str, exchange: Optional[str] = None) -> InstrumentInfo:
+    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
         """Fetch instrument metadata and circuit boundaries from Kite."""
-        if exchange is None:
-            exchange = "MCX" if symbol.upper().startswith(("SILVER", "GOLD")) else "NSE"
+        if symbol.startswith(("SILVER", "GOLD")):
+            exchange = "MCX"
         if symbol in self._instrument_info_cache:
             return self._instrument_info_cache[symbol]
 
@@ -878,10 +878,56 @@ class KiteAdapter(BrokerInterface):
         )
         self._instrument_info_cache[symbol] = info
         return info
-        self._instrument_info_cache[symbol] = info
-        return info
 
     # ── Session ──────────────────────────────────────────────────
+
+    def get_session_diagnostics(self) -> dict:
+        """Read-only session diagnostics for Zerodha Kite. Distinguishes expired token from network errors."""
+        if self._kite is None:
+            return {
+                "session_valid": False,
+                "status": "NOT_INITIALIZED",
+                "user_id": None,
+                "error": "KiteConnect client not initialized",
+            }
+        if not self._access_token:
+            return {
+                "session_valid": False,
+                "status": "NOT_AUTHENTICATED",
+                "user_id": None,
+                "error": "No access token configured",
+            }
+        try:
+            profile = self._kite.profile()
+            uid = profile.get("user_id") if isinstance(profile, dict) else None
+            if uid:
+                return {
+                    "session_valid": True,
+                    "status": "CONNECTED",
+                    "user_id": uid,
+                    "error": None,
+                }
+            return {
+                "session_valid": False,
+                "status": "INVALID_PROFILE",
+                "user_id": None,
+                "error": "Profile response missing user_id",
+            }
+        except Exception as e:
+            err_str = str(e)
+            lower_err = err_str.lower()
+            if "token" in lower_err or "403" in lower_err or "unauthorized" in lower_err or "api_key" in lower_err:
+                status = "TOKEN_EXPIRED"
+            elif any(k in lower_err for k in ("connection", "timeout", "timed out", "max retries", "network", "reset")):
+                status = "NETWORK_ERROR"
+            else:
+                status = "ERROR"
+            return {
+                "session_valid": False,
+                "status": status,
+                "user_id": None,
+                "error": err_str[:160],
+            }
 
     def is_session_valid(self) -> bool:
         """Check if the Kite session token is active and valid, with .env hot-reload support."""

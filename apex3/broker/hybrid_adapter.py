@@ -10,8 +10,11 @@ to Zerodha. Angel One is used solely as a read-only market data stream.
 """
 from __future__ import annotations
 
+import copy
 import inspect
 import logging
+import threading
+import time
 from datetime import date, datetime
 from typing import Optional
 
@@ -41,6 +44,9 @@ class HybridBrokerAdapter(BrokerInterface):
     ) -> None:
         self.data_provider = data_provider
         self.execution_broker = execution_broker
+        self._status_lock = threading.Lock()
+        self._providers_status_cache: Optional[dict] = None
+        self._providers_status_mono: float = 0.0
         logger.info(
             "Initialized APEX-3 HYBRID BROKER ADAPTER: [Data: Angel One SmartAPI (Free)] -> [Execution: Zerodha Personal (Free)]"
         )
@@ -234,6 +240,53 @@ class HybridBrokerAdapter(BrokerInterface):
     def get_positions(self) -> list[PositionState]:
         """Fetch net positions from Zerodha."""
         return self.execution_broker.get_positions()
+
+    def get_providers_status(self, max_age_sec: float = 15.0) -> dict:
+        """Per-provider session health for /health and /api/status (read-only, cached, single-flight).
+
+        Zerodha (execution) and Angel One (market data) are probed independently so an outage is
+        attributed to the right provider. Results are cached for `max_age_sec` so dashboard and
+        Docker healthcheck polling cannot hammer broker APIs or trigger rate limits. The lock is held
+        during a refresh, so concurrent pollers wait for one probe instead of stampeding.
+        """
+        with self._status_lock:
+            now_m = time.monotonic()
+            cached = self._providers_status_cache
+            if cached is not None and (now_m - self._providers_status_mono) < max_age_sec:
+                out = copy.deepcopy(cached)
+                out["cached"] = True
+                out["age_sec"] = round(now_m - self._providers_status_mono, 1)
+                return out
+
+            zerodha = self._probe(self.execution_broker, "zerodha")
+            angel = self._probe(self.data_provider, "angel_one")
+            fresh = {"zerodha": zerodha, "angel_one": angel}
+            self._providers_status_cache = fresh
+            self._providers_status_mono = time.monotonic()
+            out = copy.deepcopy(fresh)
+            out["cached"] = False
+            out["age_sec"] = 0.0
+            return out
+
+    @staticmethod
+    def _probe(provider, label: str) -> dict:
+        """Run one provider's diagnostics; never raises, always returns a normalized dict."""
+        diag = None
+        fn = getattr(provider, "get_session_diagnostics", None)
+        if callable(fn):
+            try:
+                diag = fn()
+            except Exception as e:
+                diag = {"session_valid": False, "status": "ERROR", "error": f"{type(e).__name__}: {e}"[:160]}
+        if not isinstance(diag, dict):
+            try:
+                ok = bool(provider.is_session_valid())
+                diag = {"session_valid": ok, "status": "CONNECTED" if ok else "DISCONNECTED",
+                        "error": None if ok else "Session invalid"}
+            except Exception as e:
+                diag = {"session_valid": False, "status": "ERROR", "error": f"{type(e).__name__}: {e}"[:160]}
+        diag["session_valid"] = bool(diag.get("session_valid"))
+        return diag
 
     def is_session_valid(self) -> bool:
         """Check session validity on BOTH data provider and execution broker, self-healing Angel token if dropped."""

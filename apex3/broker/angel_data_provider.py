@@ -253,6 +253,41 @@ class AngelDataProvider:
             logger.error("Failed to connect to Angel One SmartAPI: %s", e)
             return False
 
+    def get_session_diagnostics(self) -> dict:
+        """Read-only session diagnostics for Angel One. Never triggers re-authentication."""
+        if not self._smart_api or not self._auth_token:
+            return {
+                "session_valid": False,
+                "status": "NOT_AUTHENTICATED",
+                "client_code": self.client_code,
+                "error": "Not authenticated",
+            }
+        try:
+            if hasattr(self._smart_api, "getProfile"):
+                prof = self._smart_api.getProfile(self._refresh_token)
+                if isinstance(prof, dict) and prof.get("status") is False:
+                    return {
+                        "session_valid": False,
+                        "status": "SESSION_EXPIRED",
+                        "client_code": self.client_code,
+                        "error": prof.get("message", "Session expired"),
+                    }
+            return {
+                "session_valid": True,
+                "status": "CONNECTED",
+                "client_code": self.client_code,
+                "error": None,
+            }
+        except Exception as e:
+            err_str = str(e)
+            status = "NETWORK_ERROR" if any(k in err_str.lower() for k in ("connection", "timeout", "reset", "network")) else "ERROR"
+            return {
+                "session_valid": False,
+                "status": status,
+                "client_code": self.client_code,
+                "error": err_str[:160],
+            }
+
     def is_session_valid(self) -> bool:
         """Verify that Angel One SmartAPI session is active, auto-refreshing via TOTP after daily reset."""
         if not self._smart_api or not self._auth_token:
@@ -645,11 +680,9 @@ class AngelDataProvider:
 
         return results
 
-    def get_instrument_info(self, symbol: str, exchange: Optional[str] = None) -> InstrumentInfo:
+    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
         """Fetch instrument info with verified circuit limits from exchange."""
         clean = symbol.replace("-EQ", "").upper()
-        if exchange is None:
-            exchange = "MCX" if clean.startswith(("SILVER", "GOLD")) else "NSE"
         token = self.resolve_token(clean, exchange)
         low_c, up_c = self._circuit_cache.get(clean, (0.0, 0.0))
         tick = 1.0 if exchange == "MCX" else 0.05
