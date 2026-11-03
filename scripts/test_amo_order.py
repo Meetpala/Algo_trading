@@ -198,24 +198,7 @@ def main():
     print("\n" + "=" * 70)
     print("  AUDIT VERDICT: ORDER PLACEMENT & CANCELLATION 100% OPERATIONAL!")
     print("=" * 70)
-    except Exception as e:
-        print(f"[WARN] Order cancel call returned: {e}")
-
-    # Check order book
-    try:
-        orders = kite.orders()
-        matched = [o for o in orders if str(o.get("order_id")) == str(order_id)]
-        if matched:
-            st = matched[0].get("status")
-            print(f"  Final Order Status in Zerodha Order Book: {st}")
-    except Exception:
-        pass
-
-    print("\n" + "=" * 70)
-    print("  AUDIT VERDICT: ORDER PLACEMENT & CANCELLATION 100% OPERATIONAL!")
-    print("=" * 70)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-
