@@ -88,27 +88,6 @@ class Quote:
     is_fresh: bool = True  # False if older than stale threshold
 
 
-MCX_LOT_MULTIPLIERS: dict[str, int] = {
-    "SILVERMIC": 1,
-    "GOLDGUINEA": 1,
-    "GOLDPETAL": 1,
-    "GOLDTEN": 1,
-    "SILVERM": 5,
-    "GOLDM": 10,
-    "SILVER": 30,
-    "GOLD": 100,
-}
-
-
-def get_mcx_lot_multiplier(symbol_or_root: str) -> int:
-    """Return the P&L rupee multiplier per ₹1.00 move for MCX precious metals."""
-    clean = symbol_or_root.upper().strip()
-    for root in sorted(MCX_LOT_MULTIPLIERS.keys(), key=len, reverse=True):
-        if clean.startswith(root):
-            return MCX_LOT_MULTIPLIERS[root]
-    return 1
-
-
 def round_to_tick(price: float, tick_size: float, direction: str = "nearest") -> float:
     """Rounds price to tick_size using Decimal arithmetic.
 

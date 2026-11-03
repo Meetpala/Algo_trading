@@ -166,28 +166,9 @@ class HybridBrokerAdapter(BrokerInterface):
             mis_available=False,
         )
 
-    def resolve_active_mcx_futures(
-        self,
-        symbol_roots: list[str],
-        min_days_to_expiry: int = 5,
-        as_of: Optional[date] = None,
-    ) -> dict[str, InstrumentInfo]:
-        """Resolve active front-month MCX futures and synchronize tokens across providers."""
-        exec_resolved: dict[str, InstrumentInfo] = {}
-        if hasattr(self.execution_broker, "resolve_active_mcx_futures"):
-            exec_resolved = self.execution_broker.resolve_active_mcx_futures(
-                symbol_roots, min_days_to_expiry=min_days_to_expiry, as_of=as_of
-            )
-        data_resolved: dict[str, InstrumentInfo] = {}
-        if hasattr(self.data_provider, "resolve_active_mcx_futures"):
-            data_resolved = self.data_provider.resolve_active_mcx_futures(
-                symbol_roots, min_days_to_expiry=min_days_to_expiry, as_of=as_of
-            )
-        return exec_resolved or data_resolved
-
     # ── Order Execution & Portfolio (Delegated to Zerodha Personal) ──
 
-    def get_margins(self, segment: str = "commodity") -> MarginInfo:
+    def get_margins(self, segment: str = "equity") -> MarginInfo:
         """Fetch margin from Zerodha."""
         if hasattr(self.execution_broker, "get_margins"):
             sig = inspect.signature(self.execution_broker.get_margins)

@@ -35,7 +35,7 @@ class BrokerInterface(ABC):
     # ── Margin & Capital ─────────────────────────────────────────────
 
     @abstractmethod
-    def get_margins(self, segment: str = "commodity") -> MarginInfo:
+    def get_margins(self, segment: str = "equity") -> MarginInfo:
         """Fetch current margin/funds information from the broker.
 
         Returns broker-reported values directly. Do not derive or
@@ -234,18 +234,6 @@ class BrokerInterface(ABC):
             List of Candle objects sorted by timestamp ascending.
         """
         ...
-
-    def resolve_active_mcx_futures(
-        self,
-        symbol_roots: list[str],
-        min_days_to_expiry: int = 5,
-        as_of: Optional[date] = None,
-    ) -> dict[str, InstrumentInfo]:
-        """Resolve active front-month MCX futures contracts for given symbol roots.
-
-        Filters out contracts within the delivery tender period (< min_days_to_expiry).
-        """
-        return {}
 
     @abstractmethod
     def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:

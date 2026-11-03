@@ -214,7 +214,7 @@ class PaperBroker(BrokerInterface):
 
     # ── BrokerInterface Implementation ───────────────────────────
 
-    def get_margins(self, segment: str = "commodity") -> MarginInfo:
+    def get_margins(self, segment: str = "equity") -> MarginInfo:
         """Return current simulated margin state."""
         now = datetime.now(IST)
         return MarginInfo(
@@ -224,47 +224,6 @@ class PaperBroker(BrokerInterface):
             net_value=self._margin_available + self._margin_used,
             timestamp=now,
         )
-
-    def resolve_active_mcx_futures(
-        self,
-        symbol_roots: list[str],
-        min_days_to_expiry: int = 5,
-        as_of: Optional[date] = None,
-    ) -> dict[str, InstrumentInfo]:
-        """Simulate active front-month MCX futures contracts for paper trading."""
-        today = as_of or datetime.now(IST).date()
-        target_expiry = today + timedelta(days=25)
-        results = {}
-        for root in symbol_roots:
-            clean = root.upper().strip()
-            exp_str = target_expiry.strftime("%d%b%y").upper()
-            tsym = f"{clean}{exp_str}FUT"
-            lot_mult = 1
-            if "SILVERM" in clean:
-                lot_mult = 5
-            elif "GOLDM" in clean:
-                lot_mult = 10
-            elif "SILVER" in clean:
-                lot_mult = 30
-            elif "GOLD" in clean and clean not in ("GOLDGUINEA", "GOLDPETAL", "GOLDTEN"):
-                lot_mult = 100
-
-            info = InstrumentInfo(
-                symbol=tsym,
-                exchange="MCX",
-                tick_size=1.0,
-                lot_size=1,
-                order_lot_size=1,
-                lot_multiplier=lot_mult,
-                expiry_date=target_expiry,
-                days_to_expiry=(target_expiry - today).days,
-                instrument_token=f"PAPER-{clean}",
-                mis_available=True,
-            )
-            self._instruments[tsym] = info
-            self._instruments[clean] = info
-            results[clean] = info
-        return results
 
     def estimate_order_margin(self, request: OrderRequest) -> OrderMarginEstimate:
         """Estimate margin for a proposed order using simulated leverage.
@@ -549,17 +508,8 @@ class PaperBroker(BrokerInterface):
             "JIOFIN": 0.01,
             "TATASTEEL": 0.01,
         }
-        tick = 1.0 if exchange == "MCX" else default_ticks.get(symbol.upper(), 0.05)
+        tick = default_ticks.get(symbol.upper(), 0.05)
         lot_mult = 1
-        if exchange == "MCX":
-            if "SILVERM" in symbol.upper():
-                lot_mult = 5
-            elif "GOLDM" in symbol.upper():
-                lot_mult = 10
-            elif "SILVER" in symbol.upper():
-                lot_mult = 30
-            elif "GOLD" in symbol.upper() and not any(p in symbol.upper() for p in ("GUINEA", "PETAL", "TEN")):
-                lot_mult = 100
 
         # Return a generic default for unknown instruments
         return InstrumentInfo(

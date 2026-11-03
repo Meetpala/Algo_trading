@@ -83,12 +83,6 @@ class RatchetConfig:
     stage4_step_r: float = 0.50
     stage4_trail_offset_r: float = 0.65
     max_stop_modifications: int = 20
-    # MCX aliases
-    stage1_r: float = 1.00
-    stage1_buffer_ticks: int = 2
-    stage2_r: float = 1.50
-    stage3_r: float = 2.00
-    stage4_r: float = 2.50
 
 
 @dataclass(frozen=True)
