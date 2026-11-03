@@ -253,12 +253,14 @@ def calculate_stop_limit_prices(
     stop_trigger: float,
     config: StopsConfig,
     tick_size: float = 0.05,
+    lower_circuit: float = 0.0,
+    upper_circuit: float = 0.0,
 ) -> tuple[float, float]:
     """Calculate trigger price and limit price for a Stop-Loss Limit (SL) order.
 
     A stop-limit order requires:
-    - Long exit (SELL SL): Limit price < Trigger price (more marketable).
-    - Short exit (BUY SL): Limit price > Trigger price (more marketable).
+    - Long exit (SELL SL): Limit price < Trigger price (more marketable), clamped >= lower_circuit.
+    - Short exit (BUY SL): Limit price > Trigger price (more marketable), clamped <= upper_circuit.
 
     WARNING: Even with a marketable buffer, SL limit orders can remain unfilled
     during circuits or rapid price gapping.
@@ -266,19 +268,32 @@ def calculate_stop_limit_prices(
     Returns:
         (trigger_price, limit_price)
     """
+    t = tick_size if (tick_size and tick_size > 0) else TICK_SIZE
     buffer_multiplier = config.sl_limit_buffer_pct / 100.0
 
     if side == Side.BUY:
         # Position is LONG -> exit order is SELL
-        trigger = round_to_tick(stop_trigger, tick_size=tick_size, round_up=False)
+        trigger = round_to_tick(stop_trigger, tick_size=t, round_up=False)
         raw_limit = trigger * (1.0 - buffer_multiplier)
-        limit = round_to_tick(raw_limit, tick_size=tick_size, round_up=False)
+        limit = round_to_tick(raw_limit, tick_size=t, round_up=False)
+        if lower_circuit > 0.0:
+            min_limit = ceil_to_tick(lower_circuit, tick_size=t)
+            if limit < min_limit:
+                limit = min_limit
+            if trigger <= limit:
+                trigger = round_to_tick(limit + t, tick_size=t, round_up=True)
         return trigger, limit
     else:  # Side.SELL
         # Position is SHORT -> exit order is BUY
-        trigger = round_to_tick(stop_trigger, tick_size=tick_size, round_up=True)
+        trigger = round_to_tick(stop_trigger, tick_size=t, round_up=True)
         raw_limit = trigger * (1.0 + buffer_multiplier)
-        limit = round_to_tick(raw_limit, tick_size=tick_size, round_up=True)
+        limit = round_to_tick(raw_limit, tick_size=t, round_up=True)
+        if upper_circuit > 0.0:
+            max_limit = floor_to_tick(upper_circuit, tick_size=t)
+            if limit > max_limit:
+                limit = max_limit
+            if trigger >= limit:
+                trigger = round_to_tick(limit - t, tick_size=t, round_up=False)
         return trigger, limit
 
 

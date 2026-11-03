@@ -572,7 +572,12 @@ class StrategyEngine:
 
                     exit_side = Side.SELL if ent_pos.side == Side.BUY else Side.BUY
                     trigger, limit = calculate_stop_limit_prices(
-                        ent_pos.side, ent_pos.initial_stop_price, self.config.stops, tick
+                        ent_pos.side,
+                        ent_pos.initial_stop_price,
+                        self.config.stops,
+                        tick,
+                        lower_circuit=inst.lower_circuit if inst else 0.0,
+                        upper_circuit=inst.upper_circuit if inst else 0.0,
                     )
 
                     # Place protective stop immediately for filled quantity
@@ -778,7 +783,12 @@ class StrategyEngine:
 
                             exit_side = Side.SELL if ent_pos.side == Side.BUY else Side.BUY
                             trigger, limit = calculate_stop_limit_prices(
-                                ent_pos.side, ent_pos.initial_stop_price, self.config.stops, tick
+                                ent_pos.side,
+                                ent_pos.initial_stop_price,
+                                self.config.stops,
+                                tick,
+                                lower_circuit=inst.lower_circuit if inst else 0.0,
+                                upper_circuit=inst.upper_circuit if inst else 0.0,
                             )
                             sl_req = OrderRequest(
                                 symbol=ent_pos.symbol,
@@ -1843,7 +1853,10 @@ class StrategyEngine:
             ):
                 continue
 
-            inst = inst_map.get(sym) or self.broker.get_instrument_info(sym)
+            inst = inst_map.get(sym)
+            if inst is None or (inst.upper_circuit <= 0.0 and inst.lower_circuit <= 0.0):
+                inst = self.broker.get_instrument_info(sym)
+                inst_map[sym] = inst
             quote = batch_quotes.get(sym) or self.broker.get_quote(sym)
             stock_candles = stock_candles_map.get(sym) or self.broker.get_historical(sym, "5minute", hist_from_5m, now)
 
@@ -2049,10 +2062,14 @@ class StrategyEngine:
                 cand_price = round_to_tick(sig_price + tick, tick_size=tick)
                 cap_price = round_to_tick(sig_price * (1.0 + slip_pct), tick_size=tick)
                 marketable_entry_price = min(cand_price, cap_price)
+                if inst and inst.upper_circuit > 0:
+                    marketable_entry_price = min(marketable_entry_price, round_to_tick(inst.upper_circuit, tick_size=tick))
             else:
                 cand_price = round_to_tick(sig_price - tick, tick_size=tick)
                 cap_price = round_to_tick(sig_price * (1.0 - slip_pct), tick_size=tick)
                 marketable_entry_price = max(cand_price, cap_price)
+                if inst and inst.lower_circuit > 0:
+                    marketable_entry_price = max(marketable_entry_price, round_to_tick(inst.lower_circuit, tick_size=tick))
             entry_price = marketable_entry_price
 
             # Reject entry if live ask/bid has already gapped past cap_price
@@ -2349,7 +2366,14 @@ class StrategyEngine:
                     )
 
                     exit_side = Side.SELL if side == Side.BUY else Side.BUY
-                    trigger, limit = calculate_stop_limit_prices(side, initial_stop, self.config.stops, inst.tick_size)
+                    trigger, limit = calculate_stop_limit_prices(
+                        side,
+                        initial_stop,
+                        self.config.stops,
+                        inst.tick_size,
+                        lower_circuit=inst.lower_circuit if inst else 0.0,
+                        upper_circuit=inst.upper_circuit if inst else 0.0,
+                    )
 
                     # Place protective stop immediately for filled quantity
                     sl_req = OrderRequest(
