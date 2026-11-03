@@ -187,7 +187,16 @@
     </main>
 
     <script>
-        const OPERATOR_TOKEN = "{{ operator_token }}";
+        let OPERATOR_TOKEN = "{{ operator_token }}" || sessionStorage.getItem('apex3_operator_token') || "";
+
+        function setOperatorToken() {
+            const t = prompt('Enter the operator token (DASHBOARD_API_TOKEN from the VM .env):');
+            if (t && t.trim()) {
+                OPERATOR_TOKEN = t.trim();
+                sessionStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
+                fetchStatus();
+            }
+        }
 
         async function fetchStatus() {
             try {
@@ -198,7 +207,8 @@
                 if (res.status === 401) {
                     document.getElementById('alerts-container').innerHTML = `
                         <div class="alert-banner">
-                            <span>🔒 <strong>OPERATOR UNAUTHORIZED</strong>: Dashboard API token missing or mismatched.</span>
+                            <span>🔒 <strong>OPERATOR UNAUTHORIZED</strong>: Dashboard API token missing or mismatched.
+                            <button onclick="setOperatorToken()" style="margin-left:8px;cursor:pointer;">Enter operator token</button></span>
                         </div>
                     `;
                     return;

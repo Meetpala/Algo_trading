@@ -27,7 +27,7 @@ Exact mirror conditions for Long and Short:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional, Union
 
 from apex3.config import SignalConfig
 from apex3.indicators.atr import compute_atr
@@ -41,6 +41,7 @@ from apex3.models import (
     OpeningRange,
     Quote,
     Side,
+    round_to_tick,
 )
 from apex3.strategy.regime import MarketRegime
 
@@ -75,51 +76,106 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def is_us_dst(dt: Union[date, datetime]) -> bool:
+    """Return True if the given date falls within US Daylight Saving Time (EDT).
+
+    US DST begins on the 2nd Sunday of March and ends on the 1st Sunday of November.
+    """
+    d = dt.date() if isinstance(dt, datetime) else dt
+    year = d.year
+
+    # 2nd Sunday of March
+    first_mar = date(year, 3, 1)
+    first_sun_mar = 1 + (6 - first_mar.weekday()) % 7
+    second_sun_mar = first_sun_mar + 7
+    dst_start = date(year, 3, second_sun_mar)
+
+    # 1st Sunday of November
+    first_nov = date(year, 11, 1)
+    first_sun_nov = 1 + (6 - first_nov.weekday()) % 7
+    dst_end = date(year, 11, first_sun_nov)
+
+    return dst_start <= d < dst_end
+
+
 def build_opening_range(
     symbol: str,
     candles_0915_0930: list[Candle],
     session_date: Optional[date] = None,
+    session_type: Literal["MORNING", "COMEX"] = "MORNING",
 ) -> OpeningRange:
-    """Build the 09:15 - 09:30 IST opening range from completed candles.
+    """Build opening range from completed candles for MORNING or COMEX session.
 
-    Args:
-        symbol: Instrument symbol
-        candles_0915_0930: Candles strictly within 09:15 to 09:30 IST.
-        session_date: Target session date (default: date of last candle).
-
-    Returns:
-        OpeningRange with high, low, candle_count, and is_complete.
+    - MORNING: 09:00 - 09:15 IST (or 09:15 - 09:30 for legacy equity)
+    - COMEX: 17:00 - 17:30 IST (EDT) or 18:00 - 18:30 IST (EST)
     """
     completed = [c for c in candles_0915_0930 if c.is_complete]
     if not completed:
-        return OpeningRange(symbol=symbol, high=0.0, low=0.0, is_complete=False, candle_count=0)
+        return OpeningRange(
+            symbol=symbol,
+            high=0.0,
+            low=0.0,
+            is_complete=False,
+            candle_count=0,
+            session_type=session_type,
+        )
 
-    # If candles span beyond 09:15-09:30 or multiple days, isolate the true opening range window
-    target_d = session_date or (completed[-1].timestamp if completed[-1].timestamp.tzinfo else completed[-1].timestamp.replace(tzinfo=IST)).astimezone(IST).date()
+    target_d = session_date or (
+        completed[-1].timestamp if completed[-1].timestamp.tzinfo else completed[-1].timestamp.replace(tzinfo=IST)
+    ).astimezone(IST).date()
+
+    if session_type == "COMEX":
+        if is_us_dst(target_d):
+            start_t = time(17, 0)
+            end_t = time(17, 30)
+        else:
+            start_t = time(18, 0)
+            end_t = time(18, 30)
+        expected_bars = 6
+    else:  # MORNING
+        has_0900 = any(
+            (c.timestamp if c.timestamp.tzinfo else c.timestamp.replace(tzinfo=IST)).astimezone(IST).time() < time(9, 15)
+            for c in completed
+        )
+        if has_0900:
+            start_t = time(9, 0)
+            end_t = time(9, 15)
+        else:
+            start_t = time(9, 15)
+            end_t = time(9, 30)
+        expected_bars = 3
+
     filtered = []
     for c in completed:
         c_dt = (c.timestamp if c.timestamp.tzinfo else c.timestamp.replace(tzinfo=IST)).astimezone(IST)
-        if c_dt.date() == target_d and time(9, 15) <= c_dt.time() < time(9, 30):
+        if c_dt.date() == target_d and start_t <= c_dt.time() < end_t:
             filtered.append(c)
 
-    if filtered:
-        completed = filtered
-    elif session_date is not None:
-        return OpeningRange(symbol=symbol, high=0.0, low=0.0, is_complete=False, candle_count=0)
+    if not filtered:
+        return OpeningRange(
+            symbol=symbol,
+            high=0.0,
+            low=0.0,
+            is_complete=False,
+            candle_count=0,
+            session_type=session_type,
+        )
 
-    high = max(c.high for c in completed)
-    low = min(c.low for c in completed)
-
-    # 15 minutes of 5-min bars = 3 bars; or 1-min bars = 15 bars
-    is_complete = len(completed) >= 3
+    high = max(c.high for c in filtered)
+    low = min(c.low for c in filtered)
+    is_complete = len(filtered) >= expected_bars
 
     return OpeningRange(
         symbol=symbol,
         high=high,
         low=low,
         is_complete=is_complete,
-        candle_count=len(completed),
+        candle_count=len(filtered),
+        session_type=session_type,
     )
+
+
+build_mcx_opening_range = build_opening_range
 
 
 def compute_relative_strength(

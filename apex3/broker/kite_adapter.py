@@ -754,10 +754,10 @@ class KiteAdapter(BrokerInterface):
             )
         return candles
 
-    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
+    def get_instrument_info(self, symbol: str, exchange: Optional[str] = None) -> InstrumentInfo:
         """Fetch instrument metadata and circuit boundaries from Kite."""
-        if symbol.startswith(("SILVER", "GOLD")):
-            exchange = "MCX"
+        if exchange is None:
+            exchange = "MCX" if symbol.upper().startswith(("SILVER", "GOLD")) else "NSE"
         if symbol in self._instrument_info_cache:
             return self._instrument_info_cache[symbol]
 

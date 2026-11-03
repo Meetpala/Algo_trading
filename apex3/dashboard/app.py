@@ -96,61 +96,19 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
 
     @app.route("/health")
     def health():
-        """Lightweight healthcheck endpoint with isolated provider diagnostics and actionable readiness."""
+        """Lightweight local healthcheck endpoint for Docker/systemd monitoring."""
         now_ist = engine.scheduler.now_ist() if hasattr(engine, "scheduler") else datetime.now(IST)
-        session_info = engine.scheduler.get_state_display(now_ist) if hasattr(engine, "scheduler") else {"state": "UNKNOWN"}
-
-        providers_status = None
-        if hasattr(engine.broker, "get_providers_status"):
-            try:
-                raw_p = engine.broker.get_providers_status()
-                if isinstance(raw_p, dict):
-                    providers_status = raw_p
-            except Exception:
-                providers_status = None
-
-        if not isinstance(providers_status, dict):
-            kite_ok = False
-            try:
-                kite_ok = bool(engine.broker.is_session_valid())
-            except Exception:
-                kite_ok = False
-            providers_status = {
-                "zerodha": {"session_valid": kite_ok, "status": "CONNECTED" if kite_ok else "DISCONNECTED", "user_id": "", "error": None},
-                "angel_one": {"session_valid": True, "status": "CONNECTED", "client_code": "", "error": None},
-            }
-
-        zerodha_valid = providers_status.get("zerodha", {}).get("session_valid", False)
-        angel_valid = providers_status.get("angel_one", {}).get("session_valid", False)
-        session_valid = zerodha_valid and angel_valid
-
-        degraded_reasons = []
-        if not zerodha_valid:
-            degraded_reasons.append(f"Zerodha: {providers_status.get('zerodha', {}).get('status', 'INVALID')} ({providers_status.get('zerodha', {}).get('error') or 'Token expired'})")
-        if not angel_valid:
-            degraded_reasons.append(f"Angel One: {providers_status.get('angel_one', {}).get('status', 'INVALID')} ({providers_status.get('angel_one', {}).get('error') or 'Connection dropped'})")
-        if getattr(engine, "is_paused", False):
-            degraded_reasons.append(f"Engine Paused: {getattr(engine, 'pause_reason', 'Manual pause')}")
-
-        action_required = "None - all systems ready"
-        if not zerodha_valid:
-            action_required = "Daily Zerodha login required: open /login/kite or run scripts/sync_token_to_cloud.py"
-        elif not angel_valid:
-            action_required = "Angel One re-authentication in progress"
-
+        session_valid = False
+        try:
+            session_valid = bool(engine.broker.is_session_valid())
+        except Exception:
+            session_valid = False
         return jsonify({
             "status": "healthy" if session_valid else "degraded",
             "mode": config.mode.upper(),
             "broker_session_valid": session_valid,
             "is_paused": bool(getattr(engine, "is_paused", False)),
             "timestamp_ist": now_ist.isoformat(),
-            "session_state": session_info.get("state", "UNKNOWN"),
-            "providers": providers_status,
-            "degraded_reasons": degraded_reasons,
-            "readiness": {
-                "can_trade_live": session_valid and not getattr(engine, "is_paused", False),
-                "action_required": action_required,
-            }
         }), (200 if session_valid else 503)
 
     @app.route("/")

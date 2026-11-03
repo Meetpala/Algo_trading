@@ -1779,7 +1779,7 @@ class StrategyEngine:
                 )
             ]
 
-        # Check if outside entry window (e.g. after entry cutoff)
+        # Check if outside entry window (e.g. after 14:15 IST)
         if not self.scheduler.can_enter(now):
             if not decisions:
                 decisions.append(
@@ -1787,7 +1787,7 @@ class StrategyEngine:
                         decision=Decision.WAIT,
                         timestamp_ist=now,
                         reason_codes=["OUTSIDE_ENTRY_WINDOW"],
-                        explanation=f"Entry window closed ({self.config.schedule.entry_cutoff} IST cutoff passed). Managing existing exposure only.",
+                        explanation="Entry window closed (14:15 IST cutoff passed). Managing existing exposure only.",
                     )
                 )
             return decisions

@@ -1,168 +1,189 @@
+# apex3/config.yaml — APEX-3-MCX Precious Metals Production Configuration
 
-# apex3/config.yaml — Single Source of Truth for APEX-3 High-Profit Configuration
+mode: "paper"  # "paper" or "live"
+paper_starting_capital: 30000.00
 
-# --- Operating Mode ---
-mode: "paper"  # "paper" or "live" — can also be overridden with CLI: --mode live
-paper_starting_capital: 15000.00
+exchange: "MCX"
+margin_segment: "commodity"
+fetch_live_zerodha_margin: true
+base_capital_inr: 30000.0
+safety_reserve_buffer_pct: 0.05
+max_concurrent_positions: 2
+max_new_entries_per_bar: 1
+per_trade_risk_pct: 0.0125          # ₹375.00 max charge-bounded net loss per trade on ₹30k
+daily_max_loss_pct: 0.0250          # -₹750.00 hard daily stop triggers flatten_sequence
+bound_loss_with_charges: true
+max_fee_to_profit_ratio: 0.18       # Charges must be <= 18% of expected 2.0R gross profit
 
+universe:
+  core_watchlist:
+    - symbol_root: "SILVERMIC"
+      lot_multiplier: 1
+      tick_size: 1.0
+      max_spread_bps: 3.5
+      min_atr_pct: 0.0014
+    - symbol_root: "GOLDGUINEA"
+      lot_multiplier: 1
+      tick_size: 1.0
+      max_spread_bps: 5.0
+      min_atr_pct: 0.0010
+  scale_up_watchlist:               # Enabled automatically when live_balance >= ₹1,50,000
+    - symbol_root: "SILVERM"
+      lot_multiplier: 5
+      tick_size: 1.0
+      max_spread_bps: 3.0
+      min_atr_pct: 0.0014
+    - symbol_root: "GOLDM"
+      lot_multiplier: 10
+      tick_size: 1.0
+      max_spread_bps: 3.0
+      min_atr_pct: 0.0010
+
+sessions:
+  morning_or_start: "09:00"
+  morning_or_end: "09:15"
+  morning_entry_end: "13:30"
+  morning_profit_lock_time: "14:15"
+  # Evening COMEX session auto-adjusts via US DST resolver:
+  comex_or_start_edt: "17:00"
+  comex_or_end_edt: "17:30"
+  comex_entry_end_edt: "21:45"
+  eod_flatten_start_edt: "23:10"
+  comex_or_start_est: "18:00"
+  comex_or_end_est: "18:30"
+  comex_entry_end_est: "22:15"
+  eod_flatten_start_est: "23:35"
+
+gates:
+  min_days_to_expiry: 5
+  max_choppiness_index: 50.0
+  min_adx: 22.0
+  max_or_width_pct: 0.0065
+  breakout_atr_cushion: 0.15
+  min_clv: 0.70
+  min_rvol: 1.80
+  stop_atr_multiplier: 1.35
+  min_stop_width_pct: 0.0020
+  max_stop_width_pct: 0.0065
+
+ratchet:
+  target_r: 2.50
+  stage1_trigger_r: 1.00
+  stage1_lock_r: 0.15
+  stage2_trigger_r: 1.50
+  stage2_lock_r: 0.65
+  stage3_trigger_r: 2.00
+  stage3_lock_r: 1.25
+  stage4_step_r: 0.50
+  stage4_trail_offset_r: 0.65
+  max_stop_modifications: 20
+
+# Auxiliary Sections for Full Backward Compatibility
 account:
-  starting_capital: 15000.00          # Base account equity in INR
-  max_intraday_leverage: 4.0          # Zerodha MIS 4.0x leverage
-  safety_reserve_buffer_pct: 0.05     # 5.0% (₹750) idle cash buffer for RMS safety
-  fetch_live_zerodha_margin: true     # Pulls live available cash from kite.margins("equity")
-
-risk_management:
-  max_concurrent_positions: 2         # 2 slots max -> ₹28,500 leveraged budget per slot
-  max_new_entries_per_bar: 1          # Only take the #1 ranked stock on any single 5m candle
-  second_slot_requires_slot1_profit_r: 0.0   # 0.0 = Slot 2 trades independently whenever margin allows (no profit lock)
-  risk_per_trade_pct: 0.0080          # 0.80% of equity (₹120.00 risk cap per trade)
-  daily_loss_limit_pct: 0.0160        # 1.60% of equity (-₹240.00 hard daily stop = 2 losses)
-  slippage_allowance_pct: 0.0         # 0.0% slippage deduction (prevents shrinking share quantity)
-  bound_loss_with_charges: true       # Hard net loss bound: sizes quantity so stop loss + statutory charges <= risk cap
-
-session_schedule:
-  timezone: "Asia/Kolkata"
-  or_start_time: "09:15"              # Opening Range start
-  or_end_time: "09:30"                # Opening Range locked at 09:30 IST
-  entry_start_time: "09:35"           # Morning Stability Window: requires first post-OR 5m bar to complete
-  entry_cutoff_time: "12:30"          # Hard cutoff for new entries (leaves >= 2h 25m to reach target)
-  late_day_protection_time: "14:15"   # Time-based fee-lock evaluation (raised from 13:45 to prevent choking)
-  square_off_time: "14:55"            # Orderly MIS liquidation before Zerodha 15:15 RMS
-  flat_verification_time: "14:58"     # Verify zero open positions and zero pending SL/Target orders
+  starting_capital: 15000.00
+  max_intraday_leverage: 4.0
+  safety_reserve_buffer_pct: 0.05
+  fetch_live_zerodha_margin: true
 
 regime_filter:
   benchmark_symbol: "NIFTY 50"
   benchmark_exchange: "NSE"
-  ema_period: 20
-  ema_fast_period: 20
-  ema_slow_period: 50                 # Dual-EMA macro trend filter against chop
-  ema_slope_lookback: 3
-  adx_period: 14
-  min_adx: 22.0
-  require_vwap_alignment: true        # Blocks post-gap sideways morning traps (Month 2 fix)
-  require_rising_adx: true            # Requires ADX[t] > ADX[t-1]
 
-signal_gates:
-  rs_lookback_bars: 20                # 20-bar Relative Strength vs NIFTY 50
-  volume_avg_bars: 20                 # 20-bar Volume SMA
-  min_volume_surge_ratio: 2.0         # Gate 5: >= 2.0x institutional volume confirmation
-  max_spread_bps: 4.0                 # Gate 6: Tightened from 8 bps to 4 bps for zero-slippage fills
-  min_circuit_distance_pct: 0.020     # Gate 7: >= 2.0% away from upper/lower circuit
-  min_stop_distance_pct: 0.0055       # Stop-width floor: Minimum R = 0.55% (eliminates fee compression)
-  max_stop_distance_pct: 0.0090       # Stop-width ceiling: Maximum R = 0.90%
-  max_adr_consumed_pct: 0.60          # Gate 9C: Reject if stock already moved > 60% of baseline ADR
-  min_adr_baseline: 0.025             # 2.5% minimum ADR baseline prevents choking on morning opening noise
-  min_breakout_cushion_atr: 0.15      # Breakout close must clear OR by >= 0.15 * ATR(14)
-  min_clv_ratio: 0.70                 # Close Location Value >= 0.70 (closes in top/bottom 30% of bar)
-  min_atr_pct: 0.0022                 # Gate 9A: Minimum Volatility Floor (ATR14 / Price >= 0.22%)
-
-stops_and_targets:
-  swing_lookback_bars: 5              # 5-bar structural swing low/high anchor
-  atr_period: 14                      # 14-bar 5-minute ATR
-  atr_stop_multiplier: 1.5            # 1.5x ATR structural buffer (proven over 1.0x ATR)
-  target_r_multiple: 2.0              # Fixed 2.0R limit target order
-  trail_enabled: false                # Continuous trailing disabled (prevents choking runners)
-  fee_lock_enabled: true              # One-time step to profit-preserving buffer
-  fee_lock_trigger_r: 1.60            # Triggers when unrealized profit hits +1.60R (locks +0.60R)
-  fee_lock_profit_r: 0.60             # +0.60R profit preserved (~+₹65 to +₹75 gross)
-  late_day_lock_trigger_r: 1.15       # At 14:15 IST, triggers if trade is >= +1.15R (locks +0.35R)
-  late_day_lock_profit_r: 0.35        # +0.35R profit preserved
-  fee_lock_offset_pct: 0.0015         # +0.15% covers 0.1065% Zerodha + statutory charges + 1 tick
-  sl_limit_buffer_pct: 0.25           # Stop-limit buffer below/above trigger
-  max_modifications_per_order: 25     # Kite order modification limit
-  modification_headroom: 3
+risk_management:
+  max_concurrent_positions: 2
+  max_new_entries_per_bar: 1
+  second_slot_requires_slot1_profit_r: 0.0
+  risk_per_trade_pct: 0.0080
+  daily_loss_limit_pct: 0.0160
+  slippage_allowance_pct: 0.0
+  bound_loss_with_charges: true
 
 radar:
-  core_conviction_multiplier: 1.35    # Tier 1 priority boost in conviction ranking
-  probation_volume_surge_ratio: 2.5   # Stricter volume surge for non-core stocks (>= 2.5x vs 2.0x)
-  probation_min_clv_ratio: 0.75       # Stricter CLV for non-core stocks (>= 0.75 vs 0.70)
-  # Tier 1: Audited Institutional Trend Leaders (Max Profitability & Low Friction)
+  core_conviction_multiplier: 1.15
+  probation_volume_surge_ratio: 2.50
+  probation_min_clv_ratio: 0.65
   core_watchlist:
     - "HINDALCO"
+    - "TATASTEEL"
     - "JSWSTEEL"
+    - "JINDALSTEL"
     - "RELIANCE"
-    - "MARUTI"
-    - "TCS"
-    - "TRENT"
-
-  # Tier 2: Top audited net-positive stocks discovered from 31-stock screening
+    - "ICICIBANK"
+    - "INFY"
+    - "SBIN"
+    - "BHARTIARTL"
+    - "LT"
+    - "AXISBANK"
+    - "KOTAKBANK"
   enable_extended_radar: true
   extended_radar:
-    - "BHARTIARTL"
-    - "JIOFIN"
-    - "TATASTEEL"
-    - "AXISBANK"
-    - "TATAPOWER"
-
-  # Tier 3: Optional Custom List (Disabled by default)
+    - "TRENT"
+    - "BEL"
+    - "HAL"
+    - "DIXON"
+    - "POLYCAB"
+    - "PERSISTENT"
+    - "COFORGE"
+    - "TITAN"
   custom_user_radar: []
 
-# --- Auxiliary Compatibility Sections ---
+stops_and_targets:
+  initial_stop_atr_multiplier: 1.35
+  max_stop_loss_pct: 0.0090
+  min_stop_loss_pct: 0.0055
+  use_fixed_target: true
+  target_r_multiple: 2.0
+  trail_enabled: false
+  fee_lock_enabled: true
+  fee_lock_trigger_r: 1.60
+  fee_lock_profit_r: 0.60
+  fee_lock_offset_pct: 0.0015
+  late_day_lock_trigger_r: 1.15
+  late_day_lock_profit_r: 0.35
+  late_day_protection_time: "14:15"
+  max_modifications_per_order: 25
+  modification_headroom: 3
+
 entry:
   order_type: "LIMIT"
-  exit_order_type: "LIMIT"          # "LIMIT" (marketable limit) strictly enforced per NSE algo rules
-  marketable_limit_buffer_pct: 0.15 # Bounded by max_slippage_pct (0.15%)
+  exit_order_type: "LIMIT"
+  marketable_limit_buffer_pct: 0.15
   max_slippage_pct: 0.15
-  unfilled_timeout_sec: 30
+  unfilled_timeout_sec: 5
   max_retries: 1
 
 schedule:
   market_open: "09:15"
   opening_range_end: "09:30"
   entry_start: "09:35"
-  entry_cutoff: "12:30"
-  flatten_start: "14:55"
-  flat_target: "14:58"
+  entry_cutoff: "14:45"
+  flatten_start: "15:15"
+  flat_target: "15:20"
   market_close: "15:30"
-  hard_deadline: "15:00"
+  hard_deadline: "15:25"
   stale_threshold_sec: 15
-
   holidays_2026:
-    - "2026-01-15"  # Makar Sankranti / Municipal Election Day
-    - "2026-01-26"  # Republic Day
-    - "2026-02-19"  # Chhatrapati Shivaji Maharaj Jayanti
-    - "2026-03-03"  # Holi
-    - "2026-03-19"  # Id-Ul-Fitr (Ramzan Id)
-    - "2026-03-26"  # Shri Ram Navami
-    - "2026-03-31"  # Shri Mahavir Jayanti
-    - "2026-04-01"  # Annual Bank Account Closing
-    - "2026-04-03"  # Good Friday
-    - "2026-04-14"  # Dr. Baba Saheb Ambedkar Jayanti
-    - "2026-05-01"  # Maharashtra Day
-    - "2026-05-28"  # Bakri Id
-    - "2026-06-26"  # Muharram
-    - "2026-08-26"  # Id-e-Milad
-    - "2026-09-14"  # Ganesh Chaturthi
-    - "2026-10-02"  # Mahatma Gandhi Jayanti
-    - "2026-10-20"  # Dussehra
-    - "2026-11-10"  # Diwali-Balipratipada
-    - "2026-11-24"  # Prakash Gurpurb Sri Guru Nanak Dev
-    - "2026-12-25"  # Christmas
-
+    - "2026-01-15"
+    - "2026-01-26"
+    - "2026-03-03"
+    - "2026-03-26"
+    - "2026-04-03"
+    - "2026-04-14"
+    - "2026-05-01"
+    - "2026-10-02"
+    - "2026-10-20"
+    - "2026-11-10"
+    - "2026-12-25"
   special_sessions_2026:
-    "2026-11-08": "Muhurat Trading"
-
-dashboard:
-  host: "127.0.0.1"
-  port: 5000
-  auth_required: true
-  api_token: ""  # Set DASHBOARD_API_TOKEN in .env
-  refresh_interval_sec: 2
-
-rate_limits:
-  orders_per_second: 10
-  orders_per_minute: 200
-  quotes_per_second: 5
-  historical_per_second: 3
-  general_per_second: 10
+    "2026-11-08": "Diwali Muhurat Trading"
 
 costs:
   brokerage_per_order: 20.0
-  stt_pct: 0.025
-  exchange_txn_pct: 0.00318
+  ctt_pct: 0.05
+  exchange_txn_pct: 0.0026
   gst_pct: 18.0
   sebi_turnover_pct: 0.0001
-  stamp_duty_pct: 0.003
+  stamp_duty_pct: 0.002
 
 journal:
   db_path: "apex3_journal.db"
@@ -172,3 +193,17 @@ journal:
   log_stop_changes: true
   log_warnings: true
   log_daily_summary: true
+
+dashboard:
+  host: "127.0.0.1"
+  port: 5000
+  auth_required: false
+  api_token: ""
+  refresh_interval_sec: 2
+
+rate_limits:
+  orders_per_second: 10
+  orders_per_minute: 200
+  quotes_per_second: 5
+  historical_per_second: 3
+  general_per_second: 10

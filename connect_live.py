@@ -124,7 +124,9 @@ def save_env_token(token: str) -> None:
         try:
             import urllib.request
             import json
-            op_tok = os.getenv("DASHBOARD_API_TOKEN", "apex3_secure_operator_token").strip()
+            op_tok = os.getenv("DASHBOARD_API_TOKEN", "").strip()
+            if not op_tok:
+                raise RuntimeError("DASHBOARD_API_TOKEN not set in local .env (must match the VM's value)")
             target_ep = f"{cloud_url.rstrip('/')}/api/set_token"
             req = urllib.request.Request(
                 target_ep,
