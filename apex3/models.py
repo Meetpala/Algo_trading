@@ -222,6 +222,7 @@ class PositionState:
     fee_lock_applied: bool = False
     target_price: float = 0.0          # Take-profit price (e.g. 2.0R target)
     target_order_id: str = ""
+    modification_count: int = 0
     # Strategy metadata
     strategy_tag: str = ""
     entry_time: Optional[datetime] = None

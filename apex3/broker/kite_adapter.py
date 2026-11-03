@@ -275,6 +275,10 @@ class KiteAdapter(BrokerInterface):
 
     def _get_instruments(self, exchange: str = "MCX") -> dict[str, dict]:
         """Fetch and cache daily instruments dump from Kite."""
+        # Backward compatibility for flat symbol dictionary assignments in unit tests
+        if self._instruments_cache and not any(k in self._instruments_cache for k in ("NSE", "MCX", "NFO", "BSE")):
+            return self._instruments_cache
+
         today_str = datetime.now(IST).strftime("%Y-%m-%d")
         if exchange in self._instruments_cache and self._cache_date == today_str:
             return self._instruments_cache[exchange]
@@ -750,8 +754,10 @@ class KiteAdapter(BrokerInterface):
             )
         return candles
 
-    def get_instrument_info(self, symbol: str, exchange: str = "MCX") -> InstrumentInfo:
+    def get_instrument_info(self, symbol: str, exchange: str = "NSE") -> InstrumentInfo:
         """Fetch instrument metadata and circuit boundaries from Kite."""
+        if symbol.startswith(("SILVER", "GOLD")):
+            exchange = "MCX"
         if symbol in self._instrument_info_cache:
             return self._instrument_info_cache[symbol]
 

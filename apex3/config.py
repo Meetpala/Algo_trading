@@ -83,6 +83,12 @@ class RatchetConfig:
     stage4_step_r: float = 0.50
     stage4_trail_offset_r: float = 0.65
     max_stop_modifications: int = 20
+    # MCX aliases
+    stage1_r: float = 1.00
+    stage1_buffer_ticks: int = 2
+    stage2_r: float = 1.50
+    stage3_r: float = 2.00
+    stage4_r: float = 2.50
 
 
 @dataclass(frozen=True)
@@ -105,6 +111,9 @@ class RiskConfig:
     risk_per_trade_pct: float = 0.80
     max_combined_open_risk_pct: float = 1.60
     daily_loss_limit_pct: float = 1.60
+    daily_max_loss_pct: float = 2.50
+    max_daily_loss_pct: float = 2.50
+    max_fee_to_profit_ratio: float = 0.18
     slippage_allowance_pct: float = 0.0
     bound_loss_with_charges: bool = True
     max_concurrent_positions: int = 2
@@ -481,16 +490,16 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
 
     ratchet_raw = raw.get("ratchet", {})
     ratchet_config = RatchetConfig(
-        target_r=float(ratchet_raw.get("target_r", 2.50)),
-        stage1_trigger_r=float(ratchet_raw.get("stage1_trigger_r", 1.00)),
-        stage1_lock_r=float(ratchet_raw.get("stage1_lock_r", 0.15)),
+        target_r=float(stops_raw.get("target_r_multiple", stops_raw.get("target_r", ratchet_raw.get("target_r", 2.0)))),
+        stage1_trigger_r=float(stops_raw.get("fee_lock_trigger_r", ratchet_raw.get("stage1_trigger_r", 1.60))),
+        stage1_lock_r=float(stops_raw.get("fee_lock_profit_r", ratchet_raw.get("stage1_lock_r", 0.60))),
         stage2_trigger_r=float(ratchet_raw.get("stage2_trigger_r", 1.50)),
         stage2_lock_r=float(ratchet_raw.get("stage2_lock_r", 0.65)),
         stage3_trigger_r=float(ratchet_raw.get("stage3_trigger_r", 2.00)),
         stage3_lock_r=float(ratchet_raw.get("stage3_lock_r", 1.25)),
         stage4_step_r=float(ratchet_raw.get("stage4_step_r", 0.50)),
         stage4_trail_offset_r=float(ratchet_raw.get("stage4_trail_offset_r", 0.65)),
-        max_stop_modifications=int(ratchet_raw.get("max_stop_modifications", 20)),
+        max_stop_modifications=int(stops_raw.get("max_modifications_per_order", ratchet_raw.get("max_stop_modifications", 25))),
     )
 
     # Build merged watchlist from radar tiers or universe core watchlist
@@ -622,7 +631,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             late_day_protection_time=str(sessions_config.morning_profit_lock_time),
             fee_lock_offset_pct=float(stops_raw.get("fee_lock_offset_pct", 0.0015)),
             trail=trail_config,
-            max_modifications_per_order=int(ratchet_config.max_stop_modifications),
+            max_modifications_per_order=int(stops_raw.get("max_modifications_per_order", ratchet_config.max_stop_modifications)),
             modification_headroom=int(stops_raw.get("modification_headroom", 3)),
         ),
         schedule=_parse_schedule(session_sched, sched_section),
