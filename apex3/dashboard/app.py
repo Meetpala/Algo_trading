@@ -44,12 +44,10 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
     _runtime_token = secrets.token_hex(16)
 
     def _get_operator_token() -> str:
-        if "PYTEST_CURRENT_TEST" in os.environ:
-            return os.environ.get("DASHBOARD_API_TOKEN", "apex3_secure_operator_token")
         return (
             os.environ.get("DASHBOARD_API_TOKEN")
             or getattr(getattr(config, "dashboard", None), "api_token", "")
-            or _runtime_token
+            or ("apex3_secure_operator_token" if "PYTEST_CURRENT_TEST" in os.environ else _runtime_token)
         )
 
     def _is_authorized() -> bool:
