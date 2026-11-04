@@ -6,7 +6,7 @@ Start Date    : 2026-10-29
 Starting Funds: Rs. 15,000.00
 Current Equity: Rs. 15,222.88
 Total Net P&L : +Rs. 222.88 (+1.49%)
-Win Rate      : 100.0% (1 Win / 0 Losses / 3 Flat Sessions)
+Win Rate      : 100.0% (1 Win / 0 Losses / 4 Flat Sessions)
 ================================================================================
 
 SUMMARY TRADEBOOK TABLE
@@ -17,6 +17,7 @@ Date       | Symbol     | Side | Qty | Entry Price | Exit Price | Net P&L     | 
 2026-10-30 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 2026-11-02 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 2026-11-03 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-04 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 --------------------------------------------------------------------------------
 TOTALS     | 1 Trade    |      |     |             |            | +Rs. 222.88 | Equity: Rs. 15,222.88
 ================================================================================
@@ -107,22 +108,25 @@ Account Equity  : Rs. 15,222.88
 Status          : FLAT — CAPITAL PRESERVED
 ================================================================================
 ================================================================================
-[2026-10-28 15:30:00 IST] TRADING SESSION AUDIT — DAILY RECONCILIATION
-[RECORD_ID: APEX3-SESSION-20261028]
+[2026-11-04] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261104]
 --------------------------------------------------------------------------------
-Session Date    : 2026-10-28 (Wednesday)
-Market Status   : NSE Cash Equities Intraday Session Closed
-Trades Executed : 0 trades
-Execution Notes : No qualifying 9-gate institutional breakouts / System in Risk-Off mode
-Position State  : 0 Open Positions (100% Flat / Zero Overnight Risk)
-Starting Capital: Rs. 15,000.00
-Capital at Risk : Rs. 0.00 (100% Capital Preserved)
-Gross Session PnL: Rs. 0.00
-Total Friction  : Rs. 0.00
-Net Realized PnL: Rs. 0.00
-Session Return  : 0.00%
-Cumulative PnL  : +Rs. 222.88
+Date            : 2026-11-04 (Wednesday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : Live cloud engine active on GCP; 9 institutional gates filtered
+                  all breakout attempts due to lack of favorable momentum/volume.
+Audit Details   :
+  - System State: Fully live streaming (Angel One feed OK, Zerodha authorized)
+  - Radar Screen: 11 curated watchlist stocks evaluated on 5-minute candles
+  - Quality Filter: No stocks satisfied all 9 institutional gates concurrently
+  - Capital Status: 100% capital preserved (Rs. 15,222.88 equity, zero overnight risk)
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
 Account Equity  : Rs. 15,222.88
-Status          : AUDITED & FLAT — Reconciled with zero open risk
+Status          : FLAT — CAPITAL PRESERVED
 ================================================================================
 
