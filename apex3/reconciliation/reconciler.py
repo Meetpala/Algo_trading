@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any, Optional
 import time as time_module
 from zoneinfo import ZoneInfo
@@ -84,27 +84,33 @@ class Reconciler:
             time_module.sleep(0.05)
         return last_state
 
-    def _create_exit_order_request(
+    def _calculate_marketable_exit_price(
         self,
         symbol: str,
         side: Side,
-        quantity: int,
-        tag: str,
         current_price: float = 0.0,
-    ) -> OrderRequest:
-        """Create an exchange-compliant, bounded marketable limit exit order request.
+        escalate: bool = False,
+        force_circuit: bool = False,
+    ) -> float:
+        """Calculate exchange-compliant bounded limit exit price with optional escalation.
 
-        Under NSE Retail Algo guidelines, algorithmic market orders are strictly prohibited.
-        All exits must be bounded limit orders priced using fresh quotes (best bid for SELL,
-        best ask for BUY) and constrained within circuit limits and configured slippage caps.
+        Under NSE Retail Algo guidelines, all algorithmic orders must be bounded limit orders.
+        - Standard (14:55): best bid/ask with configured buffer (0.15%)
+        - Escalated (unfilled after 3s or 14:57): best bid/ask with 0.50% buffer
+        - Emergency (14:58+): circuit boundary (lower_circuit for SELL, upper_circuit for BUY)
+          ensuring execution against all book depth while staying within exchange price bands.
         """
+        import time as time_module
         inst = self.broker.get_instrument_info(symbol)
         tick = float(inst.tick_size) if inst and isinstance(getattr(inst, "tick_size", None), (int, float)) and inst.tick_size > 0 else 0.05
+        lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
+        upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
 
-        # Enforce max_slippage_pct cap on marketable limit buffer
-        max_slip = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15) if self.config else 0.15
-        cfg_buf = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.15) if self.config else 0.15
-        buffer_pct = min(cfg_buf, max_slip) / 100.0
+        if force_circuit:
+            if side == Side.SELL and lower_c > 0:
+                return floor_to_tick(lower_c, tick)
+            elif side == Side.BUY and upper_c > 0:
+                return ceil_to_tick(upper_c, tick)
 
         # Query fresh executable quote (best bid for SELL, best ask for BUY)
         px = 0.0
@@ -136,19 +142,58 @@ class Reconciler:
             logger.critical(err_msg)
             raise ValueError(err_msg)
 
-        lower_c = float(inst.lower_circuit) if inst and isinstance(getattr(inst, "lower_circuit", None), (int, float)) and inst.lower_circuit > 0 else 0.0
-        upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
+        if force_circuit:
+            if side == Side.SELL:
+                raw_limit = lower_c if lower_c > 0 else px * 0.90
+                return floor_to_tick(raw_limit, tick)
+            else:
+                raw_limit = upper_c if upper_c > 0 else px * 1.10
+                return ceil_to_tick(raw_limit, tick)
+
+        # Enforce buffer
+        max_slip = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15) if self.config else 0.15
+        cfg_buf = getattr(getattr(self.config, "entry", None), "marketable_limit_buffer_pct", 0.15) if self.config else 0.15
+        base_buf = min(cfg_buf, max_slip) / 100.0
+
+        if escalate:
+            buffer_pct = max(base_buf * 3.0, 0.005)  # 0.50% escalated buffer
+        else:
+            buffer_pct = base_buf
 
         if side == Side.SELL:
             raw_limit = px * (1.0 - buffer_pct)
             if lower_c > 0:
                 raw_limit = max(raw_limit, lower_c)
-            limit_px = floor_to_tick(raw_limit, tick)
+            return floor_to_tick(raw_limit, tick)
         else:
             raw_limit = px * (1.0 + buffer_pct)
             if upper_c > 0:
                 raw_limit = min(raw_limit, upper_c)
-            limit_px = ceil_to_tick(raw_limit, tick)
+            return ceil_to_tick(raw_limit, tick)
+
+    def _create_exit_order_request(
+        self,
+        symbol: str,
+        side: Side,
+        quantity: int,
+        tag: str,
+        current_price: float = 0.0,
+        escalate: bool = False,
+        force_circuit: bool = False,
+    ) -> OrderRequest:
+        """Create an exchange-compliant, bounded marketable limit exit order request.
+
+        Under NSE Retail Algo guidelines, algorithmic market orders are strictly prohibited.
+        All exits must be bounded limit orders priced using fresh quotes (best bid for SELL,
+        best ask for BUY) and constrained within circuit limits and configured slippage caps.
+        """
+        limit_px = self._calculate_marketable_exit_price(
+            symbol=symbol,
+            side=side,
+            current_price=current_price,
+            escalate=escalate,
+            force_circuit=force_circuit,
+        )
 
         return OrderRequest(
             symbol=symbol,
@@ -160,6 +205,39 @@ class Reconciler:
             tag=tag,
             strategy_id=self.session_tag,
         )
+
+    def reprice_in_flight_exit(
+        self,
+        symbol: str,
+        side: Side,
+        order_id: str,
+        escalate: bool = False,
+        force_circuit: bool = False,
+    ) -> bool:
+        """Reprice an existing open exit order to track moving market or escalate to circuit boundary."""
+        try:
+            new_px = self._calculate_marketable_exit_price(
+                symbol=symbol,
+                side=side,
+                escalate=escalate,
+                force_circuit=force_circuit,
+            )
+            mod_ok = self.broker.modify_order(order_id=order_id, price=new_px)
+            if mod_ok:
+                logger.info(
+                    "Repriced in-flight exit order %s for %s to Rs. %.2f (escalate=%s, force_circuit=%s)",
+                    order_id, symbol, new_px, escalate, force_circuit,
+                )
+                self.journal.log_event(
+                    event_type="EXIT_ORDER_REPRICED",
+                    symbol=symbol,
+                    data={"order_id": order_id, "price": new_px, "escalated": escalate, "circuit": force_circuit},
+                    explanation=f"Repriced EOD exit order {order_id} to Rs. {new_px:.2f} for guaranteed fill",
+                )
+            return bool(mod_ok)
+        except Exception as me:
+            logger.warning("Could not reprice exit order %s for %s: %s", order_id, symbol, me)
+            return False
 
     def reattach_protective_stop(self, pos: Any, tick_size: float = 0.05) -> bool:
         """Immediately re-attach a protective SL order to an unprotected recovered strategy position."""
@@ -642,7 +720,16 @@ class Reconciler:
                 try:
                     ex_st = self.broker.get_order_status(managed.exit_order_id)
                     if ex_st and ex_st.status not in (OrderStatus.COMPLETE, OrderStatus.CANCELLED, OrderStatus.REJECTED):
-                        logger.info("Exit order %s for %s already in-flight (status=%s); polling fill instead of duplicate exit.", managed.exit_order_id, managed.symbol, ex_st.status)
+                        now_ist_t = datetime.now(IST).time()
+                        is_emergency_window = now_ist_t >= time(14, 58)
+                        logger.info("Exit order %s for %s already in-flight (status=%s); repricing for guaranteed fill.", managed.exit_order_id, managed.symbol, ex_st.status)
+                        self.reprice_in_flight_exit(
+                            symbol=managed.symbol,
+                            side=bp_side,
+                            order_id=managed.exit_order_id,
+                            escalate=True,
+                            force_circuit=is_emergency_window,
+                        )
                         exit_orders[managed.symbol] = managed.exit_order_id
                         continue
                 except Exception as ex_err:
@@ -782,6 +869,7 @@ class Reconciler:
         remaining_symbols: list[str] = []
         unconfirmed_orders: list[str] = []
         all_tracked_order_ids = set(strategy_order_ids) | set(exit_orders.values())
+        repriced_orders: set[str] = set()
 
         while time_module.time() - start_t < timeout_sec:
             try:
@@ -791,6 +879,10 @@ class Reconciler:
 
                 # Check if all strategy orders reached terminal status
                 unconfirmed_orders = []
+                now_ist_t = datetime.now(IST).time()
+                is_emergency_window = now_ist_t >= time(14, 58)
+                elapsed = time_module.time() - start_t
+
                 for oid in all_tracked_order_ids:
                     try:
                         st = self.broker.get_order_status(oid)
@@ -803,6 +895,25 @@ class Reconciler:
                         continue
                     if not st or st.status not in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
                         unconfirmed_orders.append(oid)
+                        # Dynamic Repricing Escalation: if an exit order is still OPEN after 3s of polling, reprice!
+                        if (
+                            st
+                            and st.status in (OrderStatus.OPEN, OrderStatus.TRIGGER_PENDING)
+                            and elapsed >= 3.0
+                            and oid not in repriced_orders
+                        ):
+                            sym = next((s for s, o in exit_orders.items() if o == oid), None)
+                            if sym and sym in self.sm.positions:
+                                m_pos = self.sm.positions[sym]
+                                exit_side = Side.SELL if m_pos.side == Side.BUY else Side.BUY
+                                self.reprice_in_flight_exit(
+                                    symbol=sym,
+                                    side=exit_side,
+                                    order_id=oid,
+                                    escalate=True,
+                                    force_circuit=is_emergency_window,
+                                )
+                                repriced_orders.add(oid)
 
                 if not open_bp and not unconfirmed_orders:
                     all_flat = True

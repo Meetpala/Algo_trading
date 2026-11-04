@@ -169,3 +169,59 @@ def test_step11_reconcile_broker_sl_fill(tmp_path):
     exit_decisions = [d for d in decisions if d.decision == Decision.EXIT and d.symbol == "RELIANCE"]
     assert len(exit_decisions) == 1
     assert "STOP_LOSS_FILLED_AT_BROKER" in exit_decisions[0].reason_codes
+
+
+def test_flatten_dynamic_repricing_and_circuit_escalation(test_setup):
+    """Verify that in-flight exit orders are repriced dynamically and escalate to circuit limits at 14:58."""
+    broker, sm, journal, reconciler = test_setup
+    import dataclasses
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from apex3.models import Quote, OrderState, OrderRequest, Product, OrderType, OrderStatus
+
+    pos = sm.get_or_create_position("TCS")
+    pos.side = Side.BUY
+    pos.quantity = 5
+    pos.average_entry = 2500.0
+    pos.phase = PositionPhase.EXITING
+    pos.exit_order_id = "EXIT_ORD_TCS_1"
+
+    broker._orders["EXIT_ORD_TCS_1"] = OrderState(
+        order_id="EXIT_ORD_TCS_1",
+        request=OrderRequest(
+            symbol="TCS",
+            side=Side.SELL,
+            quantity=5,
+            product=Product.MIS,
+            order_type=OrderType.LIMIT,
+            price=2489.0,
+            tag="TEST",
+        ),
+        status=OrderStatus.OPEN,
+    )
+
+    # Mock broker instrument info with circuit limits
+    inst = broker.get_instrument_info("TCS")
+    broker._instruments["TCS"] = dataclasses.replace(inst, lower_circuit=2250.0, upper_circuit=2750.0, tick_size=0.05)
+
+    broker._fixture_quotes["TCS"] = Quote(
+        symbol="TCS",
+        exchange="NSE",
+        last_price=2490.0,
+        bid=2489.50,
+        ask=2490.50,
+        volume=100000,
+        timestamp=datetime.now(ZoneInfo("Asia/Kolkata")),
+    )
+
+    # 1. Standard repricing
+    ok = reconciler.reprice_in_flight_exit("TCS", Side.SELL, "EXIT_ORD_TCS_1", escalate=False)
+    assert ok
+    # Verify price is tick-rounded below bid (bid 2489.50 * (1 - 0.0015) = 2485.75)
+    assert broker._orders["EXIT_ORD_TCS_1"].request.price < 2489.50
+
+    # 2. Emergency 14:58 circuit escalation
+    ok_circuit = reconciler.reprice_in_flight_exit("TCS", Side.SELL, "EXIT_ORD_TCS_1", force_circuit=True)
+    assert ok_circuit
+    assert broker._orders["EXIT_ORD_TCS_1"].request.price == 2250.0  # Exactly lower circuit!
+
