@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
