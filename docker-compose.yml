@@ -15,6 +15,7 @@ services:
       - "5000:5000"
     volumes:
       - ./.env:/app/.env
+      - ./apex3:/app/apex3
       - ./apex3_journal.db:/app/apex3_journal.db
       - ./info.log:/app/info.log
       - ./logs:/app/logs
