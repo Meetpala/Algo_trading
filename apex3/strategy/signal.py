@@ -61,6 +61,7 @@ class SignalEvaluation:
     relative_volume: float = 0.0
     relative_strength: float = 0.0
     circuit_distance_pct: float = 0.0
+    is_catchup_signal: bool = False
 
     def __post_init__(self):
         if self.gates is None:
@@ -1059,7 +1060,7 @@ def evaluate_candidate_signal(
         cfg=cfg,
         tick_size=getattr(bar, "tick_size", 0.05) or 0.05,
     )
-    min_r_pct = float(gates.get("min_stop_distance_pct", 0.0055))
+    min_r_pct = float(gates.get("min_stop_distance_pct", 0.0045))
     max_r_pct = float(gates.get("max_stop_distance_pct", 0.0090))
     if not (min_r_pct <= levels.risk_pct <= max_r_pct):
         return None

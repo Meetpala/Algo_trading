@@ -2145,7 +2145,7 @@ class StrategyEngine:
             )
 
             # Gate 9 Stop-width bounds: 0.55% <= R% <= 0.90%
-            min_stop_pct = getattr(self.config.signal, "min_stop_distance_pct", 0.0055)
+            min_stop_pct = getattr(self.config.signal, "min_stop_distance_pct", 0.0045)
             max_stop_pct = getattr(self.config.signal, "max_stop_distance_pct", 0.0090)
             stop_dist_pct = abs(entry_price - initial_stop) / entry_price if entry_price > 0 else 0.0
             if stop_dist_pct < min_stop_pct or stop_dist_pct > max_stop_pct:

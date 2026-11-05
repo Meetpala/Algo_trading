@@ -463,8 +463,8 @@ def run_fast_backtest(
     """Replay completed-bar signals with conservative next-bar execution."""
     config = load_config()
     cutoff_time = entry_cutoff_time if entry_cutoff_time is not None else time(12, 30)
-    min_stop_dist = min_stop_distance_pct if min_stop_distance_pct is not None else float(config.raw_dict.get("signal_gates", {}).get("min_stop_distance_pct", 0.0045))
-    max_stop_dist = float(config.raw_dict.get("signal_gates", {}).get("max_stop_distance_pct", 0.0090))
+    min_stop_dist = min_stop_distance_pct if min_stop_distance_pct is not None else float(getattr(config.signal, "min_stop_distance_pct", 0.0045))
+    max_stop_dist = float(getattr(config.signal, "max_stop_distance_pct", 0.0090))
 
     nifty_candles = data['NSEI']['candles']
     nifty_df = data['NSEI']['df']
