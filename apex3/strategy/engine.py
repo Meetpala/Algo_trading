@@ -598,12 +598,35 @@ class StrategyEngine:
                         upper_circuit=inst.upper_circuit if inst else 0.0,
                     )
 
-                    # Place protective stop immediately for filled quantity
+                    # On partial fill, cancel the unfilled remainder and wait for terminal confirmation FIRST
+                    if entry_state.status != OrderStatus.COMPLETE:
+                        try:
+                            self.broker.cancel_order(ent_pos.entry_order_id)
+                        except Exception as cancel_err:
+                            logger.warning("Failed to cancel remaining entry for %s: %s", ent_pos.symbol, cancel_err)
+                        term_state = self._confirm_order_terminal(ent_pos.entry_order_id, timeout_sec=0.5)
+                        if term_state:
+                            term_filled_qty = int(getattr(term_state, "filled_quantity", 0) or 0)
+                            if term_filled_qty > 0:
+                                ent_pos.quantity = term_filled_qty
+                                if term_state.average_price > 0:
+                                    ent_pos.average_entry = term_state.average_price
+                            entry_state = term_state
+                        else:
+                            logger.warning("Entry order %s remainder cancel timed out; proceeding to verify protection", ent_pos.entry_order_id)
+
+                    confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or ent_pos.quantity or 0)
+                    if confirmed_fill_qty <= 0:
+                        ent_pos.phase = PositionPhase.FLAT
+                        ent_pos.quantity = 0
+                        continue
+
+                    # Place protective stop once for confirmed filled quantity
                     if not ent_pos.protective_order_id:
                         sl_req = OrderRequest(
                             symbol=ent_pos.symbol,
                             side=exit_side,
-                            quantity=ent_pos.quantity,
+                            quantity=confirmed_fill_qty,
                             product=Product.MIS,
                             order_type=OrderType.SL,
                             price=limit,
@@ -617,54 +640,15 @@ class StrategyEngine:
                         except Exception as sl_err:
                             logger.error("Failed to place protective stop for pending fill %s: %s", ent_pos.symbol, sl_err)
                     else:
-                        # Stop order exists: check if quantity needs updating due to fill increase
+                        # Stop order exists: check if quantity needs updating
                         try:
                             sl_check = self.broker.get_order_status(ent_pos.protective_order_id)
                             sl_qty = getattr(sl_check, "quantity", None) or getattr(getattr(sl_check, "request", None), "quantity", 0) or getattr(sl_check, "pending_quantity", 0)
-                            if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_qty < ent_pos.quantity:
-                                logger.info("Modifying protective stop %s for %s from %d to %d shares", ent_pos.protective_order_id, ent_pos.symbol, sl_qty, ent_pos.quantity)
-                                self.broker.modify_order(ent_pos.protective_order_id, quantity=ent_pos.quantity)
+                            if sl_check and sl_check.status == OrderStatus.TRIGGER_PENDING and sl_qty < confirmed_fill_qty:
+                                logger.info("Modifying protective stop %s for %s from %d to %d shares", ent_pos.protective_order_id, ent_pos.symbol, sl_qty, confirmed_fill_qty)
+                                self.broker.modify_order(ent_pos.protective_order_id, quantity=confirmed_fill_qty)
                         except Exception as me:
                             logger.error("Error updating stop %s for fill increase: %s", ent_pos.protective_order_id, me)
-
-                    # On partial fill, cancel the unfilled remainder and wait for terminal confirmation
-                    if entry_state.status != OrderStatus.COMPLETE:
-                        try:
-                            self.broker.cancel_order(ent_pos.entry_order_id)
-                        except Exception as cancel_err:
-                            logger.warning("Failed to cancel remaining entry for %s: %s", ent_pos.symbol, cancel_err)
-                        term_state = self._confirm_order_terminal(ent_pos.entry_order_id, timeout_sec=0.5)
-                        if term_state:
-                            term_filled_qty = int(getattr(term_state, "filled_quantity", 0) or 0)
-                            if term_filled_qty > ent_pos.quantity:
-                                # Late fill occurred while cancelling!
-                                logger.info("Late fill detected during cancel for %s: qty increased from %d to %d", ent_pos.symbol, ent_pos.quantity, term_filled_qty)
-                                ent_pos.quantity = term_filled_qty
-                                if term_state.average_price > 0:
-                                    ent_pos.average_entry = term_state.average_price
-                                if ent_pos.protective_order_id:
-                                    try:
-                                        self.broker.modify_order(ent_pos.protective_order_id, quantity=ent_pos.quantity)
-                                    except Exception as e:
-                                        logger.error("Failed to modify stop after late fill for %s: %s", ent_pos.symbol, e)
-
-                            if term_state.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
-                                entry_state = term_state
-                            else:
-                                logger.warning(
-                                    "Entry order %s remainder cancel unconfirmed (%s); proceeding to verify protection",
-                                    ent_pos.entry_order_id,
-                                    getattr(term_state, "status", "UNKNOWN"),
-                                )
-                                entry_state = term_state
-                        else:
-                            logger.warning("Entry order %s remainder cancel timed out; proceeding to verify protection", ent_pos.entry_order_id)
-
-                    confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
-                    if confirmed_fill_qty <= 0:
-                        ent_pos.phase = PositionPhase.FLAT
-                        ent_pos.quantity = 0
-                        continue
 
                     # Reconcile confirmed fill quantity against live broker positions (strictly verify, no max() absorption)
                     actual_qty = confirmed_fill_qty
@@ -1983,7 +1967,7 @@ class StrategyEngine:
                                 if late_val.is_valid:
                                     eval_candles = sub_stock
                                     live_px = float(quote.last_price) if quote and getattr(quote, "last_price", 0.0) > 0 else catchup_sig.signal_price
-                                    sig = replace(catchup_sig, signal_price=live_px)
+                                    sig = replace(catchup_sig, signal_price=live_px, is_catchup_signal=True)
                                     last_invalid_decision = None
                                     break
                                 else:
@@ -2144,18 +2128,20 @@ class StrategyEngine:
                 tick_size=inst.tick_size,
             )
 
-            # Gate 9 Stop-width bounds: 0.55% <= R% <= 0.90%
+            # Gate 9 Stop-width bounds: 0.45% <= R% <= 0.90% (or up to 0.90% * 1.35 on validated late-start catch-up signals)
             min_stop_pct = getattr(self.config.signal, "min_stop_distance_pct", 0.0045)
             max_stop_pct = getattr(self.config.signal, "max_stop_distance_pct", 0.0090)
+            is_catchup = bool(getattr(sig, "is_catchup_signal", False))
+            effective_max_stop = max_stop_pct * 1.35 if is_catchup else max_stop_pct
             stop_dist_pct = abs(entry_price - initial_stop) / entry_price if entry_price > 0 else 0.0
-            if stop_dist_pct < min_stop_pct or stop_dist_pct > max_stop_pct:
+            if stop_dist_pct < min_stop_pct or stop_dist_pct > effective_max_stop:
                 decisions.append(
                     StrategyDecision(
                         decision=Decision.WAIT,
                         symbol=sym,
                         timestamp_ist=now,
                         reason_codes=["STOP_WIDTH_OUT_OF_BOUNDS"],
-                        explanation=f"Stop width {stop_dist_pct*100:.2f}% is outside allowed bounds [{min_stop_pct*100:.2f}%, {max_stop_pct*100:.2f}%]",
+                        explanation=f"Stop width {stop_dist_pct*100:.2f}% is outside allowed bounds [{min_stop_pct*100:.2f}%, {effective_max_stop*100:.2f}%]",
                     )
                 )
                 continue
@@ -2397,11 +2383,35 @@ class StrategyEngine:
                         upper_circuit=inst.upper_circuit if inst else 0.0,
                     )
 
-                    # Place protective stop immediately for filled quantity
+                    # On partial fill, cancel the unfilled remainder and wait for terminal confirmation FIRST
+                    if not is_complete:
+                        try:
+                            self.broker.cancel_order(entry_order_id)
+                        except Exception as cancel_err:
+                            logger.warning("Failed to cancel remaining entry for %s: %s", sym, cancel_err)
+                        term_state = self._confirm_order_terminal(entry_order_id, timeout_sec=0.5)
+                        if term_state:
+                            term_filled_qty = int(getattr(term_state, "filled_quantity", 0) or 0)
+                            if term_filled_qty > 0:
+                                current_fill_qty = term_filled_qty
+                                managed.quantity = term_filled_qty
+                                if term_state.average_price > 0:
+                                    managed.average_entry = term_state.average_price
+                            entry_state = term_state
+                        else:
+                            logger.warning("Entry order %s remainder cancel timed out; proceeding to verify protection", entry_order_id)
+
+                    confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or current_fill_qty or 0)
+                    if confirmed_fill_qty <= 0:
+                        managed.quantity = 0
+                        managed.phase = PositionPhase.FLAT
+                        continue
+
+                    # Place protective stop once for confirmed filled quantity
                     sl_req = OrderRequest(
                         symbol=sym,
                         side=exit_side,
-                        quantity=current_fill_qty,
+                        quantity=confirmed_fill_qty,
                         product=Product.MIS,
                         order_type=OrderType.SL,
                         price=limit,
@@ -2415,45 +2425,6 @@ class StrategyEngine:
                         managed.protective_order_id = sl_order_id
                     except Exception as sl_err:
                         logger.error("Failed to place protective stop for %s: %s", sym, sl_err)
-
-                    # On partial fill, cancel the unfilled remainder and wait for terminal confirmation
-                    if not is_complete:
-                        try:
-                            self.broker.cancel_order(entry_order_id)
-                        except Exception as cancel_err:
-                            logger.warning("Failed to cancel remaining entry for %s: %s", sym, cancel_err)
-                        term_state = self._confirm_order_terminal(entry_order_id, timeout_sec=0.5)
-                        if term_state:
-                            term_filled_qty = int(getattr(term_state, "filled_quantity", 0) or 0)
-                            if term_filled_qty > managed.quantity:
-                                # Late fill occurred while cancelling!
-                                logger.info("Late fill detected during cancel for %s: qty increased from %d to %d", sym, managed.quantity, term_filled_qty)
-                                managed.quantity = term_filled_qty
-                                if term_state.average_price > 0:
-                                    managed.average_entry = term_state.average_price
-                                if managed.protective_order_id:
-                                    try:
-                                        self.broker.modify_order(managed.protective_order_id, quantity=managed.quantity)
-                                    except Exception as e:
-                                        logger.error("Failed to modify stop after late fill for %s: %s", sym, e)
-
-                            if term_state.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.COMPLETE):
-                                entry_state = term_state
-                            else:
-                                logger.warning(
-                                    "Entry order %s remainder cancel unconfirmed (%s); proceeding to verify protection",
-                                    entry_order_id,
-                                    getattr(term_state, "status", "UNKNOWN"),
-                                )
-                                entry_state = term_state
-                        else:
-                            logger.warning("Entry order %s remainder cancel timed out; proceeding to verify protection", entry_order_id)
-
-                    confirmed_fill_qty = int(getattr(entry_state, "filled_quantity", 0) or 0)
-                    if confirmed_fill_qty <= 0:
-                        managed.quantity = 0
-                        managed.phase = PositionPhase.FLAT
-                        continue
 
                     # Reconcile confirmed fill quantity against live broker positions (strictly verify, no max() absorption)
                     actual_qty = confirmed_fill_qty
