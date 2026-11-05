@@ -2365,6 +2365,20 @@ def test_jiofin_token_is_18143():
     assert DEFAULT_ANGEL_TOKENS.get("JIOFIN") == "18143"
 
 
+def test_radar_15_stocks_have_angel_tokens():
+    """Verify all 15 active radar stocks have mapped tokens in DEFAULT_ANGEL_TOKENS."""
+    from apex3.broker.angel_data_provider import DEFAULT_ANGEL_TOKENS
+    from apex3.config import load_config
+    from apex3.strategy.engine import build_active_radar
+
+    cfg = load_config()
+    radar = build_active_radar(cfg.raw_dict)
+    assert len(radar) == 15
+    for sym in radar:
+        token = DEFAULT_ANGEL_TOKENS.get(sym)
+        assert token is not None and token != "", f"Missing Angel token for active radar stock: {sym}"
+
+
 def test_signal_config_max_quote_age_default_15s():
     """Verify SignalConfig.max_quote_age_sec and ScheduleConfig.stale_threshold_sec default to 15s."""
     cfg = load_config()
