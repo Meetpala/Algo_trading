@@ -101,6 +101,16 @@ def _map_kite_order_type(type_str: str) -> OrderType:
     return OrderType.UNKNOWN
 
 
+
+def is_nse_market_hours(now: Optional[datetime] = None) -> bool:
+    """Return True if currently within normal NSE equity market hours (09:15-15:30 IST on Mon-Fri)."""
+    now_ist = now or datetime.now(IST)
+    if now_ist.weekday() >= 5:  # Saturday, Sunday
+        return False
+    t = now_ist.time()
+    return dtime(9, 15) <= t <= dtime(15, 30)
+
+
 def parse_expiry_date(expiry_val: Any) -> Optional[date]:
     """Parse expiry date from date, datetime, or standard exchange string formats."""
     if expiry_val is None:
@@ -148,6 +158,7 @@ class KiteAdapter(BrokerInterface):
         self._instruments_cache: dict[str, dict[str, dict]] = {}
         self._instrument_info_cache: dict[str, InstrumentInfo] = {}
         self._mis_margin_cache: dict[str, bool] = {}
+        self._order_variety_cache: dict[str, str] = {}
         self._quote_permission_denied: bool = False
         self._cache_date: Optional[str] = None
 
@@ -252,6 +263,13 @@ class KiteAdapter(BrokerInterface):
             logger.error("Failed to fetch Kite margins: %s", e)
             raise
 
+
+    def get_dynamic_variety(self, request_variety: Optional[str] = None) -> str:
+        """Dynamically resolve order variety: 'regular' during market hours, 'amo' after market hours."""
+        if request_variety and str(request_variety).strip().lower() in ("regular", "amo", "iceberg", "co"):
+            return str(request_variety).strip().lower()
+        return "regular" if is_nse_market_hours() else "amo"
+
     def estimate_order_margin(self, request: OrderRequest) -> OrderMarginEstimate:
         """Estimate margin via Kite's order margin calculator."""
         self._require_kite()
@@ -262,7 +280,7 @@ class KiteAdapter(BrokerInterface):
             "exchange": exchange,
             "tradingsymbol": request.symbol,
             "transaction_type": request.side.value,
-            "variety": "regular",
+            "variety": self.get_dynamic_variety(getattr(request, "variety", None)),
             "product": request.product.value,
             "order_type": order_type_str,
             "quantity": request.quantity,
@@ -303,7 +321,7 @@ class KiteAdapter(BrokerInterface):
     # ── Order Management ─────────────────────────────────────────
 
     def place_order(self, request: OrderRequest) -> str:
-        """Place an order via Kite Connect."""
+        """Place an order via Kite Connect with dynamic variety and self-healing retry."""
         self._require_live()
         self._require_kite()
         self._acquire_rate_limit("orders")
@@ -312,30 +330,59 @@ class KiteAdapter(BrokerInterface):
         price = request.price if order_type_str in ("LIMIT", "SL") else None
         trigger_price = request.trigger_price if order_type_str in ("SL", "SL-M") else None
         tag = request.tag[:20] if request.tag else None
+        variety = self.get_dynamic_variety(getattr(request, "variety", None))
 
         logger.info(
-            "Placing LIVE Kite order: %s %s %d @ %s (Type: %s, Trig: %s)",
+            "Placing LIVE Kite order: %s %s %d @ %s (Type: %s, Trig: %s, Variety: %s)",
             request.side.value,
             request.symbol,
             request.quantity,
             price,
             order_type_str,
             trigger_price,
+            variety,
         )
 
-        order_id = self._kite.place_order(
-            variety="regular",
-            exchange=request.exchange,
-            tradingsymbol=request.symbol,
-            transaction_type=request.side.value,
-            quantity=request.quantity,
-            product=request.product.value,
-            order_type=order_type_str,
-            price=price,
-            trigger_price=trigger_price,
-            tag=tag,
-        )
-        return str(order_id)
+        try:
+            order_id = self._kite.place_order(
+                variety=variety,
+                exchange=request.exchange,
+                tradingsymbol=request.symbol,
+                transaction_type=request.side.value,
+                quantity=request.quantity,
+                product=request.product.value,
+                order_type=order_type_str,
+                price=price,
+                trigger_price=trigger_price,
+                tag=tag,
+            )
+            self._order_variety_cache[str(order_id)] = variety
+            return str(order_id)
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "after market order" in err_msg or "cannot be converted" in err_msg or "amo" in err_msg or "regular" in err_msg:
+                fallback_variety = "regular" if variety == "amo" else "amo"
+                logger.warning(
+                    "Kite order placement failed with variety='%s' (%s); retrying with variety='%s'",
+                    variety,
+                    e,
+                    fallback_variety,
+                )
+                order_id = self._kite.place_order(
+                    variety=fallback_variety,
+                    exchange=request.exchange,
+                    tradingsymbol=request.symbol,
+                    transaction_type=request.side.value,
+                    quantity=request.quantity,
+                    product=request.product.value,
+                    order_type=order_type_str,
+                    price=price,
+                    trigger_price=trigger_price,
+                    tag=tag,
+                )
+                self._order_variety_cache[str(order_id)] = fallback_variety
+                return str(order_id)
+            raise
 
     def modify_order(
         self,
@@ -344,8 +391,9 @@ class KiteAdapter(BrokerInterface):
         price: Optional[float] = None,
         trigger_price: Optional[float] = None,
         order_type: Optional[str] = None,
+        variety: Optional[str] = None,
     ) -> bool:
-        """Modify an order via Kite Connect."""
+        """Modify an order via Kite Connect with dynamic variety and self-healing fallback."""
         self._require_live()
         self._require_kite()
         self._acquire_rate_limit("orders")
@@ -360,23 +408,61 @@ class KiteAdapter(BrokerInterface):
         if order_type is not None:
             params["order_type"] = order_type
 
-        logger.info("Modifying LIVE Kite order %s: %s", order_id, params)
-        self._kite.modify_order(
-            variety="regular",
-            order_id=order_id,
-            **params,
-        )
-        return True
+        chosen_variety = variety or self._order_variety_cache.get(str(order_id)) or self.get_dynamic_variety()
+        logger.info("Modifying LIVE Kite order %s (variety=%s): %s", order_id, chosen_variety, params)
+        try:
+            self._kite.modify_order(
+                variety=chosen_variety,
+                order_id=order_id,
+                **params,
+            )
+            return True
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "variety" in err_msg or "order not found" in err_msg or "amo" in err_msg or "regular" in err_msg:
+                alt_variety = "regular" if chosen_variety == "amo" else "amo"
+                logger.warning(
+                    "Modify order %s with variety='%s' failed (%s); retrying with '%s'",
+                    order_id,
+                    chosen_variety,
+                    e,
+                    alt_variety,
+                )
+                self._kite.modify_order(
+                    variety=alt_variety,
+                    order_id=order_id,
+                    **params,
+                )
+                self._order_variety_cache[str(order_id)] = alt_variety
+                return True
+            raise
 
-    def cancel_order(self, order_id: str) -> bool:
-        """Cancel an order via Kite Connect."""
+    def cancel_order(self, order_id: str, variety: Optional[str] = None) -> bool:
+        """Cancel an order via Kite Connect with dynamic variety and self-healing fallback."""
         self._require_live()
         self._require_kite()
         self._acquire_rate_limit("orders")
 
-        logger.info("Cancelling LIVE Kite order %s", order_id)
-        self._kite.cancel_order(variety="regular", order_id=order_id)
-        return True
+        chosen_variety = variety or self._order_variety_cache.get(str(order_id)) or self.get_dynamic_variety()
+        logger.info("Cancelling LIVE Kite order %s (variety=%s)", order_id, chosen_variety)
+        try:
+            self._kite.cancel_order(variety=chosen_variety, order_id=order_id)
+            return True
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "variety" in err_msg or "order not found" in err_msg or "amo" in err_msg or "regular" in err_msg:
+                alt_variety = "regular" if chosen_variety == "amo" else "amo"
+                logger.warning(
+                    "Cancel order %s with variety='%s' failed (%s); retrying with '%s'",
+                    order_id,
+                    chosen_variety,
+                    e,
+                    alt_variety,
+                )
+                self._kite.cancel_order(variety=alt_variety, order_id=order_id)
+                self._order_variety_cache[str(order_id)] = alt_variety
+                return True
+            raise
 
     # ── Order & Trade Queries (read-only) ────────────────────────
 
@@ -718,7 +804,7 @@ class KiteAdapter(BrokerInterface):
                                     "exchange": exchange,
                                     "tradingsymbol": symbol,
                                     "transaction_type": "BUY",
-                                    "variety": "regular",
+                                    "variety": self.get_dynamic_variety(),
                                     "product": "MIS",
                                     "order_type": "LIMIT",
                                     "quantity": 1,
@@ -728,7 +814,7 @@ class KiteAdapter(BrokerInterface):
                                     "exchange": exchange,
                                     "tradingsymbol": symbol,
                                     "transaction_type": "SELL",
-                                    "variety": "regular",
+                                    "variety": self.get_dynamic_variety(),
                                     "product": "MIS",
                                     "order_type": "LIMIT",
                                     "quantity": 1,

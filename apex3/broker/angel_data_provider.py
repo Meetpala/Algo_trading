@@ -57,6 +57,7 @@ DEFAULT_ANGEL_TOKENS: dict[str, str] = {
     "CIPLA": "694",
     "DRREDDY": "881",
     "TITAN": "3506",
+    "IDEA": "14366",
     # Benchmark & High Liquidity Proxies
     "NIFTY 50": "99926000",
     "NIFTY": "99926000",

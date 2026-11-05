@@ -187,411 +187,816 @@
         </section>
     </main>
 
-    <script>
-        let OPERATOR_TOKEN = "{{ operator_token }}" || localStorage.getItem('apex3_operator_token') || sessionStorage.getItem('apex3_operator_token') || "apex3_operator_live_2026";
-
-        if (OPERATOR_TOKEN) {
-            localStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
-            sessionStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
-            document.cookie = "apex3_auth=" + encodeURIComponent(OPERATOR_TOKEN) + "; path=/; max-age=2592000; SameSite=Lax";
-        }
-
-        let evtSource = null;
-        let pollFallbackTimer = null;
-
-        function updateStreamingBadge(isLive) {
-            const badge = document.getElementById('badge-stream');
-            if (!badge) return;
-            if (isLive) {
-                badge.className = 'badge badge-stream-live';
-                badge.innerHTML = '⚡ LIVE STREAMING (1s)';
-            } else {
-                badge.className = 'badge badge-stream-poll';
-                badge.innerHTML = '🔄 POLLING (FALLBACK)';
-            }
-        }
-
-        function setOperatorToken() {
-            const t = prompt('Enter the operator token (DASHBOARD_API_TOKEN from VM .env):', OPERATOR_TOKEN);
-            if (t && t.trim()) {
-                OPERATOR_TOKEN = t.trim();
-                localStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
-                sessionStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
-                document.cookie = "apex3_auth=" + encodeURIComponent(OPERATOR_TOKEN) + "; path=/; max-age=2592000; SameSite=Lax";
-                document.getElementById('alerts-container').innerHTML = '';
-                connectRealtimeStream();
-                fetchStatus();
-            }
-        }
-
-        function renderDashboard(data) {
-            if (!data) return;
-
-            // Clock & Badges
-            document.getElementById('badge-clock').textContent = data.timestamp_ist || '--:--:-- IST';
-            
-            // Mode Badge
-            const modeBadge = document.getElementById('badge-mode');
-            if (data.mode === 'LIVE') {
-                modeBadge.className = 'badge badge-live-pulse';
-                modeBadge.innerHTML = '● LIVE TRADING';
-            } else {
-                modeBadge.className = 'badge badge-paper';
-                modeBadge.textContent = 'MODE: PAPER';
-            }
-
-            // Strategy Status Badge
-            const statusBadge = document.getElementById('badge-status');
-            if (data.is_paused) {
-                statusBadge.className = 'badge badge-paused';
-                statusBadge.textContent = '⏸️ PAUSED';
-            } else {
-                statusBadge.className = 'badge badge-active';
-                statusBadge.textContent = '🟢 ACTIVE';
-            }
-
-            // Kite Authorization Badge
-            const kiteBadge = document.getElementById('badge-kite');
-            if (data.kite_authorized) {
-                kiteBadge.className = 'badge badge-auth-ok';
-                kiteBadge.textContent = '🟢 ZERODHA: AUTHORIZED';
-            } else {
-                kiteBadge.className = 'badge badge-auth-bad';
-                kiteBadge.textContent = '🔴 ZERODHA: NOT AUTHORIZED';
-            }
-
-            // Angel Feed Badge
-            const angelBadge = document.getElementById('badge-angel');
-            if (data.angel_connected) {
-                angelBadge.className = 'badge badge-auth-ok';
-                angelBadge.textContent = '🟢 ANGEL: FEED OK';
-            } else {
-                angelBadge.className = 'badge badge-auth-bad';
-                angelBadge.textContent = '🔴 ANGEL: DISCONNECTED';
-            }
-
-            // Session State Badge
-            document.getElementById('badge-session').textContent = 'SESSION: ' + (data.session ? data.session.state : '--');
-            
-            // Pause button state
-            const btnPause = document.getElementById('btn-pause');
-            if (data.is_paused) {
-                btnPause.textContent = '▶️ Resume Strategy';
-                btnPause.className = 'btn btn-success';
-            } else {
-                btnPause.textContent = '⏸️ Pause Strategy';
-                btnPause.className = 'btn btn-warning';
-            }
-
-            // Dynamic Alerts Banner
-            const alertsContainer = document.getElementById('alerts-container');
-            let alertsHtml = '';
-            if (!data.kite_authorized) {
-                alertsHtml += `
-                    <div class="alert-banner">
-                        <div>
-                            <strong>⚠️ ZERODHA SESSION NOT AUTHORIZED OR EXPIRED</strong>: 
-                            Live order execution is locked. Click <strong>[🔑 Login Zerodha]</strong> to authenticate, then paste the redirect URL into the box above and click <strong>[⚡ Activate Token]</strong>.
-                        </div>
-                    </div>
-                `;
-            }
-            if (data.is_paused) {
-                alertsHtml += `
-                    <div class="alert-banner warning">
-                        <div>
-                            <strong>⏸️ STRATEGY EXECUTION PAUSED</strong>: 
-                            ${data.pause_reason || 'Manual Operator Pause'}. Existing positions remain monitored. Click <strong>[▶️ Resume Strategy]</strong> to resume new entry evaluations.
-                        </div>
-                    </div>
-                `;
-            }
-            alertsContainer.innerHTML = alertsHtml;
-
-            // Margins
-            if (data.margins) {
-                document.getElementById('margin-avail').textContent = '₹' + (data.margins.available || 0).toLocaleString('en-IN', {minimumFractionDigits: 2});
-                document.getElementById('margin-used').textContent = '₹' + (data.margins.used || 0).toLocaleString('en-IN', {minimumFractionDigits: 2});
-                document.getElementById('margin-net').textContent = '₹' + (data.margins.net || 0).toLocaleString('en-IN', {minimumFractionDigits: 2});
-            }
-
-            // P&L & Trades
-            if (data.pnl) {
-                const pnlNetEl = document.getElementById('pnl-net');
-                const netVal = data.pnl.net || 0;
-                pnlNetEl.textContent = (netVal >= 0 ? '+₹' : '-₹') + Math.abs(netVal).toLocaleString('en-IN', {minimumFractionDigits: 2});
-                pnlNetEl.className = 'value ' + (netVal > 0 ? 'text-success' : (netVal < 0 ? 'text-danger' : ''));
-
-                const pnlUnrealEl = document.getElementById('pnl-unrealized');
-                const unVal = data.pnl.unrealized || 0;
-                pnlUnrealEl.textContent = (unVal >= 0 ? '+₹' : '-₹') + Math.abs(unVal).toLocaleString('en-IN', {minimumFractionDigits: 2});
-                pnlUnrealEl.className = 'value ' + (unVal > 0 ? 'text-success' : (unVal < 0 ? 'text-danger' : 'text-muted'));
-
-                document.getElementById('pnl-charges').textContent = '₹' + (data.pnl.charges || 0).toLocaleString('en-IN', {minimumFractionDigits: 2});
-                document.getElementById('pnl-trades').textContent = (data.pnl.trade_count || 0).toString();
-            }
-
-            // Market Regime
-            if (data.regime) {
-                const rState = document.getElementById('regime-status');
-                rState.textContent = data.regime.state || '--';
-                rState.className = 'value ' + (data.regime.state === 'BULLISH' ? 'text-success' : (data.regime.state === 'BEARISH' ? 'text-danger' : 'text-warning'));
-                document.getElementById('regime-adx').textContent = data.regime.adx ? data.regime.adx.toFixed(1) : '--';
-                document.getElementById('regime-slope').textContent = data.regime.ema_slope > 0 ? 'Rising ↗' : (data.regime.ema_slope < 0 ? 'Falling ↘' : 'Flat →');
-                document.getElementById('regime-desc').textContent = data.regime.reason || '';
-            }
-
-            // Watchlist
-            const wlDiv = document.getElementById('watchlist-display');
-            if (data.watchlist && data.watchlist.length > 0) {
-                document.getElementById('watchlist-count').textContent = data.watchlist.length;
-                wlDiv.innerHTML = data.watchlist.map(s => `<span class="tag">${s}</span>`).join(' ');
-            } else {
-                document.getElementById('watchlist-count').textContent = '0';
-                wlDiv.innerHTML = '<span class="text-muted">No symbols configured</span>';
-            }
-
-            // Decisions
-            const dTbody = document.getElementById('decisions-tbody');
-            if (data.decisions && data.decisions.length > 0) {
-                dTbody.innerHTML = data.decisions.map(d => `
-                    <tr>
-                        <td><strong>${d.symbol}</strong></td>
-                        <td><span class="badge ${d.decision === 'WAIT' ? 'badge-neutral' : (d.decision === 'EXIT' ? 'badge-danger' : 'badge-success')}">${d.decision}</span></td>
-                        <td class="text-sm">${d.reason}</td>
-                        <td><code>${d.action}</code></td>
-                    </tr>
-                `).join('');
-            } else {
-                dTbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No active evaluation</td></tr>';
-            }
-
-            // Positions
-            const pTbody = document.getElementById('positions-tbody');
-            if (data.open_positions && data.open_positions.length > 0) {
-                pTbody.innerHTML = data.open_positions.map(p => `
-                    <tr>
-                        <td><strong>${p.symbol}</strong></td>
-                        <td><span class="badge ${p.side === 'BUY' ? 'badge-success' : 'badge-danger'}">${p.side}</span></td>
-                        <td>${p.quantity}</td>
-                        <td>₹${p.average_entry.toFixed(2)}</td>
-                        <td><strong class="text-warning">₹${p.current_stop.toFixed(2)}</strong></td>
-                        <td>₹${p.best_favorable_price.toFixed(2)}</td>
-                        <td><strong>+${p.r_multiple}R</strong></td>
-                        <td>${p.trail_activated ? '<span class="text-success">Active 🎯</span>' : '<span class="text-muted">Waiting +1R</span>'}</td>
-                        <td>${p.modification_count}/25</td>
-                    </tr>
-                `).join('');
-            } else {
-                pTbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">No open positions (Book is Flat)</td></tr>';
-            }
-
-            // Tradebook & Orders
-            const oTbody = document.getElementById('orders-tbody');
-            const allOrders = (data.live_orders && data.live_orders.length > 0) ? data.live_orders : (data.journal_orders || []);
-            if (allOrders.length > 0) {
-                oTbody.innerHTML = allOrders.map(o => {
-                    const statusClass = 
-                        o.status === 'COMPLETE' ? 'status-complete' :
-                        (o.status === 'REJECTED' ? 'status-rejected' :
-                        (o.status === 'CANCELLED' ? 'status-cancelled' :
-                        (o.status === 'OPEN' ? 'status-open' : 'status-pending')));
-                    const sideClass = (o.side === 'BUY') ? 'side-buy' : 'side-sell';
-                    const pxDisplay = (o.order_type === 'MARKET') ? 'MARKET' : ('₹' + parseFloat(o.price || 0).toFixed(2));
-                    const avgPxDisplay = (o.average_price && o.average_price > 0) ? (' / ₹' + parseFloat(o.average_price).toFixed(2)) : '';
-                    return `
-                        <tr>
-                            <td class="text-muted text-sm">${o.updated_at || '--'}</td>
-                            <td><code>${o.order_id}</code></td>
-                            <td><strong>${o.symbol}</strong></td>
-                            <td class="${sideClass}">${o.side}</td>
-                            <td><span class="tag">${o.order_type}</span></td>
-                            <td>${o.filled_quantity || 0} / ${o.quantity || 0}</td>
-                            <td>${pxDisplay}${avgPxDisplay}</td>
-                            <td><span class="status-pill ${statusClass}">${o.status}</span></td>
-                            <td class="text-sm text-muted">${o.status_message || o.source || '--'}</td>
-                        </tr>
-                    `;
-                }).join('');
-            } else {
-                oTbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">No orders placed today</td></tr>';
-            }
-
-            // Recent Events Journal
-            const eDiv = document.getElementById('events-log');
-            if (data.recent_events && data.recent_events.length > 0) {
-                eDiv.innerHTML = data.recent_events.map(e => `
-                    <div class="log-entry">
-                        <span class="text-muted">[${e.timestamp_ist.split('T')[1].split('.')[0]}]</span>
-                        <strong>${e.event_type}</strong> ${e.symbol ? `(${e.symbol})` : ''} - ${e.explanation}
-                    </div>
-                `).join('');
-            }
-        }
-
-        function connectRealtimeStream() {
-            if (evtSource) {
-                evtSource.close();
-                evtSource = null;
-            }
-            if (typeof EventSource !== "undefined") {
-                const streamUrl = '/api/stream?token=' + encodeURIComponent(OPERATOR_TOKEN);
-                evtSource = new EventSource(streamUrl);
-
-                evtSource.onopen = function() {
-                    console.log("Real-time SSE stream connected.");
-                    updateStreamingBadge(true);
-                    if (pollFallbackTimer) {
-                        clearInterval(pollFallbackTimer);
-                        pollFallbackTimer = null;
-                    }
-                };
-
-                evtSource.onmessage = function(event) {
-                    try {
-                        const data = JSON.parse(event.data);
-                        renderDashboard(data);
-                    } catch (err) {
-                        console.error("Error parsing stream event", err);
-                    }
-                };
-
-                evtSource.onerror = function(err) {
-                    console.warn("Real-time stream disconnected, falling back to polling", err);
-                    updateStreamingBadge(false);
-                    if (evtSource) {
-                        evtSource.close();
-                        evtSource = null;
-                    }
-                    if (!pollFallbackTimer) {
-                        pollFallbackTimer = setInterval(fetchStatus, 2000);
-                    }
-                    setTimeout(connectRealtimeStream, 5000);
-                };
-            } else {
-                if (!pollFallbackTimer) {
-                    pollFallbackTimer = setInterval(fetchStatus, 2000);
-                }
-            }
-        }
-
-        async function fetchStatus() {
-            try {
-                const res = await fetch('/api/status', {
-                    headers: { 'X-Operator-Token': OPERATOR_TOKEN }
-                });
-
-                if (res.status === 401) {
-                    document.getElementById('alerts-container').innerHTML = `
-                        <div class="alert-banner">
-                            <span>🔒 <strong>OPERATOR UNAUTHORIZED</strong>: Dashboard API token missing or mismatched.
-                            <button onclick="setOperatorToken()" style="margin-left:8px;padding:2px 8px;cursor:pointer;border-radius:4px;border:1px solid #ff4444;background:#1e1e1e;color:#fff;">Enter operator token</button></span>
-                        </div>
-                    `;
-                    return;
-                }
-
-                const data = await res.json();
-                renderDashboard(data);
-            } catch (err) {
-                console.error("Fetch status failed", err);
-            }
-        }
-
-        function submitRedirectToken() {
-            const raw = (document.getElementById('input-request-token').value || '').trim();
-            if (!raw) {
-                alert("Paste the redirected URL (containing request_token=...) or the request_token itself.");
-                return;
-            }
-            let reqToken = raw;
-            if (raw.includes("request_token=")) {
-                const match = raw.match(/[?&]request_token=([^&#\s]+)/);
-                if (match && match[1]) {
-                    reqToken = match[1];
-                }
-            }
-            window.location.href = "/auth/callback?request_token=" + encodeURIComponent(reqToken);
-        }
-
-        async function testVmOrder() {
-            const sym = prompt("Enter stock symbol to test order placement on Zerodha (or leave empty for default 'IDEA'):", "IDEA");
-            if (sym === null) return;
-            const targetSym = (sym.trim().toUpperCase() || "IDEA");
-
-            const btn = document.getElementById('btn-test-order');
-            if (btn) btn.innerText = "⏳ Placing on Zerodha...";
-            try {
-                const res = await fetch('/api/test_order', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Operator-Token': OPERATOR_TOKEN
-                    },
-                    body: JSON.stringify({ symbol: targetSym })
-                });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    alert(`✅ VM ORDER TEST SUCCESS!\n\nOrder ID: ${data.order_id}\nSymbol: ${data.placed_symbol} @ ₹${data.placed_price}\nVariety: ${data.placed_variety}\nCancellation: ${data.cancel_attempt}\nOrder Book Status: ${data.orderbook_status}\nExecuted By: ${data.origin}`);
-                } else {
-                    alert(`❌ VM Order Test Failed: ${data.message}`);
-                }
-                fetchStatus();
-            } catch (err) {
-                alert(`Error executing test order: ${err}`);
-            } finally {
-                if (btn) btn.innerText = "🧪 Test Order on VM";
-            }
-        }
-
-        async function togglePause() {
-            await fetch('/api/pause', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Operator-Token': OPERATOR_TOKEN
-                },
-                body: JSON.stringify({})
-            });
-            fetchStatus();
-        }
-
-        async function emergencyFlatten() {
-            if (confirm("CONFIRM EMERGENCY FLATTEN: This will cancel all strategy orders and market exit all strategy MIS positions immediately.")) {
-                const res = await fetch('/api/emergency_flatten', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Operator-Token': OPERATOR_TOKEN
-                    }
-                });
-                const data = await res.json();
-                alert(data.message);
-                fetchStatus();
-            }
-        }
-
-        async function saveWatchlist() {
-            const val = document.getElementById('input-symbols').value;
-            const symbols = val.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
-            if (symbols.length === 0) return alert("Please enter at least 1 symbol");
-            if (symbols.length > 3) return alert("APEX-3 allows maximum 3 symbols in custom watchlist");
-
-            await fetch('/api/watchlist', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Operator-Token': OPERATOR_TOKEN
-                },
-                body: JSON.stringify({symbols: symbols})
-            });
-            document.getElementById('input-symbols').value = '';
-            fetchStatus();
-        }
-
-        // Initialize Real-time SSE Stream & Initial Status Fetch
-        fetchStatus();
-        connectRealtimeStream();
+    <script>
+
+        let OPERATOR_TOKEN = "{{ operator_token }}" || localStorage.getItem('apex3_operator_token') || sessionStorage.getItem('apex3_operator_token') || "apex3_operator_live_2026";
+
+
+
+        if (OPERATOR_TOKEN) {
+
+            localStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
+
+            sessionStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
+
+            document.cookie = "apex3_auth=" + encodeURIComponent(OPERATOR_TOKEN) + "; path=/; max-age=2592000; SameSite=Lax";
+
+        }
+
+
+
+        let evtSource = null;
+
+        let pollFallbackTimer = null;
+
+
+
+        function updateStreamingBadge(isLive) {
+
+            const badge = document.getElementById('badge-stream');
+
+            if (!badge) return;
+
+            if (isLive) {
+
+                badge.className = 'badge badge-stream-live';
+
+                badge.innerHTML = '⚡ LIVE STREAMING (1s)';
+
+            } else {
+
+                badge.className = 'badge badge-stream-poll';
+
+                badge.innerHTML = '🔄 POLLING (FALLBACK)';
+
+            }
+
+        }
+
+
+
+        function setOperatorToken() {
+
+            const t = prompt('Enter the operator token (DASHBOARD_API_TOKEN from VM .env):', OPERATOR_TOKEN);
+
+            if (t && t.trim()) {
+
+                OPERATOR_TOKEN = t.trim();
+
+                localStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
+
+                sessionStorage.setItem('apex3_operator_token', OPERATOR_TOKEN);
+
+                document.cookie = "apex3_auth=" + encodeURIComponent(OPERATOR_TOKEN) + "; path=/; max-age=2592000; SameSite=Lax";
+
+                document.getElementById('alerts-container').innerHTML = '';
+
+                connectRealtimeStream();
+
+                fetchStatus();
+
+            }
+
+        }
+
+
+
+        function renderDashboard(data) {
+
+            if (!data) return;
+
+
+
+            // Clock & Badges
+
+            document.getElementById('badge-clock').textContent = data.timestamp_ist || '--:--:-- IST';
+
+            
+
+            // Mode Badge
+
+            const modeBadge = document.getElementById('badge-mode');
+
+            if (data.mode === 'LIVE') {
+
+                modeBadge.className = 'badge badge-live-pulse';
+
+                modeBadge.innerHTML = '● LIVE TRADING';
+
+            } else {
+
+                modeBadge.className = 'badge badge-paper';
+
+                modeBadge.textContent = 'MODE: PAPER';
+
+            }
+
+
+
+            // Strategy Status Badge
+
+            const statusBadge = document.getElementById('badge-status');
+
+            if (data.is_paused) {
+
+                statusBadge.className = 'badge badge-paused';
+
+                statusBadge.textContent = '⏸️ PAUSED';
+
+            } else {
+
+                statusBadge.className = 'badge badge-active';
+
+                statusBadge.textContent = '🟢 ACTIVE';
+
+            }
+
+
+
+            // Kite Authorization Badge
+
+            const kiteBadge = document.getElementById('badge-kite');
+
+            if (data.kite_authorized) {
+
+                kiteBadge.className = 'badge badge-auth-ok';
+
+                kiteBadge.textContent = '🟢 ZERODHA: AUTHORIZED';
+
+            } else {
+
+                kiteBadge.className = 'badge badge-auth-bad';
+
+                kiteBadge.textContent = '🔴 ZERODHA: NOT AUTHORIZED';
+
+            }
+
+
+
+            // Angel Feed Badge
+
+            const angelBadge = document.getElementById('badge-angel');
+
+            if (data.angel_connected) {
+
+                angelBadge.className = 'badge badge-auth-ok';
+
+                angelBadge.textContent = '🟢 ANGEL: FEED OK';
+
+            } else {
+
+                angelBadge.className = 'badge badge-auth-bad';
+
+                angelBadge.textContent = '🔴 ANGEL: DISCONNECTED';
+
+            }
+
+
+
+            // Session State Badge
+
+            document.getElementById('badge-session').textContent = 'SESSION: ' + (data.session ? data.session.state : '--');
+
+            
+
+            // Pause button state
+
+            const btnPause = document.getElementById('btn-pause');
+
+            if (data.is_paused) {
+
+                btnPause.textContent = '▶️ Resume Strategy';
+
+                btnPause.className = 'btn btn-success';
+
+            } else {
+
+                btnPause.textContent = '⏸️ Pause Strategy';
+
+                btnPause.className = 'btn btn-warning';
+
+            }
+
+
+
+            // Dynamic Alerts Banner
+
+            const alertsContainer = document.getElementById('alerts-container');
+
+            let alertsHtml = '';
+
+            if (!data.kite_authorized) {
+
+                alertsHtml += `
+
+                    <div class="alert-banner">
+
+                        <div>
+
+                            <strong>⚠️ ZERODHA SESSION NOT AUTHORIZED OR EXPIRED</strong>: 
+
+                            Live order execution is locked. Click <strong>[🔑 Login Zerodha]</strong> to authenticate, then paste the redirect URL into the box above and click <strong>[⚡ Activate Token]</strong>.
+
+                        </div>
+
+                    </div>
+
+                `;
+
+            }
+
+            if (data.is_paused) {
+
+                alertsHtml += `
+
+                    <div class="alert-banner warning">
+
+                        <div>
+
+                            <strong>⏸️ STRATEGY EXECUTION PAUSED</strong>: 
+
+                            ${data.pause_reason || 'Manual Operator Pause'}. Existing positions remain monitored. Click <strong>[▶️ Resume Strategy]</strong> to resume new entry evaluations.
+
+                        </div>
+
+                    </div>
+
+                `;
+
+            }
+
+            alertsContainer.innerHTML = alertsHtml;
+
+
+
+            // Margins
+
+            if (data.margins) {
+
+                document.getElementById('margin-avail').textContent = '₹' + (data.margins.available || 0).toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+                document.getElementById('margin-used').textContent = '₹' + (data.margins.used || 0).toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+                document.getElementById('margin-net').textContent = '₹' + (data.margins.net || 0).toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+            }
+
+
+
+            // P&L & Trades
+
+            if (data.pnl) {
+
+                const pnlNetEl = document.getElementById('pnl-net');
+
+                const netVal = data.pnl.net || 0;
+
+                pnlNetEl.textContent = (netVal >= 0 ? '+₹' : '-₹') + Math.abs(netVal).toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+                pnlNetEl.className = 'value ' + (netVal > 0 ? 'text-success' : (netVal < 0 ? 'text-danger' : ''));
+
+
+
+                const pnlUnrealEl = document.getElementById('pnl-unrealized');
+
+                const unVal = data.pnl.unrealized || 0;
+
+                pnlUnrealEl.textContent = (unVal >= 0 ? '+₹' : '-₹') + Math.abs(unVal).toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+                pnlUnrealEl.className = 'value ' + (unVal > 0 ? 'text-success' : (unVal < 0 ? 'text-danger' : 'text-muted'));
+
+
+
+                document.getElementById('pnl-charges').textContent = '₹' + (data.pnl.charges || 0).toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+                document.getElementById('pnl-trades').textContent = (data.pnl.trade_count || 0).toString();
+
+            }
+
+
+
+            // Market Regime
+
+            if (data.regime) {
+
+                const rState = document.getElementById('regime-status');
+
+                rState.textContent = data.regime.state || '--';
+
+                rState.className = 'value ' + (data.regime.state === 'BULLISH' ? 'text-success' : (data.regime.state === 'BEARISH' ? 'text-danger' : 'text-warning'));
+
+                document.getElementById('regime-adx').textContent = data.regime.adx ? data.regime.adx.toFixed(1) : '--';
+
+                document.getElementById('regime-slope').textContent = data.regime.ema_slope > 0 ? 'Rising ↗' : (data.regime.ema_slope < 0 ? 'Falling ↘' : 'Flat →');
+
+                document.getElementById('regime-desc').textContent = data.regime.reason || '';
+
+            }
+
+
+
+            // Watchlist
+
+            const wlDiv = document.getElementById('watchlist-display');
+
+            if (data.watchlist && data.watchlist.length > 0) {
+
+                document.getElementById('watchlist-count').textContent = data.watchlist.length;
+
+                wlDiv.innerHTML = data.watchlist.map(s => `<span class="tag">${s}</span>`).join(' ');
+
+            } else {
+
+                document.getElementById('watchlist-count').textContent = '0';
+
+                wlDiv.innerHTML = '<span class="text-muted">No symbols configured</span>';
+
+            }
+
+
+
+            // Decisions
+
+            const dTbody = document.getElementById('decisions-tbody');
+
+            if (data.decisions && data.decisions.length > 0) {
+
+                dTbody.innerHTML = data.decisions.map(d => `
+
+                    <tr>
+
+                        <td><strong>${d.symbol}</strong></td>
+
+                        <td><span class="badge ${d.decision === 'WAIT' ? 'badge-neutral' : (d.decision === 'EXIT' ? 'badge-danger' : 'badge-success')}">${d.decision}</span></td>
+
+                        <td class="text-sm">${d.reason}</td>
+
+                        <td><code>${d.action}</code></td>
+
+                    </tr>
+
+                `).join('');
+
+            } else {
+
+                dTbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No active evaluation</td></tr>';
+
+            }
+
+
+
+            // Positions
+
+            const pTbody = document.getElementById('positions-tbody');
+
+            if (data.open_positions && data.open_positions.length > 0) {
+
+                pTbody.innerHTML = data.open_positions.map(p => `
+
+                    <tr>
+
+                        <td><strong>${p.symbol}</strong></td>
+
+                        <td><span class="badge ${p.side === 'BUY' ? 'badge-success' : 'badge-danger'}">${p.side}</span></td>
+
+                        <td>${p.quantity}</td>
+
+                        <td>₹${p.average_entry.toFixed(2)}</td>
+
+                        <td><strong class="text-warning">₹${p.current_stop.toFixed(2)}</strong></td>
+
+                        <td>₹${p.best_favorable_price.toFixed(2)}</td>
+
+                        <td><strong>+${p.r_multiple}R</strong></td>
+
+                        <td>${p.trail_activated ? '<span class="text-success">Active 🎯</span>' : '<span class="text-muted">Waiting +1R</span>'}</td>
+
+                        <td>${p.modification_count}/25</td>
+
+                    </tr>
+
+                `).join('');
+
+            } else {
+
+                pTbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">No open positions (Book is Flat)</td></tr>';
+
+            }
+
+
+
+            // Tradebook & Orders
+
+            const oTbody = document.getElementById('orders-tbody');
+
+            const allOrders = (data.live_orders && data.live_orders.length > 0) ? data.live_orders : (data.journal_orders || []);
+
+            if (allOrders.length > 0) {
+
+                oTbody.innerHTML = allOrders.map(o => {
+
+                    const statusClass = 
+
+                        o.status === 'COMPLETE' ? 'status-complete' :
+
+                        (o.status === 'REJECTED' ? 'status-rejected' :
+
+                        (o.status === 'CANCELLED' ? 'status-cancelled' :
+
+                        (o.status === 'OPEN' ? 'status-open' : 'status-pending')));
+
+                    const sideClass = (o.side === 'BUY') ? 'side-buy' : 'side-sell';
+
+                    const pxDisplay = (o.order_type === 'MARKET') ? 'MARKET' : ('₹' + parseFloat(o.price || 0).toFixed(2));
+
+                    const avgPxDisplay = (o.average_price && o.average_price > 0) ? (' / ₹' + parseFloat(o.average_price).toFixed(2)) : '';
+
+                    return `
+
+                        <tr>
+
+                            <td class="text-muted text-sm">${o.updated_at || '--'}</td>
+
+                            <td><code>${o.order_id}</code></td>
+
+                            <td><strong>${o.symbol}</strong></td>
+
+                            <td class="${sideClass}">${o.side}</td>
+
+                            <td><span class="tag">${o.order_type}</span></td>
+
+                            <td>${o.filled_quantity || 0} / ${o.quantity || 0}</td>
+
+                            <td>${pxDisplay}${avgPxDisplay}</td>
+
+                            <td><span class="status-pill ${statusClass}">${o.status}</span></td>
+
+                            <td class="text-sm text-muted">${o.status_message || o.source || '--'}</td>
+
+                        </tr>
+
+                    `;
+
+                }).join('');
+
+            } else {
+
+                oTbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">No orders placed today</td></tr>';
+
+            }
+
+
+
+            // Recent Events Journal
+
+            const eDiv = document.getElementById('events-log');
+
+            if (data.recent_events && data.recent_events.length > 0) {
+
+                eDiv.innerHTML = data.recent_events.map(e => `
+
+                    <div class="log-entry">
+
+                        <span class="text-muted">[${e.timestamp_ist.split('T')[1].split('.')[0]}]</span>
+
+                        <strong>${e.event_type}</strong> ${e.symbol ? `(${e.symbol})` : ''} - ${e.explanation}
+
+                    </div>
+
+                `).join('');
+
+            }
+
+        }
+
+
+
+        function connectRealtimeStream() {
+
+            if (evtSource) {
+
+                evtSource.close();
+
+                evtSource = null;
+
+            }
+
+            if (typeof EventSource !== "undefined") {
+
+                const streamUrl = '/api/stream?token=' + encodeURIComponent(OPERATOR_TOKEN);
+
+                evtSource = new EventSource(streamUrl);
+
+
+
+                evtSource.onopen = function() {
+
+                    console.log("Real-time SSE stream connected.");
+
+                    updateStreamingBadge(true);
+
+                    if (pollFallbackTimer) {
+
+                        clearInterval(pollFallbackTimer);
+
+                        pollFallbackTimer = null;
+
+                    }
+
+                };
+
+
+
+                evtSource.onmessage = function(event) {
+
+                    try {
+
+                        const data = JSON.parse(event.data);
+
+                        renderDashboard(data);
+
+                    } catch (err) {
+
+                        console.error("Error parsing stream event", err);
+
+                    }
+
+                };
+
+
+
+                evtSource.onerror = function(err) {
+
+                    console.warn("Real-time stream disconnected, falling back to polling", err);
+
+                    updateStreamingBadge(false);
+
+                    if (evtSource) {
+
+                        evtSource.close();
+
+                        evtSource = null;
+
+                    }
+
+                    if (!pollFallbackTimer) {
+
+                        pollFallbackTimer = setInterval(fetchStatus, 2000);
+
+                    }
+
+                    setTimeout(connectRealtimeStream, 5000);
+
+                };
+
+            } else {
+
+                if (!pollFallbackTimer) {
+
+                    pollFallbackTimer = setInterval(fetchStatus, 2000);
+
+                }
+
+            }
+
+        }
+
+
+
+        async function fetchStatus() {
+
+            try {
+
+                const res = await fetch('/api/status', {
+
+                    headers: { 'X-Operator-Token': OPERATOR_TOKEN }
+
+                });
+
+
+
+                if (res.status === 401) {
+
+                    document.getElementById('alerts-container').innerHTML = `
+
+                        <div class="alert-banner">
+
+                            <span>🔒 <strong>OPERATOR UNAUTHORIZED</strong>: Dashboard API token missing or mismatched.
+
+                            <button onclick="setOperatorToken()" style="margin-left:8px;padding:2px 8px;cursor:pointer;border-radius:4px;border:1px solid #ff4444;background:#1e1e1e;color:#fff;">Enter operator token</button></span>
+
+                        </div>
+
+                    `;
+
+                    return;
+
+                }
+
+
+
+                const data = await res.json();
+
+                renderDashboard(data);
+
+            } catch (err) {
+
+                console.error("Fetch status failed", err);
+
+            }
+
+        }
+
+
+
+        function submitRedirectToken() {
+
+            const raw = (document.getElementById('input-request-token').value || '').trim();
+
+            if (!raw) {
+
+                alert("Paste the redirected URL (containing request_token=...) or the request_token itself.");
+
+                return;
+
+            }
+
+            let reqToken = raw;
+
+            if (raw.includes("request_token=")) {
+
+                const match = raw.match(/[?&]request_token=([^&#\s]+)/);
+
+                if (match && match[1]) {
+
+                    reqToken = match[1];
+
+                }
+
+            }
+
+            window.location.href = "/auth/callback?request_token=" + encodeURIComponent(reqToken);
+
+        }
+
+
+
+        async function testVmOrder() {
+
+            const sym = prompt("Enter stock symbol to test order placement on Zerodha (Leave empty for 'IDEA'):\n(Dynamically fetches live circuits, places passive LIMIT order, and cancels it immediately)", "IDEA");
+
+            if (sym === null) return;
+
+            const targetSym = (sym.trim().toUpperCase() || "IDEA");
+
+
+
+            const btn = document.getElementById('btn-test-order');
+
+            if (btn) btn.innerText = "⏳ Placing on Zerodha...";
+
+            try {
+
+                const res = await fetch('/api/test_order', {
+
+                    method: 'POST',
+
+                    headers: {
+
+                        'Content-Type': 'application/json',
+
+                        'X-Operator-Token': OPERATOR_TOKEN
+
+                    },
+
+                    body: JSON.stringify({ symbol: targetSym })
+
+                });
+
+                const data = await res.json();
+
+                if (data.status === 'success') {
+
+                    alert(`✅ VM ORDER TEST SUCCESS!\n\nOrder ID: ${data.order_id}\nSymbol: ${data.placed_symbol} @ ₹${data.placed_price}\nVariety: ${data.placed_variety}\nCancellation: ${data.cancel_attempt}\nOrder Book Status: ${data.orderbook_status}\nExecuted By: ${data.origin}`);
+
+                } else {
+
+                    alert(`❌ VM Order Test Failed: ${data.message}`);
+
+                }
+
+                fetchStatus();
+
+            } catch (err) {
+
+                alert(`Error executing test order: ${err}`);
+
+            } finally {
+
+                if (btn) btn.innerText = "🧪 Test Order on VM";
+
+            }
+
+        }
+
+
+
+        async function togglePause() {
+
+            await fetch('/api/pause', {
+
+                method: 'POST',
+
+                headers: {
+
+                    'Content-Type': 'application/json',
+
+                    'X-Operator-Token': OPERATOR_TOKEN
+
+                },
+
+                body: JSON.stringify({})
+
+            });
+
+            fetchStatus();
+
+        }
+
+
+
+        async function emergencyFlatten() {
+
+            if (confirm("CONFIRM EMERGENCY FLATTEN: This will cancel all strategy orders and market exit all strategy MIS positions immediately.")) {
+
+                const res = await fetch('/api/emergency_flatten', {
+
+                    method: 'POST',
+
+                    headers: {
+
+                        'Content-Type': 'application/json',
+
+                        'X-Operator-Token': OPERATOR_TOKEN
+
+                    }
+
+                });
+
+                const data = await res.json();
+
+                alert(data.message);
+
+                fetchStatus();
+
+            }
+
+        }
+
+
+
+        async function saveWatchlist() {
+
+            const val = document.getElementById('input-symbols').value;
+
+            const symbols = val.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+
+            if (symbols.length === 0) return alert("Please enter at least 1 symbol");
+
+            if (symbols.length > 3) return alert("APEX-3 allows maximum 3 symbols in custom watchlist");
+
+
+
+            await fetch('/api/watchlist', {
+
+                method: 'POST',
+
+                headers: {
+
+                    'Content-Type': 'application/json',
+
+                    'X-Operator-Token': OPERATOR_TOKEN
+
+                },
+
+                body: JSON.stringify({symbols: symbols})
+
+            });
+
+            document.getElementById('input-symbols').value = '';
+
+            fetchStatus();
+
+        }
+
+
+
+        // Initialize Real-time SSE Stream & Initial Status Fetch
+
+        fetchStatus();
+
+        connectRealtimeStream();
+
     </script>
 </body>
 </html>

@@ -33,6 +33,7 @@ class OrderType(Enum):
 
 class OrderVariety(Enum):
     REGULAR = "regular"
+    AMO = "amo"
 
 
 class OrderStatus(Enum):
@@ -134,6 +135,7 @@ class OrderRequest:
     trigger_price: float = 0.0
     tag: str = ""  # APEX-3 session tag, max 20 chars
     strategy_id: str = ""
+    variety: Optional[str] = None
 
 
 def make_broker_tag(session_tag: str, symbol: str = "", suffix: str = "") -> str:

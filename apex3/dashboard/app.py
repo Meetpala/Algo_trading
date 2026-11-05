@@ -717,18 +717,32 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         else:
             inst = None
             quote = None
+            tick = 0.05
+            low_c = 0.0
+            up_c = 0.0
+            ltp = 0.0
+
+            # 1. Fetch live quote first so data provider populates circuit limits
+            try:
+                quote = engine.broker.get_quote(symbol)
+                if quote and quote.last_price > 0:
+                    ltp = quote.last_price
+            except Exception as qe:
+                logger.debug("Failed getting live quote for test order %s: %s", symbol, qe)
+
+            # 2. Fetch instrument info with verified circuit bounds
             try:
                 inst = engine.broker.get_instrument_info(symbol)
-                quote = engine.broker.get_quote(symbol)
-            except Exception:
-                pass
+                if inst:
+                    tick = float(inst.tick_size if inst.tick_size > 0 else 0.05)
+                    if inst.lower_circuit > 0:
+                        low_c = float(inst.lower_circuit)
+                    if inst.upper_circuit > 0:
+                        up_c = float(inst.upper_circuit)
+            except Exception as ie:
+                logger.debug("Failed getting inst info for test order %s: %s", symbol, ie)
 
-            tick = float(getattr(inst, "tick_size", 0.05) or 0.05)
-            low_c = float(getattr(inst, "lower_circuit", 0.0) or 0.0)
-            up_c = float(getattr(inst, "upper_circuit", 0.0) or 0.0)
-            ltp = float(getattr(quote, "last_price", 0.0) or 0.0)
-
-            # Query Kite directly for real-time exchange circuit limits and LTP
+            # 3. Query Kite directly for real-time exchange circuit limits and LTP if permitted
             if kite:
                 try:
                     kq = kite.quote([f"NSE:{symbol}"]).get(f"NSE:{symbol}", {})
@@ -737,33 +751,57 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                             low_c = float(kq["lower_circuit_limit"])
                         if kq.get("upper_circuit_limit"):
                             up_c = float(kq["upper_circuit_limit"])
-                        if kq.get("last_price"):
+                        if kq.get("last_price") and ltp <= 0:
                             ltp = float(kq["last_price"])
                 except Exception:
                     pass
 
             from apex3.strategy.trail import round_to_tick
             if low_c > 0:
-                # Set price strictly at lower circuit boundary (+ 1 tick) to guarantee zero fill risk
+                # Set price strictly at lower circuit boundary (+ 1 tick) to guarantee legal exchange band and zero fill risk
                 test_price = round_to_tick(low_c + tick, tick_size=tick)
+                if test_price <= low_c:
+                    test_price = round_to_tick(low_c + (2 * tick), tick_size=tick)
             elif ltp > 0:
-                test_price = round_to_tick(ltp * 0.95, tick_size=tick)
+                # Safely 1% below LTP (well within any NSE circuit band which is >= 2%)
+                test_price = round_to_tick(ltp * 0.99, tick_size=tick)
             else:
-                test_price = 11.70 if symbol == "IDEA" else 100.0
+                test_price = 12.60 if symbol == "IDEA" else 100.0
 
         try:
             import time
-            order_id = kite.place_order(
-                variety=variety,
-                exchange="NSE",
-                tradingsymbol=symbol,
-                transaction_type="BUY",
-                quantity=quantity,
-                product=product,
-                order_type="LIMIT",
-                price=test_price,
-                tag=tag,
-            )
+            try:
+                order_id = kite.place_order(
+                    variety=variety,
+                    exchange="NSE",
+                    tradingsymbol=symbol,
+                    transaction_type="BUY",
+                    quantity=quantity,
+                    product=product,
+                    order_type="LIMIT",
+                    price=test_price,
+                    tag=tag,
+                )
+            except Exception as place_err:
+                err_msg = str(place_err).lower()
+                # If rejected due to market hours / AMO timing mismatch, auto-retry with opposite variety
+                if "after market order" in err_msg or "cannot be converted" in err_msg or "amo" in err_msg or "regular" in err_msg:
+                    fallback_variety = "regular" if variety == "amo" else "amo"
+                    logger.warning("Test order with variety='%s' failed (%s); retrying with '%s'", variety, place_err, fallback_variety)
+                    order_id = kite.place_order(
+                        variety=fallback_variety,
+                        exchange="NSE",
+                        tradingsymbol=symbol,
+                        transaction_type="BUY",
+                        quantity=quantity,
+                        product=product,
+                        order_type="LIMIT",
+                        price=test_price,
+                        tag=tag,
+                    )
+                    variety = fallback_variety
+                else:
+                    raise
 
             time.sleep(1)
             cancel_result = "UNKNOWN"
@@ -771,7 +809,16 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
                 kite.cancel_order(variety=variety, order_id=order_id)
                 cancel_result = "CANCELLED"
             except Exception as cancel_err:
-                cancel_result = f"CANCEL_ERROR: {cancel_err}"
+                err_c = str(cancel_err).lower()
+                if "variety" in err_c or "amo" in err_c or "regular" in err_c:
+                    alt_variety = "regular" if variety == "amo" else "amo"
+                    try:
+                        kite.cancel_order(variety=alt_variety, order_id=order_id)
+                        cancel_result = "CANCELLED"
+                    except Exception as c2:
+                        cancel_result = f"CANCEL_ERROR: {c2}"
+                else:
+                    cancel_result = f"CANCEL_ERROR: {cancel_err}"
 
             order_status = "UNKNOWN"
             try:
