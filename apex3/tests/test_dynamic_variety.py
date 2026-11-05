@@ -76,3 +76,4 @@ def test_kite_adapter_order_placement_retry_on_variety_mismatch():
         second_kwargs = mock_kite.place_order.call_args_list[1][1]
         assert second_kwargs["variety"] == "amo"
         assert adapter._order_variety_cache["261106000001"] == "amo"
+
