@@ -48,7 +48,7 @@ signal_gates:
   min_volume_surge_ratio: 2.0         # Gate 5: >= 2.0x institutional volume confirmation
   max_spread_bps: 4.0                 # Gate 6: Tightened from 8 bps to 4 bps for zero-slippage fills
   min_circuit_distance_pct: 0.020     # Gate 7: >= 2.0% away from upper/lower circuit
-  min_stop_distance_pct: 0.0055       # Stop-width floor: Minimum R = 0.55% (eliminates fee compression)
+  min_stop_distance_pct: 0.0045       # Stop-width floor: Minimum R = 0.45% (calibrated for liquid large-caps)
   max_stop_distance_pct: 0.0090       # Stop-width ceiling: Maximum R = 0.90%
   max_adr_consumed_pct: 0.60          # Gate 9C: Reject if stock already moved > 60% of baseline ADR
   min_adr_baseline: 0.025             # 2.5% minimum ADR baseline prevents choking on morning opening noise
@@ -74,8 +74,8 @@ stops_and_targets:
 
 radar:
   core_conviction_multiplier: 1.35    # Tier 1 priority boost in conviction ranking
-  probation_volume_surge_ratio: 2.5   # Stricter volume surge for non-core stocks (>= 2.5x vs 2.0x)
-  probation_min_clv_ratio: 0.75       # Stricter CLV for non-core stocks (>= 0.75 vs 0.70)
+  probation_volume_surge_ratio: 2.2   # Stricter volume surge for non-core stocks (>= 2.2x vs 2.0x)
+  probation_min_clv_ratio: 0.72       # Stricter CLV for non-core stocks (>= 0.72 vs 0.70)
   # Tier 1: Audited Institutional Trend Leaders (Max Profitability & Low Friction)
   core_watchlist:
     - "HINDALCO"
@@ -85,14 +85,18 @@ radar:
     - "TCS"
     - "TRENT"
 
-  # Tier 2: Top audited net-positive stocks discovered from 31-stock screening
+  # Tier 2: Top audited net-positive stocks discovered from comprehensive 58-stock screening
   enable_extended_radar: true
   extended_radar:
     - "BHARTIARTL"
+    - "BAJAJFINSV"
+    - "HEROMOTOCO"
+    - "EICHERMOT"
+    - "HDFCLIFE"
+    - "INDUSINDBK"
     - "JIOFIN"
     - "TATASTEEL"
     - "AXISBANK"
-    - "TATAPOWER"
 
   # Tier 3: Optional Custom List (Disabled by default)
   custom_user_radar: []

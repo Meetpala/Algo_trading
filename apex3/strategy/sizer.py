@@ -278,30 +278,33 @@ def size_position(
     effective_leverage = min(limits_config.max_leverage, broker_leverage)
 
     # 3. Equal Notional Allocation across max_symbols slots (e.g. 2 slots = ₹28,500 each)
+    mult = max(1, int(getattr(instrument, "lot_multiplier", 1) or 1))
     n = max(1, limits_config.max_symbols)
     per_symbol_budget = (usable_margin * effective_leverage) / n
 
-    # Q_notional = floor(B / E)
-    q_notional = math.floor(per_symbol_budget / entry_price)
+    # Q_notional = floor(B / (E * mult))
+    unit_notional = entry_price * mult
+    q_notional = math.floor(per_symbol_budget / unit_notional) if unit_notional > 0 else 0
 
     # 4. Risk per share and Q_risk
     # C = per-share allowance for charges and slippage
     slippage_cost = entry_price * (risk_config.slippage_allowance_pct / 100.0)
     per_share_loss = abs(entry_price - stop_price)
     per_share_risk = per_share_loss + slippage_cost
+    per_lot_risk = per_share_risk * mult
 
     # RISK = Rupee risk budget for this trade
     equity_base = margin_info.net_value if margin_info.net_value > 0 else margin_info.equity_available
     trade_risk_rupees = equity_base * (risk_config.risk_per_trade_pct / 100.0)
 
-    q_risk = math.floor(trade_risk_rupees / per_share_risk) if per_share_risk > 0 else 0
+    q_risk = math.floor(trade_risk_rupees / per_lot_risk) if per_lot_risk > 0 else 0
 
     # 5. Margin Quantity Limit
     # Q_margin based on exact order margin per share if known
     q_margin = q_notional
     if order_margin_estimate is not None and order_margin_estimate.required_margin > 0:
         # Margin per share
-        margin_per_share = entry_price / effective_leverage
+        margin_per_share = unit_notional / effective_leverage
         if margin_per_share > 0:
             q_margin = math.floor(usable_margin / margin_per_share)
 
@@ -315,8 +318,8 @@ def size_position(
     # Hard Risk Bound: Ensure total realized loss at stop-loss (including Zerodha statutory friction) <= trade_risk_rupees
     if q_final > 0 and getattr(risk_config, "bound_loss_with_charges", True):
         while q_final > 0:
-            stop_exit_charges = calculate_zerodha_intraday_charges(entry_price, stop_price, q_final)
-            total_realized_loss = (q_final * per_share_risk) + stop_exit_charges
+            stop_exit_charges = calculate_zerodha_intraday_charges(entry_price, stop_price, q_final * mult)
+            total_realized_loss = (q_final * per_lot_risk) + stop_exit_charges
             if total_realized_loss <= trade_risk_rupees:
                 break
             q_final -= lot_size
@@ -380,9 +383,9 @@ def size_position(
             rejection_reason=f"Charges consume > 18% of expected 2.0R gross profit ({est_charges/expected_gross_win*100:.1f}%)",
         )
 
-    notional_value = q_final * entry_price
-    stop_exit_charges = calculate_zerodha_intraday_charges(entry_price, stop_price, q_final)
-    actual_trade_risk = (q_final * per_share_risk) + stop_exit_charges
+    notional_value = q_final * mult * entry_price
+    stop_exit_charges = calculate_zerodha_intraday_charges(entry_price, stop_price, q_final * mult)
+    actual_trade_risk = (q_final * per_lot_risk) + stop_exit_charges
 
     return SizingResult(
         symbol=symbol,

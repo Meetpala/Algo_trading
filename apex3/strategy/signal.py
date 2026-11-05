@@ -922,13 +922,21 @@ def validate_late_start_signal(
             )
 
     drift_pct = abs(ltp - signal_price) / signal_price if signal_price > 0 else 0.0
-    if drift_pct > max_price_drift_pct + 1e-9:
+    r_distance = abs(signal_price - initial_stop) if initial_stop > 0 else 0.0
+    max_drift_r = 0.35 * r_distance if r_distance > 0 else 0.0
+
+    if side == Side.BUY:
+        drift_valid = (ltp <= signal_price + max_drift_r) or (drift_pct <= max_price_drift_pct + 1e-9)
+    else:
+        drift_valid = (ltp >= signal_price - max_drift_r) or (drift_pct <= max_price_drift_pct + 1e-9)
+
+    if not drift_valid:
         return LateStartValidityResult(
             is_valid=False,
             reason_code="LATE_START_PRICE_DRIFT_EXCEEDED",
             explanation=(
                 f"Setup for {symbol} skipped: live price {ltp:.2f} drifted {drift_pct*100:.2f}% from trigger "
-                f"{signal_price:.2f} (max allowed {max_price_drift_pct*100:.2f}%)"
+                f"{signal_price:.2f} (exceeds max 0.35R buffer {max_drift_r:.2f} and {max_price_drift_pct*100:.2f}%)"
             ),
             drift_pct=drift_pct,
         )
@@ -936,7 +944,7 @@ def validate_late_start_signal(
     return LateStartValidityResult(
         is_valid=True,
         reason_code="LATE_START_SIGNAL_VALID",
-        explanation=f"Setup for {symbol} validated (drift {drift_pct*100:.2f}% <= {max_price_drift_pct*100:.2f}%, stop & target intact)",
+        explanation=f"Setup for {symbol} validated (drift {drift_pct*100:.2f}%, within 0.35R buffer, stop & target intact)",
         drift_pct=drift_pct,
     )
 

@@ -128,7 +128,8 @@ class StrategyEngine:
         self._current_session_date: Optional[date] = None
         self._flatten_completed: bool = False
         self._last_entry_bar_timestamp: Optional[datetime] = None
-        self._execution_lock = threading.Lock()
+        self._execution_lock = threading.RLock()
+        self._startup_backfill_date: Optional[date] = None
         self.last_decisions: list[StrategyDecision] = []
 
         # Opening ranges cache: symbol -> OpeningRange
@@ -447,6 +448,14 @@ class StrategyEngine:
                     explanation=f"Market closed: {session_state.name}",
                 )
             ]
+
+        # Automatic Late-Start Startup Reconciliation & Candle Backfill on First Cycle of Session
+        if self._startup_backfill_date != session_date and session_state != SessionState.PRE_OPEN:
+            self._startup_backfill_date = session_date
+            try:
+                self.reconcile_and_backfill_late_start(now)
+            except Exception as bfe:
+                logger.warning("First-cycle late-start backfill warning: %s", bfe)
 
         # -------------------------------------------------------------
         # STEP 12 (Priority): End of Day / Flatten Window (Tracked One-Shot)
@@ -1900,6 +1909,7 @@ class StrategyEngine:
                 if sig.decision == Decision.WAIT and now_ist_time >= time(9, 40):
                     comp_c = [c for c in stock_candles if c.is_complete] or stock_candles
                     if len(comp_c) >= 2:
+                        last_invalid_decision = None
                         for idx in range(len(comp_c) - 2, -1, -1):
                             cand_bar = comp_c[idx]
                             cand_ts = self._ensure_ist(cand_bar.timestamp)
@@ -1971,20 +1981,22 @@ class StrategyEngine:
                                     max_price_drift_pct=slip_pct,
                                 )
                                 if late_val.is_valid:
-                                    sig = catchup_sig
                                     eval_candles = sub_stock
+                                    live_px = float(quote.last_price) if quote and getattr(quote, "last_price", 0.0) > 0 else catchup_sig.signal_price
+                                    sig = replace(catchup_sig, signal_price=live_px)
+                                    last_invalid_decision = None
+                                    break
                                 else:
-                                    decisions.append(
-                                        StrategyDecision(
-                                            decision=Decision.WAIT,
-                                            symbol=sym,
-                                            side=c_side,
-                                            timestamp_ist=now,
-                                            reason_codes=[late_val.reason_code, "STALE_SIGNAL_SKIPPED"],
-                                            explanation=late_val.explanation,
-                                        )
+                                    last_invalid_decision = StrategyDecision(
+                                        decision=Decision.WAIT,
+                                        symbol=sym,
+                                        side=c_side,
+                                        timestamp_ist=now,
+                                        reason_codes=[late_val.reason_code, "STALE_SIGNAL_SKIPPED"],
+                                        explanation=late_val.explanation,
                                     )
-                                break
+                        if last_invalid_decision is not None and sig.decision not in (Decision.PROPOSED_LONG, Decision.PROPOSED_SHORT):
+                            decisions.append(last_invalid_decision)
 
             evaluated_signals[sym] = (sig, inst, eval_candles, quote)
             if sig.decision in (Decision.PROPOSED_LONG, Decision.PROPOSED_SHORT):

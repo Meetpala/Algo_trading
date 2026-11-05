@@ -47,14 +47,15 @@ def calculate_position_risk(position: PositionState) -> float:
     if position.quantity <= 0 or position.protective_stop_price <= 0:
         return 0.0
 
+    mult = max(1, int(getattr(position, "lot_multiplier", 1) or 1))
     if position.side.value == "BUY":
         if position.protective_stop_price >= position.average_entry:
             return 0.0  # Stop has locked profit / break-even
-        return position.quantity * (position.average_entry - position.protective_stop_price)
+        return position.quantity * mult * (position.average_entry - position.protective_stop_price)
     else:  # SELL
         if position.protective_stop_price <= position.average_entry:
             return 0.0  # Short stop locked profit / break-even
-        return position.quantity * (position.protective_stop_price - position.average_entry)
+        return position.quantity * mult * (position.protective_stop_price - position.average_entry)
 
 
 def evaluate_portfolio_risk(

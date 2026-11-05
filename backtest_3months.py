@@ -458,10 +458,13 @@ def run_fast_backtest(
     starting_capital: float = 15000.0,
     session_dates: list = None,
     execution_spread_bps: float = 4.0,
+    min_stop_distance_pct: float = None,
 ) -> dict:
     """Replay completed-bar signals with conservative next-bar execution."""
     config = load_config()
     cutoff_time = entry_cutoff_time if entry_cutoff_time is not None else time(12, 30)
+    min_stop_dist = min_stop_distance_pct if min_stop_distance_pct is not None else float(config.raw_dict.get("signal_gates", {}).get("min_stop_distance_pct", 0.0045))
+    max_stop_dist = float(config.raw_dict.get("signal_gates", {}).get("max_stop_distance_pct", 0.0090))
 
     nifty_candles = data['NSEI']['candles']
     nifty_df = data['NSEI']['df']
@@ -580,7 +583,7 @@ def run_fast_backtest(
                             cfg=config.raw_dict,
                         )
                         stop_pct = levels.risk_pct
-                        if 0.0055 <= stop_pct <= 0.0090:
+                        if min_stop_dist <= stop_pct <= max_stop_dist:
                             target_price = calculate_target_price(
                                 side=side,
                                 entry_price=entry_price,
