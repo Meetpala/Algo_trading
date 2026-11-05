@@ -728,13 +728,28 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             up_c = float(getattr(inst, "upper_circuit", 0.0) or 0.0)
             ltp = float(getattr(quote, "last_price", 0.0) or 0.0)
 
+            # Query Kite directly for real-time exchange circuit limits and LTP
+            if kite:
+                try:
+                    kq = kite.quote([f"NSE:{symbol}"]).get(f"NSE:{symbol}", {})
+                    if kq:
+                        if kq.get("lower_circuit_limit"):
+                            low_c = float(kq["lower_circuit_limit"])
+                        if kq.get("upper_circuit_limit"):
+                            up_c = float(kq["upper_circuit_limit"])
+                        if kq.get("last_price"):
+                            ltp = float(kq["last_price"])
+                except Exception:
+                    pass
+
             from apex3.strategy.trail import round_to_tick
-            if low_c > 0 and up_c > 0:
-                test_price = round_to_tick(low_c + (2 * tick), tick_size=tick)
+            if low_c > 0:
+                # Set price strictly at lower circuit boundary (+ 1 tick) to guarantee zero fill risk
+                test_price = round_to_tick(low_c + tick, tick_size=tick)
             elif ltp > 0:
                 test_price = round_to_tick(ltp * 0.95, tick_size=tick)
             else:
-                test_price = 11.10 if symbol == "IDEA" else 100.0
+                test_price = 11.70 if symbol == "IDEA" else 100.0
 
         try:
             import time

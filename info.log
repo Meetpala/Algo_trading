@@ -6,7 +6,7 @@ Start Date    : 2026-10-29
 Starting Funds: Rs. 15,000.00
 Current Equity: Rs. 15,222.88
 Total Net P&L : +Rs. 222.88 (+1.49%)
-Win Rate      : 100.0% (1 Win / 0 Losses / 4 Flat Sessions)
+Win Rate      : 100.0% (1 Win / 0 Losses / 5 Flat Sessions)
 ================================================================================
 
 SUMMARY TRADEBOOK TABLE
@@ -18,6 +18,7 @@ Date       | Symbol     | Side | Qty | Entry Price | Exit Price | Net P&L     | 
 2026-11-02 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 2026-11-03 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 2026-11-04 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-05 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 --------------------------------------------------------------------------------
 TOTALS     | 1 Trade    |      |     |             |            | +Rs. 222.88 | Equity: Rs. 15,222.88
 ================================================================================
@@ -107,6 +108,7 @@ Session Net PnL : Rs. 0.00
 Account Equity  : Rs. 15,222.88
 Status          : FLAT — CAPITAL PRESERVED
 ================================================================================
+
 ================================================================================
 [2026-11-04] SESSION TRADEBOOK
 [RECORD_ID: APEX3-SESSION-20261104]
@@ -130,3 +132,28 @@ Account Equity  : Rs. 15,222.88
 Status          : FLAT — CAPITAL PRESERVED
 ================================================================================
 
+================================================================================
+[2026-11-05] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261105]
+--------------------------------------------------------------------------------
+Date            : 2026-11-05 (Thursday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : NIFTY 50 strongly Bullish (88.9%); 9 institutional gates filtered
+                  all breakout attempts, saving capital from top traps & fakeouts.
+Audit Details   :
+  - System State: Fully live on GCP (Angel One feed OK, Zerodha authorized)
+  - Broad Market: NIFTY 50 +0.65% (88.9% Bullish bars in 09:35-12:30 entry window)
+  - Gate 1 (OR Width > 1.05%): MARUTI (2.17%), TRENT (2.11%), AXISBANK (1.37%), BHARTIARTL (1.27%)
+  - Gate 3 (Counter-Trend Short in Bullish Market): RELIANCE, TATAPOWER, TATASTEEL
+  - Gate 5 (Weak Volume < 2.0x): JSWSTEEL (0.56x), TCS (1.85x), JIOFIN (1.91x)
+  - Coiled Inside OR: HINDALCO (0 breakouts)
+  - Outcome: JSWSTEEL & TCS reversed back below OR High by close (saved from losses)
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED (SAVED FROM TRAPS)
+================================================================================
