@@ -297,9 +297,11 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             try:
                 engine.is_halted = False
                 engine.halt_reason = ""
-                if getattr(engine, "pause_reason", "") == "BROKER_SESSION_INVALID":
-                    engine.is_paused = False
-                    engine.pause_reason = ""
+                engine.is_paused = False
+                engine.pause_reason = ""
+                engine._startup_backfill_date = None
+                if hasattr(engine, "_late_start_catchup_done"):
+                    engine._late_start_catchup_done.clear()
                 engine.reconcile_and_backfill_late_start()
             except Exception:
                 pass
@@ -385,9 +387,11 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
             try:
                 engine.is_halted = False
                 engine.halt_reason = ""
-                if getattr(engine, "pause_reason", "") == "BROKER_SESSION_INVALID":
-                    engine.is_paused = False
-                    engine.pause_reason = ""
+                engine.is_paused = False
+                engine.pause_reason = ""
+                engine._startup_backfill_date = None
+                if hasattr(engine, "_late_start_catchup_done"):
+                    engine._late_start_catchup_done.clear()
                 engine.reconcile_and_backfill_late_start()
             except Exception:
                 pass
@@ -663,6 +667,13 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         if not engine.is_paused:
             engine._daily_loss_halt_date = None
             setattr(engine, "_consecutive_pnl_failures", 0)
+            engine._startup_backfill_date = None
+            if hasattr(engine, "_late_start_catchup_done"):
+                engine._late_start_catchup_done.clear()
+            try:
+                engine.reconcile_and_backfill_late_start()
+            except Exception:
+                pass
         return jsonify({"status": "success", "is_paused": engine.is_paused})
 
     @app.route("/api/emergency_flatten", methods=["POST"])

@@ -1,11 +1,15 @@
-"""Unit tests for dynamic order variety and live circuit limit validation."""
+"""Unit tests for dynamic order variety, live circuit limit validation, 20-stock radar tokens, and late-start cloud activation."""
 import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
+from apex3.broker.angel_data_provider import DEFAULT_ANGEL_TOKENS
 from apex3.broker.kite_adapter import KiteAdapter, is_nse_market_hours
+from apex3.config import load_config
+from apex3.journal.sqlite_journal import Journal
 from apex3.models import OrderRequest, OrderType, Product, Side
+from apex3.strategy.engine import StrategyEngine, build_active_radar
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -77,3 +81,36 @@ def test_kite_adapter_order_placement_retry_on_variety_mismatch():
         assert second_kwargs["variety"] == "amo"
         assert adapter._order_variety_cache["261106000001"] == "amo"
 
+
+def test_all_20_radar_stocks_have_angel_tokens():
+    cfg = load_config()
+    radar = build_active_radar(cfg.raw_dict)
+    assert len(radar) == 20
+    for sym in radar:
+        tok = DEFAULT_ANGEL_TOKENS.get(sym, "")
+        assert tok != "", f"Missing Angel One NSE token for radar stock: {sym}"
+
+
+def test_late_start_cloud_login_at_0950_does_not_lock_startup_backfill_early(tmp_path):
+    """When Cloud VM runs at 09:20 while token is expired or paused, _startup_backfill_date must not lock until active at 09:50."""
+    cfg = load_config()
+    mock_broker = MagicMock()
+    mock_broker.is_session_valid.return_value = False
+    journal = Journal(db_path=str(tmp_path / "test_late_0950.db"))
+    engine = StrategyEngine(config=cfg, broker=mock_broker, journal=journal)
+
+    # 1. At 09:20 IST, broker session is invalid -> _startup_backfill_date must NOT be locked
+    t_0920 = datetime(2026, 11, 18, 9, 20, tzinfo=IST)
+    with patch.object(engine, "reconcile_and_backfill_late_start") as mock_backfill:
+        decs = engine.evaluate_step(t_0920)
+        assert any("BROKER_SESSION_INVALID" in d.reason_codes for d in decs)
+        assert engine._startup_backfill_date is None
+
+    # 2. At 09:50 IST, operator logs in & unpauses -> _startup_backfill_date locks and backfill runs!
+    mock_broker.is_session_valid.return_value = True
+    engine.is_paused = False
+    t_0950 = datetime(2026, 11, 18, 9, 50, tzinfo=IST)
+    with patch.object(engine, "reconcile_and_backfill_late_start") as mock_backfill:
+        engine.evaluate_step(t_0950)
+        assert mock_backfill.called
+        assert engine._startup_backfill_date == t_0950.date()

@@ -69,6 +69,14 @@ DEFAULT_ANGEL_TOKENS: dict[str, str] = {
     "LT": "11483",
     "BAJFINANCE": "317",
     "HINDUNILVR": "1394",
+    "ADANIENT": "25",
+    "ULTRACEMCO": "11532",
+    "SHRIRAMFIN": "4306",
+    "VEDL": "3063",
+    "CHOLAFIN": "685",
+    "BAJAJ-AUTO": "16669",
+    "NESTLEIND": "17963",
+    "ONGC": "2475",
 }
 
 

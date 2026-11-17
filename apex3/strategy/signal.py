@@ -415,10 +415,11 @@ def evaluate_signal(
     cushion = cushion_mult * atr14
     bar_range = max(latest_bar.high - latest_bar.low, 0.05)
 
-    # 4A. Opening Range Width Cap (max 1.05%)
+    # 4A. Opening Range Width Cap (default max 1.05%)
+    max_or_w = float(getattr(config, "max_or_width_pct", 0.0105))
     if opening_range.low > 0:
         or_width_pct = (opening_range.high - opening_range.low) / opening_range.low
-        if or_width_pct > 0.0105:
+        if or_width_pct > max_or_w:
             gates.append(
                 GateResult(
                     name="OR_WIDTH",
@@ -986,10 +987,11 @@ def evaluate_candidate_signal(
     else:
         return None
 
-    # Gate 9A: Opening Range Width Cap (1.05%)
+    # Gate 9A: Opening Range Width Cap (default 1.05%)
+    max_or_w = float(gates.get("max_or_width_pct", 0.0105))
     if bar.or_low > 0:
         or_width_pct = (bar.or_high - bar.or_low) / bar.or_low
-        if or_width_pct > 0.0105:
+        if or_width_pct > max_or_w:
             return None
 
     # Gate 9B: Minimum Volatility Floor (ATR14 / Price >= min_atr_pct)
@@ -1011,7 +1013,7 @@ def evaluate_candidate_signal(
     core_wl = radar_cfg.get("core_watchlist", [])
     is_core = (bar.symbol in core_wl)
     cushion_mult = float(gates.get("min_breakout_cushion_atr", 0.15))
-    min_clv = float(gates.get("min_clv_ratio", 0.70)) if is_core else float(gates.get("probation_min_clv_ratio", 0.75))
+    min_clv = float(gates.get("min_clv_ratio", 0.70)) if is_core else float(radar_cfg.get("probation_min_clv_ratio", gates.get("probation_min_clv_ratio", 0.75)))
     cushion = cushion_mult * bar.atr14
 
     rel_strength = bar.stock_return_20 - bar.nifty_return_20
@@ -1030,7 +1032,7 @@ def evaluate_candidate_signal(
     if bar.avg_volume_20 <= 0:
         return None
     vol_ratio = bar.bar_volume / bar.avg_volume_20
-    min_vol = float(gates.get("min_volume_surge_ratio", 2.0)) if is_core else float(gates.get("probation_volume_surge_ratio", 2.5))
+    min_vol = float(gates.get("min_volume_surge_ratio", 2.0)) if is_core else float(radar_cfg.get("probation_volume_surge_ratio", gates.get("probation_volume_surge_ratio", 2.5)))
     if vol_ratio < min_vol:
         return None
 

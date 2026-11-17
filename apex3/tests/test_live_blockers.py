@@ -2373,7 +2373,7 @@ def test_radar_15_stocks_have_angel_tokens():
 
     cfg = load_config()
     radar = build_active_radar(cfg.raw_dict)
-    assert len(radar) == 15
+    assert len(radar) >= 15
     for sym in radar:
         token = DEFAULT_ANGEL_TOKENS.get(sym)
         assert token is not None and token != "", f"Missing Angel token for active radar stock: {sym}"

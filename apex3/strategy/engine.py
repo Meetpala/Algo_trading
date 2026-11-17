@@ -451,7 +451,8 @@ class StrategyEngine:
 
         # Automatic Late-Start Startup Reconciliation & Candle Backfill on First Cycle of Session
         if self._startup_backfill_date != session_date and session_state != SessionState.PRE_OPEN:
-            self._startup_backfill_date = session_date
+            if self.broker.is_session_valid() and not self.is_paused:
+                self._startup_backfill_date = session_date
             try:
                 self.reconcile_and_backfill_late_start(now)
             except Exception as bfe:

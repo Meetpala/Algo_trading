@@ -144,6 +144,9 @@ class SignalConfig:
     min_clv_ratio: float = 0.70
     min_atr_pct: float = 0.0022
     max_quote_age_sec: float = 15.0
+    max_or_width_pct: float = 0.0105
+    probation_volume_surge_ratio: float = 2.2
+    probation_min_clv_ratio: float = 0.72
 
 
 @dataclass(frozen=True)
