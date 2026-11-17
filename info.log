@@ -6,7 +6,7 @@ Start Date    : 2026-10-29
 Starting Funds: Rs. 15,000.00
 Current Equity: Rs. 15,222.88
 Total Net P&L : +Rs. 222.88 (+1.49%)
-Win Rate      : 100.0% (1 Win / 0 Losses / 5 Flat Sessions)
+Win Rate      : 100.0% (1 Win / 0 Losses / 12 Flat Sessions + 1 Special Session)
 ================================================================================
 
 SUMMARY TRADEBOOK TABLE
@@ -19,6 +19,14 @@ Date       | Symbol     | Side | Qty | Entry Price | Exit Price | Net P&L     | 
 2026-11-03 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 2026-11-04 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 2026-11-05 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-06 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-08 | --         | --   |  0  | --          | --         |  Rs.   0.00 | MUHURAT (Blocked)
+2026-11-09 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-11 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-12 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-13 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-16 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-17 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 --------------------------------------------------------------------------------
 TOTALS     | 1 Trade    |      |     |             |            | +Rs. 222.88 | Equity: Rs. 15,222.88
 ================================================================================
@@ -156,4 +164,186 @@ Net Realized P&L: Rs. 0.00
 Session Net PnL : Rs. 0.00
 Account Equity  : Rs. 15,222.88
 Status          : FLAT — CAPITAL PRESERVED (SAVED FROM TRAPS)
+================================================================================
+
+================================================================================
+[2026-11-06] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261106]
+--------------------------------------------------------------------------------
+Date            : 2026-11-06 (Friday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : High morning gap volatility widened Opening Ranges across 12/15
+                  radar stocks; remaining 3 candidates filtered by institutional gates.
+Audit Details   :
+  - Broad Market: NIFTY 50 +2.01% (Open 24,538.20 -> Close 25,030.35, 73 bars)
+  - Gate 1 (OR Width > 1.05%): 12/15 stocks disqualified (HINDALCO 4.16%, TCS 1.95%,
+    MARUTI 1.57%, JSWSTEEL 1.53%, TRENT 1.44%, etc.)
+  - Valid OR Pool: 3 stocks evaluated; none passed all 9 gates (volume/CLV/stop width)
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED
+================================================================================
+
+================================================================================
+[2026-11-08] SESSION TRADEBOOK (SPECIAL SESSION)
+[RECORD_ID: APEX3-SESSION-20261108]
+--------------------------------------------------------------------------------
+Date            : 2026-11-08 (Sunday — Muhurat Trading)
+Trades Taken    : 0 trades
+Execution Result: SPECIAL SESSION BLOCKED BY SCHEDULER
+Filter Reason   : Truncated 1-hour Muhurat Trading session (14:20-15:25 IST, 12 bars);
+                  entries strictly prohibited by SPECIAL_SESSION guard in schedule.py.
+Audit Details   :
+  - Broad Market: NIFTY 50 -0.34% (Open 25,070.45 -> Close 24,986.40)
+  - Scheduler Guard: SPECIAL_SESSION active (zero risk during thin holiday liquidity)
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — SPECIAL SESSION GUARD ACTIVE
+================================================================================
+
+================================================================================
+[2026-11-09] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261109]
+--------------------------------------------------------------------------------
+Date            : 2026-11-09 (Monday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : Choppy/sideways index (-0.13%) with 12/15 radar stocks exceeding
+                  1.05% Opening Range width ceiling; capital preserved.
+Audit Details   :
+  - Broad Market: NIFTY 50 -0.13% (Open 25,076.40 -> Close 25,044.65, 73 bars)
+  - Gate 1 (OR Width > 1.05%): 12/15 stocks disqualified (HINDALCO 3.11%, TCS 2.02%,
+    TRENT 1.75%, MARUTI 1.73%, JSWSTEEL 1.39%, etc.)
+  - Note: 2026-11-10 (Tuesday) was an NSE Exchange Holiday (Diwali-Balipratipada).
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED
+================================================================================
+
+================================================================================
+[2026-11-11] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261111]
+--------------------------------------------------------------------------------
+Date            : 2026-11-11 (Wednesday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : Post-holiday gap fade (-0.33%) with 9/15 radar stocks failing
+                  OR width gate and remaining 6 filtered by volume/regime/stop bounds.
+Audit Details   :
+  - Broad Market: NIFTY 50 -0.33% (Open 25,337.80 -> Close 25,255.05, 73 bars)
+  - Gate 1 (OR Width > 1.05%): 9/15 stocks disqualified (TCS 1.52%, BHARTIARTL 1.38%,
+    HINDALCO 1.32%, MARUTI 1.24%, BAJAJFINSV 1.19%, etc.)
+  - Valid OR Pool: 6 stocks evaluated; 0 setups satisfied all 9 institutional gates
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED
+================================================================================
+
+================================================================================
+[2026-11-12] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261112]
+--------------------------------------------------------------------------------
+Date            : 2026-11-12 (Thursday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : 10/15 radar stocks exceeded 1.05% Opening Range ceiling; remaining
+                  5 candidates did not satisfy volume surge / stop-width criteria.
+Audit Details   :
+  - Broad Market: NIFTY 50 +0.34% (Open 25,213.50 -> Close 25,299.35, 73 bars)
+  - Gate 1 (OR Width > 1.05%): 10/15 stocks disqualified (BAJAJFINSV 2.34%, HINDALCO 1.49%,
+    TCS 1.48%, MARUTI 1.31%, BHARTIARTL 1.29%, etc.)
+  - Valid OR Pool: 5 stocks evaluated; 0 qualifying institutional breakouts
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED
+================================================================================
+
+================================================================================
+[2026-11-13] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261113]
+--------------------------------------------------------------------------------
+Date            : 2026-11-13 (Friday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : Range-bound Friday drift (-0.26%); 6/15 stocks exceeded OR width
+                  and remaining 9 lacked aligned regime + 2.0x volume conviction.
+Audit Details   :
+  - Broad Market: NIFTY 50 -0.26% (Open 25,209.85 -> Close 25,144.30, 73 bars)
+  - Gate 1 (OR Width > 1.05%): 6/15 stocks disqualified (BAJAJFINSV 2.29%, HINDALCO 1.58%,
+    HDFCLIFE 1.34%, EICHERMOT 1.30%, TCS 1.17%, etc.)
+  - Valid OR Pool: 9 stocks evaluated; all breakout probes rejected by quality gates
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED
+================================================================================
+
+================================================================================
+[2026-11-16] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261116]
+--------------------------------------------------------------------------------
+Date            : 2026-11-16 (Monday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : 10/15 radar stocks exceeded 1.05% OR width ceiling; remaining 5
+                  failed volume / CLV / stop-width bounds across the entry window.
+Audit Details   :
+  - Broad Market: NIFTY 50 +0.34% (Open 25,206.15 -> Close 25,291.10, 73 bars)
+  - Gate 1 (OR Width > 1.05%): 10/15 stocks disqualified (HINDALCO 1.84%, TCS 1.66%,
+    BHARTIARTL 1.54%, TRENT 1.44%, MARUTI 1.05%, etc.)
+  - Valid OR Pool: 5 stocks evaluated; 0 setups satisfied all 9 institutional gates
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED
+================================================================================
+
+================================================================================
+[2026-11-17] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261117]
+--------------------------------------------------------------------------------
+Date            : 2026-11-17 (Tuesday)
+Trades Taken    : 0 trades
+Execution Result: NO QUALIFYING BREAKOUTS
+Filter Reason   : 9/15 radar stocks exceeded 1.05% OR width ceiling; remaining 6
+                  lacked concurrent 9-gate institutional breakout confirmation.
+Audit Details   :
+  - Broad Market: NIFTY 50 +0.44% (Open 25,277.30 -> Close 25,387.40, 73 bars)
+  - Gate 1 (OR Width > 1.05%): 9/15 stocks disqualified (HINDALCO 1.92%, MARUTI 1.71%,
+    TCS 1.61%, JSWSTEEL 1.56%, BHARTIARTL 1.25%, etc.)
+  - Valid OR Pool: 6 stocks evaluated; 0 qualifying setups; 100% capital preserved
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED
 ================================================================================

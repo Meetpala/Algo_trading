@@ -640,8 +640,18 @@ class TradeLogger:
         except Exception:
             content = ""
 
+        # Load NSE exchange holidays from config.yaml so closed holiday weekdays are never logged as trading sessions
+        holiday_dates: set[str] = set()
+        try:
+            from apex3.config import load_config
+            cfg = load_config()
+            for h in getattr(cfg.schedule, "holidays", []) or []:
+                holiday_dates.add(str(h).strip())
+        except Exception:
+            pass
+
         # Find latest session/timestamp date already in content so we never append out-of-order past dates
-        existing_dates = re.findall(r"\[(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\s+IST\]", content)
+        existing_dates = re.findall(r"\[(\d{4}-\d{2}-\d{2})(?:\s+\d{2}:\d{2}:\d{2}\s+IST)?\]", content)
         max_existing_date = self.start_date
         for d_str in existing_dates:
             try:
@@ -654,9 +664,9 @@ class TradeLogger:
         reconciled = 0
         curr = max(self.start_date, max_existing_date)
         while curr <= end_date:
-            # Check only weekdays (0=Mon, 4=Fri)
-            if curr.weekday() < 5:
-                date_str = curr.strftime("%Y-%m-%d")
+            # Check only non-holiday weekdays (0=Mon, 4=Fri)
+            date_str = curr.strftime("%Y-%m-%d")
+            if curr.weekday() < 5 and date_str not in holiday_dates:
                 unique_id = f"APEX3-SESSION-{curr.strftime('%Y%m%d')}"
                 # If date has no entry or session in log
                 has_record = (
