@@ -122,7 +122,7 @@ class AngelDataProvider:
         self._token_cache: dict[str, str] = dict(DEFAULT_ANGEL_TOKENS)
         self._circuit_cache: dict[str, tuple[float, float]] = {}
         self._candle_cache: dict[tuple[str, str], tuple[float, int, list[Candle]]] = {}
-        self._candle_cache_ttl: float = 120.0
+        self._candle_cache_ttl: float = 300.0
         self._error_backoff: dict[tuple[str, str], float] = {}
         self._last_reauth_mono: float = 0.0
         self._last_session_check_mono: float = 0.0

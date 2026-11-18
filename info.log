@@ -6,7 +6,7 @@ Start Date    : 2026-10-29
 Starting Funds: Rs. 15,000.00
 Current Equity: Rs. 15,222.88
 Total Net P&L : +Rs. 222.88 (+1.49%)
-Win Rate      : 100.0% (1 Win / 0 Losses / 12 Flat Sessions + 1 Special Session)
+Win Rate      : 100.0% (1 Win / 0 Losses / 13 Flat Sessions + 1 Special Session)
 ================================================================================
 
 SUMMARY TRADEBOOK TABLE
@@ -27,6 +27,7 @@ Date       | Symbol     | Side | Qty | Entry Price | Exit Price | Net P&L     | 
 2026-11-13 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 2026-11-16 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
 2026-11-17 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Filtered)
+2026-11-18 | --         | --   |  0  | --          | --         |  Rs.   0.00 | NO TRADE (Standby)
 --------------------------------------------------------------------------------
 TOTALS     | 1 Trade    |      |     |             |            | +Rs. 222.88 | Equity: Rs. 15,222.88
 ================================================================================
@@ -339,6 +340,28 @@ Audit Details   :
   - Gate 1 (OR Width > 1.05%): 9/15 stocks disqualified (HINDALCO 1.92%, MARUTI 1.71%,
     TCS 1.61%, JSWSTEEL 1.56%, BHARTIARTL 1.25%, etc.)
   - Valid OR Pool: 6 stocks evaluated; 0 qualifying setups; 100% capital preserved
+--------------------------------------------------------------------------------
+Gross P&L       : Rs. 0.00
+Charges & Taxes : Rs. 0.00
+Net Realized P&L: Rs. 0.00
+Session Net PnL : Rs. 0.00
+Account Equity  : Rs. 15,222.88
+Status          : FLAT — CAPITAL PRESERVED
+================================================================================
+
+================================================================================
+[2026-11-18] SESSION TRADEBOOK
+[RECORD_ID: APEX3-SESSION-20261118]
+--------------------------------------------------------------------------------
+Date            : 2026-11-18 (Wednesday)
+Trades Taken    : 0 trades
+Execution Result: NO LIVE EXECUTIONS (STANDBY / CHOPPY SESSION)
+Filter Reason   : NIFTY 50 sideways drift (-0.38%, 25,323.15 -> 25,227.95); cloud
+                  engine in standby awaiting daily Zerodha token refresh; 0 live orders.
+Audit Details   :
+  - Broad Market: NIFTY 50 -0.38% (Open 25,323.15 -> Close 25,227.95, 73 bars)
+  - System State: Upgraded to 20-stock curated multi-regime radar (+14.38% 1Y ROI)
+  - Capital Status: 100% capital preserved (Rs. 15,222.88 equity, zero overnight risk)
 --------------------------------------------------------------------------------
 Gross P&L       : Rs. 0.00
 Charges & Taxes : Rs. 0.00
