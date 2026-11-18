@@ -415,7 +415,7 @@ def evaluate_signal(
     cushion = cushion_mult * atr14
     bar_range = max(latest_bar.high - latest_bar.low, 0.05)
 
-    # 4A. Opening Range Width Cap (default max 1.05%)
+    # 4A. Opening Range Width Cap
     max_or_w = float(getattr(config, "max_or_width_pct", 0.0105))
     if opening_range.low > 0:
         or_width_pct = (opening_range.high - opening_range.low) / opening_range.low
@@ -424,7 +424,7 @@ def evaluate_signal(
                 GateResult(
                     name="OR_WIDTH",
                     status=GateStatus.FAIL,
-                    reason=f"Opening Range width ({or_width_pct*100:.2f}%) exceeds max 1.05%",
+                    reason=f"Opening Range width ({or_width_pct*100:.2f}%) exceeds max {max_or_w*100:.2f}%",
                     data={"or_width_pct": or_width_pct},
                 )
             )
@@ -433,9 +433,9 @@ def evaluate_signal(
                 decision=Decision.WAIT,
                 gates=gates,
                 reason_codes=["OR_WIDTH_EXCEEDED"],
-                explanation=f"Opening Range width {or_width_pct*100:.2f}% > 1.05%",
+                explanation=f"Opening Range width {or_width_pct*100:.2f}% > {max_or_w*100:.2f}%",
             )
-    gates.append(GateResult(name="OR_WIDTH", status=GateStatus.PASS, reason="Opening Range width acceptable (<= 1.05%)"))
+    gates.append(GateResult(name="OR_WIDTH", status=GateStatus.PASS, reason=f"Opening Range width acceptable (<= {max_or_w*100:.2f}%)"))
 
     # 4B. Minimum Volatility Floor (ATR14 / Price >= min_atr_pct)
     min_atr = float(getattr(config, "min_atr_pct", 0.0))
@@ -1062,7 +1062,7 @@ def evaluate_candidate_signal(
         cfg=cfg,
         tick_size=getattr(bar, "tick_size", 0.05) or 0.05,
     )
-    min_r_pct = float(gates.get("min_stop_distance_pct", 0.0045))
+    min_r_pct = float(gates.get("min_stop_distance_pct", 0.0055))
     max_r_pct = float(gates.get("max_stop_distance_pct", 0.0090))
     if not (min_r_pct <= levels.risk_pct <= max_r_pct):
         return None

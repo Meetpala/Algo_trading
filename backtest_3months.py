@@ -463,7 +463,7 @@ def run_fast_backtest(
     """Replay completed-bar signals with conservative next-bar execution."""
     config = load_config()
     cutoff_time = entry_cutoff_time if entry_cutoff_time is not None else time(12, 30)
-    min_stop_dist = min_stop_distance_pct if min_stop_distance_pct is not None else float(getattr(config.signal, "min_stop_distance_pct", 0.0045))
+    min_stop_dist = min_stop_distance_pct if min_stop_distance_pct is not None else float(getattr(config.signal, "min_stop_distance_pct", 0.0055))
     max_stop_dist = float(getattr(config.signal, "max_stop_distance_pct", 0.0090))
 
     nifty_candles = data['NSEI']['candles']
@@ -592,20 +592,17 @@ def run_fast_backtest(
                                 tick_size=0.05,
                             )
                             r_dist = abs(entry_price - levels.initial_stop)
-                            qty = min(
-                                math.floor(risk_cap / r_dist),
-                                math.floor(slot_budget / entry_price),
+                            qty = size_backtest_quantity(
+                                entry_price=entry_price,
+                                stop_price=levels.initial_stop,
+                                side=side,
+                                slot_budget=slot_budget,
+                                risk_cap=risk_cap,
+                                target_r=target_r,
+                                costs=config.costs,
+                                spread_bps=0.0,
+                                tick_size=0.05,
                             )
-                            if qty > 0:
-                                expected_2r_profit = 2.0 * r_dist * qty
-                                est_charges = calculate_charges(
-                                    entry_price if side == Side.BUY else target_price,
-                                    target_price if side == Side.BUY else entry_price,
-                                    qty,
-                                    config.costs,
-                                )['total_charges']
-                                if expected_2r_profit > 0 and (est_charges / expected_2r_profit) > 0.18:
-                                    qty = 0
 
                             if qty > 0:
                                 open_positions[sym] = {

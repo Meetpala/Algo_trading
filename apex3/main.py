@@ -80,6 +80,56 @@ def release_instance_lock() -> None:
         _LOCK_HANDLE = None
 
 
+def resolve_operating_mode(
+    config,
+    cli_mode: Optional[str] = None,
+    env_mode: Optional[str] = None,
+    simulate: bool = False,
+) -> str:
+    """Resolve and validate the effective operating mode explicitly (fail-closed).
+
+    Rules:
+    1. If both `cli_mode` and `env_mode` (APEX3_MODE) are explicitly set and disagree,
+       fail closed immediately with ValueError.
+    2. Explicit `cli_mode` or `env_mode` overrides `config.mode`, otherwise `config.mode`
+       is used (defaulting to 'paper').
+    3. If effective mode is 'live' (and not `simulate`), ALL three live compliance/safety gates
+       (`live_trading_enabled`, `static_ip_configured`, `sebi_compliance_acknowledged`)
+       must be True; otherwise fail closed with PermissionError.
+    """
+    raw_cli = cli_mode.strip().lower() if cli_mode and cli_mode.strip() else None
+    if env_mode is not None:
+        raw_env = env_mode.strip().lower() or None
+    else:
+        raw_env = os.environ.get("APEX3_MODE", "").strip().lower() or None
+    raw_cfg = str(getattr(config, "mode", "paper") or "paper").strip().lower()
+
+    if raw_cli and raw_env and raw_cli != raw_env:
+        raise ValueError(
+            f"FAIL_CLOSED: Conflicting run modes between CLI (--mode {raw_cli}) "
+            f"and environment (APEX3_MODE={raw_env})."
+        )
+
+    effective = raw_cli or raw_env or raw_cfg
+    if effective not in ("paper", "live"):
+        raise ValueError(f"FAIL_CLOSED: Invalid operating mode '{effective}'; must be 'paper' or 'live'.")
+
+    if effective == "live" and not simulate:
+        missing_gates = []
+        if not getattr(config.secrets, "live_trading_enabled", False):
+            missing_gates.append("LIVE_TRADING_ENABLED=true")
+        if not getattr(config.secrets, "static_ip_configured", False):
+            missing_gates.append("STATIC_IP_CONFIGURED=true")
+        if not getattr(config.secrets, "sebi_compliance_acknowledged", False):
+            missing_gates.append("SEBI_COMPLIANCE_ACKNOWLEDGED=true")
+        if missing_gates:
+            raise PermissionError(
+                f"FAIL_CLOSED: Live mode blocked; missing required safety gate(s) in .env: {', '.join(missing_gates)}"
+            )
+
+    return effective
+
+
 def run_app():
     parser = argparse.ArgumentParser(description="APEX-3 Zerodha Intraday System")
     parser.add_argument("--config", type=str, default=None, help="Path to custom config.yaml")
@@ -91,8 +141,15 @@ def run_app():
     args = parser.parse_args()
 
     config = load_config(args.config)
-    if args.mode:
-        config.mode = args.mode
+    try:
+        config.mode = resolve_operating_mode(
+            config,
+            cli_mode=args.mode,
+            simulate=bool(getattr(args, "simulate", False)),
+        )
+    except (ValueError, PermissionError) as exc:
+        logger.critical("%s", exc)
+        sys.exit(1)
     logger.info("Initializing APEX-3 version 0.1.0 (Mode: %s)...", config.mode.upper())
     notifier = AlertNotifier()
 

@@ -246,15 +246,13 @@ class StrategyEngine:
         upper_c = float(inst.upper_circuit) if inst and isinstance(getattr(inst, "upper_circuit", None), (int, float)) and inst.upper_circuit > 0 else 0.0
 
         if side == Side.SELL:
-            raw_limit = px * (1.0 - buffer_pct)
+            limit_px = floor_to_tick(px * (1.0 - buffer_pct), tick)
             if lower_c > 0:
-                raw_limit = max(raw_limit, lower_c)
-            limit_px = floor_to_tick(raw_limit, tick)
+                limit_px = max(limit_px, ceil_to_tick(lower_c, tick))
         else:
-            raw_limit = px * (1.0 + buffer_pct)
+            limit_px = ceil_to_tick(px * (1.0 + buffer_pct), tick)
             if upper_c > 0:
-                raw_limit = min(raw_limit, upper_c)
-            limit_px = ceil_to_tick(raw_limit, tick)
+                limit_px = min(limit_px, floor_to_tick(upper_c, tick))
 
         return OrderRequest(
             symbol=symbol,
@@ -325,6 +323,12 @@ class StrategyEngine:
 
             # 1. Reconcile positions, orders, and trades; re-attach missing SL orders
             audit = self.reconciler.audit_startup_state(symbols, reattach_stops=True)
+            if not audit.is_clean or getattr(audit, "unprotected_positions", []):
+                self.is_paused = True
+                logger.critical(
+                    "FAIL_CLOSED: Late-start reconciliation detected unsafe position state (%s); pausing strategy new entries.",
+                    audit.message,
+                )
 
             # 2. Backfill 5m candles for benchmark and watchlist symbols
             hist_from_5m = now - timedelta(days=25)
@@ -2129,8 +2133,8 @@ class StrategyEngine:
                 tick_size=inst.tick_size,
             )
 
-            # Gate 9 Stop-width bounds: 0.45% <= R% <= 0.90% (or up to 0.90% * 1.35 on validated late-start catch-up signals)
-            min_stop_pct = getattr(self.config.signal, "min_stop_distance_pct", 0.0045)
+            # Gate 9 Stop-width bounds: 0.55% <= R% <= 0.90% (or up to 0.90% * 1.35 on validated late-start catch-up signals)
+            min_stop_pct = getattr(self.config.signal, "min_stop_distance_pct", 0.0055)
             max_stop_pct = getattr(self.config.signal, "max_stop_distance_pct", 0.0090)
             is_catchup = bool(getattr(sig, "is_catchup_signal", False))
             effective_max_stop = max_stop_pct * 1.35 if is_catchup else max_stop_pct

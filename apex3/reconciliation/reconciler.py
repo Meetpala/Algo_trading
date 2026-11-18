@@ -144,11 +144,13 @@ class Reconciler:
 
         if force_circuit:
             if side == Side.SELL:
-                raw_limit = lower_c if lower_c > 0 else px * 0.90
-                return floor_to_tick(raw_limit, tick)
+                if lower_c > 0:
+                    return ceil_to_tick(lower_c, tick)
+                return floor_to_tick(px * 0.90, tick)
             else:
-                raw_limit = upper_c if upper_c > 0 else px * 1.10
-                return ceil_to_tick(raw_limit, tick)
+                if upper_c > 0:
+                    return floor_to_tick(upper_c, tick)
+                return ceil_to_tick(px * 1.10, tick)
 
         # Enforce buffer
         max_slip = getattr(getattr(self.config, "entry", None), "max_slippage_pct", 0.15) if self.config else 0.15
@@ -161,15 +163,15 @@ class Reconciler:
             buffer_pct = base_buf
 
         if side == Side.SELL:
-            raw_limit = px * (1.0 - buffer_pct)
+            limit_px = floor_to_tick(px * (1.0 - buffer_pct), tick)
             if lower_c > 0:
-                raw_limit = max(raw_limit, lower_c)
-            return floor_to_tick(raw_limit, tick)
+                limit_px = max(limit_px, ceil_to_tick(lower_c, tick))
+            return limit_px
         else:
-            raw_limit = px * (1.0 + buffer_pct)
+            limit_px = ceil_to_tick(px * (1.0 + buffer_pct), tick)
             if upper_c > 0:
-                raw_limit = min(raw_limit, upper_c)
-            return ceil_to_tick(raw_limit, tick)
+                limit_px = min(limit_px, floor_to_tick(upper_c, tick))
+            return limit_px
 
     def _create_exit_order_request(
         self,
@@ -491,7 +493,29 @@ class Reconciler:
 
                     # Re-attach protective stop immediately if missing and reattach_stops is requested
                     if pos.phase == PositionPhase.OPEN_UNPROTECTED and reattach_stops:
-                        self.reattach_protective_stop(pos, tick_size=tick_sz)
+                        reattached = self.reattach_protective_stop(pos, tick_size=tick_sz)
+                        if not reattached:
+                            logger.critical(
+                                "FAIL_CLOSED: Could not confirm protective SL for recovered position %s (qty=%d). "
+                                "Submitting emergency bounded limit exit!",
+                                pos.symbol,
+                                pos.quantity,
+                            )
+                            try:
+                                exit_side = Side.SELL if pos.side == Side.BUY else Side.BUY
+                                emer_req = self._create_exit_order_request(
+                                    symbol=pos.symbol,
+                                    side=exit_side,
+                                    quantity=pos.quantity,
+                                    tag=make_broker_tag(self.session_tag, pos.symbol, "EMG"),
+                                    current_price=pos.average_entry,
+                                    escalate=True,
+                                )
+                                emer_oid = self.broker.place_order(emer_req)
+                                pos.exit_order_id = emer_oid
+                                pos.phase = PositionPhase.EXITING
+                            except Exception as ee:
+                                logger.critical("Emergency exit submission failed for unprotected startup position %s: %s", pos.symbol, ee)
 
                     open_strategy_count += 1
                 else:
@@ -575,6 +599,12 @@ class Reconciler:
                             except Exception as je:
                                 logger.debug("Could not recover initial stop from journal for %s: %s", sym, je)
 
+        unprotected_symbols = [
+            p.symbol
+            for p in self.sm.positions.values()
+            if p.quantity > 0 and p.phase in (PositionPhase.OPEN_UNPROTECTED, PositionPhase.EXITING) and not p.protective_order_id
+        ]
+
         if unknown_symbols:
             msg = f"Unknown manual positions detected on broker: {unknown_symbols}. Strategy paused."
             self.journal.log_warning(
@@ -587,7 +617,24 @@ class Reconciler:
                 is_clean=False,
                 has_unknown_positions=True,
                 unknown_symbols=unknown_symbols,
-                unprotected_positions=[],
+                unprotected_positions=unprotected_symbols,
+                is_flat=False,
+                message=msg,
+            )
+
+        if reattach_stops and unprotected_symbols:
+            msg = f"FAIL_CLOSED: Recovered strategy positions lack confirmed protective stop: {unprotected_symbols}. Emergency exit triggered and strategy paused."
+            self.journal.log_warning(
+                severity="CRITICAL",
+                code="STARTUP_UNPROTECTED_POSITION_FAIL_CLOSED",
+                message=msg,
+                data={"unprotected_symbols": unprotected_symbols},
+            )
+            return ReconciliationStatus(
+                is_clean=False,
+                has_unknown_positions=False,
+                unknown_symbols=[],
+                unprotected_positions=unprotected_symbols,
                 is_flat=False,
                 message=msg,
             )
@@ -597,7 +644,7 @@ class Reconciler:
             is_clean=True,
             has_unknown_positions=False,
             unknown_symbols=[],
-            unprotected_positions=[],
+            unprotected_positions=unprotected_symbols,
             is_flat=is_flat,
             message="Reconciliation clean. No foreign positions detected.",
         )

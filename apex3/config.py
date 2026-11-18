@@ -138,7 +138,7 @@ class SignalConfig:
     candle_timeframe_entry: str = "5min"
     candle_timeframe_trail: str = "1min"
     relative_strength_lookback: int = 20
-    min_stop_distance_pct: float = 0.0045
+    min_stop_distance_pct: float = 0.0055
     max_stop_distance_pct: float = 0.0090
     min_breakout_cushion_atr: float = 0.15
     min_clv_ratio: float = 0.70
@@ -601,12 +601,15 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             candle_timeframe_entry=str(signal_raw.get("candle_timeframe_entry", "5min")),
             candle_timeframe_trail=str(signal_raw.get("candle_timeframe_trail", "1min")),
             relative_strength_lookback=int(signal_raw.get("rs_lookback_bars", signal_raw.get("relative_strength_lookback", 20))),
-            min_stop_distance_pct=float(signal_raw.get("min_stop_distance_pct", 0.0045)),
+            min_stop_distance_pct=float(signal_raw.get("min_stop_distance_pct", 0.0055)),
             max_stop_distance_pct=float(signal_raw.get("max_stop_distance_pct", 0.0090)),
             min_breakout_cushion_atr=float(signal_raw.get("min_breakout_cushion_atr", gates_config.breakout_atr_cushion)),
             min_clv_ratio=float(signal_raw.get("min_clv_ratio", gates_config.min_clv)),
             min_atr_pct=float(signal_raw.get("min_atr_pct", 0.0022)),
             max_quote_age_sec=float(signal_raw.get("max_quote_age_sec", 15.0)),
+            max_or_width_pct=float(signal_raw.get("max_or_width_pct", 0.0125)),
+            probation_volume_surge_ratio=float(radar_raw.get("probation_volume_surge_ratio", signal_raw.get("probation_volume_surge_ratio", 1.70))),
+            probation_min_clv_ratio=float(radar_raw.get("probation_min_clv_ratio", signal_raw.get("probation_min_clv_ratio", 0.65))),
         ),
         entry=EntryConfig(
             order_type=str(entry_raw.get("order_type", "LIMIT")),

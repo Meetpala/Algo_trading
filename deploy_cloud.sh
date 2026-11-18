@@ -73,15 +73,30 @@ touch "$APP_DIR/apex3_journal.db" "$APP_DIR/info.log" "$APP_DIR/.env"
 chmod 666 "$APP_DIR/apex3_journal.db" "$APP_DIR/info.log" "$APP_DIR/.env" 2>/dev/null || true
 chmod -R 777 "$APP_DIR/logs" 2>/dev/null || true
 
-# 6. Build and launch APEX-3 container
+# 6. Verify Static Egress IP, sync Caddyfile domain, and launch APEX-3 container
+PUBLIC_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
+DASH_IP=$(echo "$PUBLIC_IP" | tr '.' '-')
+HTTPS_DOMAIN="${DASH_IP}.sslip.io"
+
+if [ -f "$APP_DIR/Caddyfile" ] && [ -n "$HTTPS_DOMAIN" ]; then
+    echo "Synchronizing Caddyfile domain to $HTTPS_DOMAIN (Egress IP: $PUBLIC_IP)..."
+    cat > "$APP_DIR/Caddyfile" <<EOF
+$HTTPS_DOMAIN {
+    reverse_proxy apex3:5000
+}
+EOF
+fi
+
+if [ -f "$APP_DIR/.env" ]; then
+    if ! grep -q "^APEX3_MODE=" "$APP_DIR/.env"; then
+        echo "APEX3_MODE=live" >> "$APP_DIR/.env"
+    fi
+fi
+
 echo "[6/6] Building and launching APEX-3 Docker container..."
 sudo docker compose down 2>/dev/null || true
 sudo docker compose build --no-cache
 sudo docker compose up -d
-
-PUBLIC_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
-DASH_IP=$(echo "$PUBLIC_IP" | tr '.' '-')
-HTTPS_DOMAIN="${DASH_IP}.sslip.io"
 
 echo ""
 echo "=================================================================="

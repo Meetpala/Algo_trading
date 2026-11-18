@@ -327,8 +327,21 @@ class KiteAdapter(BrokerInterface):
         self._acquire_rate_limit("orders")
 
         order_type_str = request.order_type.value
-        price = request.price if order_type_str in ("LIMIT", "SL") else None
-        trigger_price = request.trigger_price if order_type_str in ("SL", "SL-M") else None
+        if order_type_str not in ("LIMIT", "SL"):
+            raise ValueError(
+                f"NSE_ALGO_COMPLIANCE_BLOCK: Order type '{order_type_str}' is prohibited in live algo execution. "
+                "Only LIMIT and SL (stop-limit) orders are permitted under NSE Retail Algo regulations."
+            )
+        if not request.price or request.price <= 0:
+            raise ValueError(
+                f"NSE_ALGO_COMPLIANCE_BLOCK: {order_type_str} order for {request.symbol} requires a positive limit price (got {request.price})."
+            )
+        if order_type_str == "SL" and (not request.trigger_price or request.trigger_price <= 0):
+            raise ValueError(
+                f"NSE_ALGO_COMPLIANCE_BLOCK: SL order for {request.symbol} requires a positive trigger_price (got {request.trigger_price})."
+            )
+        price = request.price
+        trigger_price = request.trigger_price if order_type_str == "SL" else None
         tag = request.tag[:20] if request.tag else None
         variety = self.get_dynamic_variety(getattr(request, "variety", None))
 
@@ -406,7 +419,13 @@ class KiteAdapter(BrokerInterface):
         if trigger_price is not None:
             params["trigger_price"] = trigger_price
         if order_type is not None:
-            params["order_type"] = order_type
+            norm_ot = str(order_type).strip().upper()
+            if norm_ot not in ("LIMIT", "SL"):
+                raise ValueError(
+                    f"NSE_ALGO_COMPLIANCE_BLOCK: Cannot modify order {order_id} to '{order_type}'. "
+                    "Only LIMIT and SL are permitted under NSE Retail Algo regulations."
+                )
+            params["order_type"] = norm_ot
 
         chosen_variety = variety or self._order_variety_cache.get(str(order_id)) or self.get_dynamic_variety()
         logger.info("Modifying LIVE Kite order %s (variety=%s): %s", order_id, chosen_variety, params)

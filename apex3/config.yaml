@@ -49,8 +49,8 @@ signal_gates:
   max_or_width_pct: 0.0125            # Gate 4A/9A: Max 1.25% Opening Range width cap
   max_spread_bps: 4.0                 # Gate 6: Tightened from 8 bps to 4 bps for zero-slippage fills
   min_circuit_distance_pct: 0.020     # Gate 7: >= 2.0% away from upper/lower circuit
-  min_stop_distance_pct: 0.0045       # Stop-width floor: Minimum R = 0.45% (calibrated for liquid large-caps)
-  max_stop_distance_pct: 0.0090       # Stop-width ceiling: Maximum R = 0.90%
+  min_stop_distance_pct: 0.0055       # Gate 9B Stop-width floor: Minimum R = 0.55% (per APEX-3 rulebook)
+  max_stop_distance_pct: 0.0090       # Gate 9B Stop-width ceiling: Maximum R = 0.90%
   max_adr_consumed_pct: 0.60          # Gate 9C: Reject if stock already moved > 60% of baseline ADR
   min_adr_baseline: 0.025             # 2.5% minimum ADR baseline prevents choking on morning opening noise
   min_breakout_cushion_atr: 0.15      # Breakout close must clear OR by >= 0.15 * ATR(14)
@@ -77,32 +77,32 @@ radar:
   core_conviction_multiplier: 1.35    # Tier 1 priority boost in conviction ranking
   probation_volume_surge_ratio: 1.70  # Calibrated volume surge for curated Tier 2 radar
   probation_min_clv_ratio: 0.65       # Calibrated CLV threshold for curated Tier 2 radar
-  # Tier 1: Top 10 Audited 100%-Win Institutional Leaders (Bull & Bear)
+  # Tier 1: Core Liquid NIFTY 50 Institutional Watchlist (Share-Price Bounded for Rs. 15,000 Account; Conditional on Live Regime & 9 Signal Gates)
   core_watchlist:
     - "TRENT"
     - "HDFCLIFE"
     - "ADANIENT"
     - "HINDUNILVR"
-    - "ULTRACEMCO"
     - "HINDALCO"
     - "JSWSTEEL"
     - "BHARTIARTL"
     - "KOTAKBANK"
     - "BAJAJFINSV"
+    - "AXISBANK"
 
-  # Tier 2: Top 10 Audited High-Expectancy Multi-Regime Leaders
+  # Tier 2: Extended Liquid Multi-Sector Watchlist (Conditional on Live Regime, Signal & Execution Filters)
   enable_extended_radar: true
   extended_radar:
-    - "EICHERMOT"
-    - "SHRIRAMFIN"
-    - "VEDL"
-    - "CHOLAFIN"
     - "BAJFINANCE"
-    - "BAJAJ-AUTO"
-    - "NESTLEIND"
+    - "CIPLA"
     - "ONGC"
-    - "MARUTI"
+    - "M&M"
+    - "HEROMOTOCO"
     - "RELIANCE"
+    - "NESTLEIND"
+    - "TATASTEEL"
+    - "ITC"
+    - "HDFCBANK"
 
   # Tier 3: Optional Custom List (Disabled by default)
   custom_user_radar: []
