@@ -171,8 +171,9 @@ def evaluate_market_regime(
     latest_plus_di = plus_di_series[-1] if plus_di_series else None
     latest_minus_di = minus_di_series[-1] if minus_di_series else None
 
+    strong_adx = float(getattr(config, "strong_adx_threshold", 22.0))
     if getattr(config, "require_rising_adx", True):
-        adx_rising = (latest_adx > prev_adx) if latest_adx < 22.0 else True
+        adx_rising = (latest_adx > prev_adx) if latest_adx < strong_adx else True
     else:
         adx_rising = True
     is_trending = (latest_adx >= config.min_adx) and adx_rising

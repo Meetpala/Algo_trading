@@ -124,6 +124,7 @@ class RegimeConfig:
     ema_slow_period: int = 50
     ema_slope_lookback: int = 3
     min_adx: float = 22.0
+    strong_adx_threshold: float = 22.0
     adx_period: int = 14
     require_vwap_alignment: bool = True
     require_rising_adx: bool = True
@@ -265,7 +266,7 @@ class DashboardConfig:
     port: int = 5000
     refresh_interval_sec: int = 2
     auth_required: bool = False
-    api_token: str = "apex3_operator_live_2026"
+    api_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -589,6 +590,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             ema_slow_period=int(regime_raw.get("ema_slow_period", 50)),
             ema_slope_lookback=int(regime_raw.get("ema_slope_lookback", 3)),
             min_adx=float(regime_raw.get("min_adx", gates_config.min_adx)),
+            strong_adx_threshold=float(regime_raw.get("strong_adx_threshold", 22.0)),
             adx_period=int(regime_raw.get("adx_period", 14)),
             require_vwap_alignment=bool(regime_raw.get("require_vwap_alignment", True)),
             require_rising_adx=bool(regime_raw.get("require_rising_adx", True)),

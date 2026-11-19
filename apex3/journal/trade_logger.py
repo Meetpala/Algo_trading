@@ -122,6 +122,7 @@ class TradeLogger:
         self,
         log_path: str = DEFAULT_LOG_FILE,
         start_date: str = DEFAULT_START_DATE,
+        base_capital_inr: float = 15000.0,
     ) -> None:
         if str(log_path) == DEFAULT_LOG_FILE and "PYTEST_CURRENT_TEST" in os.environ:
             temp_dir = os.environ.get("TEMP", ".")
@@ -130,6 +131,7 @@ class TradeLogger:
         self.log_path = Path(log_path).resolve()
         self.start_date_str = start_date
         self.start_date = date.fromisoformat(start_date)
+        self.base_capital_inr = float(base_capital_inr) if base_capital_inr > 0 else 15000.0
         self._recorded_trade_ids: set[str] = set()
         self._ensure_log_file()
         self._load_existing_trade_ids()
@@ -586,7 +588,8 @@ class TradeLogger:
         ts = timestamp or datetime(session_date.year, session_date.month, session_date.day, 15, 30, 0, tzinfo=IST)
         ts_str = ts.strftime("%Y-%m-%d %H:%M:%S IST")
         date_str = session_date.strftime("%Y-%m-%d")
-        equity = 15000.0 + cumulative_pnl
+        base_cap = getattr(self, "base_capital_inr", 15000.0)
+        equity = base_cap + cumulative_pnl
         pnl_sign = "+" if cumulative_pnl > 0 else ""
 
         session_block = (
@@ -599,7 +602,7 @@ class TradeLogger:
             f"Trades Executed : {trades_count} trades\n"
             f"Execution Notes : {notes}\n"
             "Position State  : 0 Open Positions (100% Flat / Zero Overnight Risk)\n"
-            "Starting Capital: Rs. 15,000.00\n"
+            f"Starting Capital: Rs. {base_cap:,.2f}\n"
             "Capital at Risk : Rs. 0.00 (100% Capital Preserved)\n"
             "Gross Session PnL: Rs. 0.00\n"
             "Total Friction  : Rs. 0.00\n"

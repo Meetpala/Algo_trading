@@ -39,6 +39,7 @@ regime_filter:
   ema_slope_lookback: 3
   adx_period: 14
   min_adx: 19.0
+  strong_adx_threshold: 22.0          # Two-Zone ADX rule: rising ADX required in [19.0, 22.0); established trends >= 22.0 permitted
   require_vwap_alignment: true        # Blocks post-gap sideways morning traps (Month 2 fix)
   require_rising_adx: true            # Requires ADX[t] > ADX[t-1]
 
@@ -128,20 +129,16 @@ schedule:
   stale_threshold_sec: 15
 
   holidays_2026:
-    - "2026-01-15"  # Makar Sankranti / Municipal Election Day
+    - "2026-01-15"  # Municipal Corporation Election Day (Maharashtra / NSE Closed)
     - "2026-01-26"  # Republic Day
-    - "2026-02-19"  # Chhatrapati Shivaji Maharaj Jayanti
     - "2026-03-03"  # Holi
-    - "2026-03-19"  # Id-Ul-Fitr (Ramzan Id)
     - "2026-03-26"  # Shri Ram Navami
     - "2026-03-31"  # Shri Mahavir Jayanti
-    - "2026-04-01"  # Annual Bank Account Closing
     - "2026-04-03"  # Good Friday
     - "2026-04-14"  # Dr. Baba Saheb Ambedkar Jayanti
     - "2026-05-01"  # Maharashtra Day
     - "2026-05-28"  # Bakri Id
     - "2026-06-26"  # Muharram
-    - "2026-08-26"  # Id-e-Milad
     - "2026-09-14"  # Ganesh Chaturthi
     - "2026-10-02"  # Mahatma Gandhi Jayanti
     - "2026-10-20"  # Dussehra
@@ -156,7 +153,7 @@ dashboard:
   host: "127.0.0.1"
   port: 5000
   auth_required: true
-  api_token: "apex3_operator_live_2026"  # Set DASHBOARD_API_TOKEN in .env
+  api_token: ""  # Loaded from DASHBOARD_API_TOKEN in .env (fallback to random runtime token if unset)
   refresh_interval_sec: 2
 
 rate_limits:

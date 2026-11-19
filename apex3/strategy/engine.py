@@ -1017,9 +1017,9 @@ class StrategyEngine:
                             else (getattr(sl_order, "price", 0.0) or pos.current_stop_price)
                         )
                         is_gapped = False
-                        if pos.side == Side.BUY and px > 0 and px < limit_px * 0.999:
+                        if pos.side == Side.BUY and px > 0 and px < limit_px:
                             is_gapped = True
-                        elif pos.side == Side.SELL and px > 0 and px > limit_px * 1.001:
+                        elif pos.side == Side.SELL and px > 0 and px > limit_px:
                             is_gapped = True
 
                         if is_gapped:
@@ -2133,11 +2133,10 @@ class StrategyEngine:
                 tick_size=inst.tick_size,
             )
 
-            # Gate 9 Stop-width bounds: 0.55% <= R% <= 0.90% (or up to 0.90% * 1.35 on validated late-start catch-up signals)
+            # Gate 9 Stop-width bounds: strictly enforce [min_stop_distance_pct, max_stop_distance_pct] (0.55% <= R% <= 0.90%)
             min_stop_pct = getattr(self.config.signal, "min_stop_distance_pct", 0.0055)
             max_stop_pct = getattr(self.config.signal, "max_stop_distance_pct", 0.0090)
-            is_catchup = bool(getattr(sig, "is_catchup_signal", False))
-            effective_max_stop = max_stop_pct * 1.35 if is_catchup else max_stop_pct
+            effective_max_stop = max_stop_pct
             stop_dist_pct = abs(entry_price - initial_stop) / entry_price if entry_price > 0 else 0.0
             if stop_dist_pct < min_stop_pct or stop_dist_pct > effective_max_stop:
                 decisions.append(

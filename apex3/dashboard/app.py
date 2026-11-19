@@ -54,27 +54,25 @@ def create_app(engine: StrategyEngine, config: AppConfig, journal: Journal) -> F
         static_folder=os.path.join(os.path.dirname(__file__), "static"),
     )
 
+    _runtime_token = secrets.token_hex(16)
+
     app.secret_key = (
         os.environ.get("FLASK_SECRET_KEY")
         or os.environ.get("DASHBOARD_API_TOKEN")
-        or "apex3_operator_session_secret_2026"
+        or _runtime_token
     )
 
-    _runtime_token = secrets.token_hex(16)
-
     def _get_operator_token() -> str:
+        placeholders = {"", "replace_with_32_byte_random_hex_token", "apex3_operator_live_2026"}
+        env_tok = (os.environ.get("DASHBOARD_API_TOKEN") or "").strip()
+        cfg_tok = (getattr(getattr(config, "dashboard", None), "api_token", "") or "").strip()
+        if env_tok not in placeholders:
+            return env_tok
+        if cfg_tok not in placeholders:
+            return cfg_tok
         if "PYTEST_CURRENT_TEST" in os.environ:
-            cfg_tok = getattr(getattr(config, "dashboard", None), "api_token", "")
-            return (
-                os.environ.get("DASHBOARD_API_TOKEN")
-                or (cfg_tok if cfg_tok and cfg_tok != "apex3_operator_live_2026" else "")
-                or "apex3_secure_operator_token"
-            )
-        return (
-            os.environ.get("DASHBOARD_API_TOKEN")
-            or getattr(getattr(config, "dashboard", None), "api_token", "")
-            or "apex3_operator_live_2026"
-        )
+            return "apex3_secure_operator_token"
+        return _runtime_token
 
     def _is_authorized() -> bool:
         """Verify operator authorization for state-mutating endpoints and operator dashboard."""

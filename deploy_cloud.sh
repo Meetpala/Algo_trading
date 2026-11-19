@@ -41,15 +41,15 @@ else
     echo "[2/6] Docker is already installed."
 fi
 
-# 3. Configure Firewall (SSH 22 + HTTP 80 + HTTPS 443 + Dashboard 5000 + outbound)
-echo "[3/6] Configuring UFW firewall rules (SSH 22 + HTTPS 443 + HTTP 80 + Port 5000)..."
+# 3. Configure Firewall (SSH 22 + HTTP 80 + HTTPS 443 + outbound; Port 5000 bound to 127.0.0.1)
+echo "[3/6] Configuring UFW firewall rules (SSH 22 + HTTPS 443 + HTTP 80)..."
 if command -v ufw &> /dev/null; then
     sudo ufw default deny incoming || true
     sudo ufw default allow outgoing || true
     sudo ufw allow 22/tcp comment 'SSH access' || true
     sudo ufw allow 80/tcp comment 'Let s Encrypt HTTP ACME challenge' || true
     sudo ufw allow 443/tcp comment 'APEX-3 Caddy HTTPS OAuth & Dashboard' || true
-    sudo ufw allow 5000/tcp comment 'APEX-3 Direct HTTP Dashboard' || true
+    sudo ufw delete allow 5000/tcp 2>/dev/null || true
     sudo ufw allow out 443/tcp comment 'Broker HTTPS/WSS & Telegram API' || true
     sudo ufw allow out 53/udp comment 'DNS' || true
     sudo ufw allow out 53/tcp comment 'DNS TCP' || true
@@ -66,12 +66,13 @@ if [ -f "$APP_DIR/apex3.service" ]; then
     sudo systemctl daemon-reload
 fi
 
-# 5. Create database and log directories with container write permissions
+# 5. Create database and log directories with least-privilege permissions
 echo "[5/6] Preparing persistent data volumes..."
 mkdir -p "$APP_DIR/logs"
 touch "$APP_DIR/apex3_journal.db" "$APP_DIR/info.log" "$APP_DIR/.env"
-chmod 666 "$APP_DIR/apex3_journal.db" "$APP_DIR/info.log" "$APP_DIR/.env" 2>/dev/null || true
-chmod -R 777 "$APP_DIR/logs" 2>/dev/null || true
+chmod 600 "$APP_DIR/.env" 2>/dev/null || true
+chmod 664 "$APP_DIR/apex3_journal.db" "$APP_DIR/info.log" 2>/dev/null || true
+chmod -R 775 "$APP_DIR/logs" 2>/dev/null || true
 
 # 6. Verify Static Egress IP, sync Caddyfile domain, and launch APEX-3 container
 PUBLIC_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')

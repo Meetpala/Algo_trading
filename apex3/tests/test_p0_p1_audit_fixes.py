@@ -442,3 +442,148 @@ def test_late_start_recovery_fails_closed_and_exits_when_stop_cannot_be_confirme
     assert emg_req.order_type == OrderType.LIMIT
     assert emg_req.side == Side.SELL
     assert emg_req.quantity == 4
+
+
+# ---------------------------------------------------------------------------
+# 7. AUD-01 through AUD-05 Regression Tests
+# ---------------------------------------------------------------------------
+
+def test_aud01_configured_holidays_exclude_open_nse_equity_trading_days():
+    """Verify the 4 open NSE trading days (Feb 19, Mar 19, Apr 1, Aug 26) are not configured as holidays."""
+    cfg = load_config()
+    holidays = set(cfg.schedule.holidays)
+    assert len(holidays) == 16
+    assert "2026-01-15" in holidays
+    for open_trading_day in ("2026-02-19", "2026-03-19", "2026-04-01", "2026-08-26"):
+        assert open_trading_day not in holidays
+
+
+def test_aud02_engine_never_relaxes_max_stop_width_above_090_on_catchup():
+    """Verify engine.py enforces max_stop_pct = 0.0090 without any 1.35x catch-up multiplier."""
+    engine_src = (Path(__file__).resolve().parents[1] / "strategy" / "engine.py").read_text(encoding="utf-8")
+    assert "max_stop_pct * 1.35" not in engine_src
+    assert "effective_max_stop = max_stop_pct" in engine_src
+
+
+def test_aud03_dashboard_never_uses_static_public_fallback_token_and_compose_binds_loopback():
+    """Verify config.yaml/app.py have no static public fallback token and docker-compose binds 127.0.0.1:5000:5000."""
+    cfg = load_config()
+    assert cfg.dashboard.api_token == ""
+    compose_text = (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(encoding="utf-8")
+    assert '"127.0.0.1:5000:5000"' in compose_text
+
+
+def test_aud04_reconciler_computes_dynamic_atr_stop_on_recovery_and_regime_paths_match(tmp_path):
+    """Verify BenchmarkSnapshot and candle-series regime paths share Two-Zone ADX rule and reconciler computes dynamic ATR stop."""
+    from datetime import timedelta
+    from apex3.models import Candle
+    from apex3.reconciliation.reconciler import Reconciler
+    from apex3.reconciliation.state_machine import StateMachine
+    from apex3.strategy.regime import BenchmarkSnapshot, evaluate_market_regime
+
+    cfg = load_config()
+    assert cfg.regime.strong_adx_threshold == pytest.approx(22.0)
+    snap = BenchmarkSnapshot(
+        close=25100.0,
+        ema20=25050.0,
+        prev_ema20=25040.0,
+        session_vwap=25020.0,
+        adx14=24.8,
+        prev_adx14=24.5,
+        ema50=24980.0,
+    )
+    assert evaluate_market_regime(snap, cfg.raw_dict) == MarketRegime.BULLISH
+
+    # Dynamic ATR stop computation during recovery when initial_stop is missing
+    broker = MagicMock()
+    base_ts = datetime(2026, 11, 18, 9, 15, tzinfo=IST)
+    candles = [
+        Candle(
+            timestamp=base_ts + timedelta(minutes=5 * i),
+            open=1000.0,
+            high=1002.0,
+            low=997.0,
+            close=1000.0,
+            volume=50_000,
+            is_complete=True,
+        )
+        for i in range(15)
+    ]
+    broker.get_historical.return_value = candles
+    broker.get_quote.return_value = Quote(
+        symbol="TRENT", exchange="NSE", last_price=1000.0, bid=999.9, ask=1000.1, volume=50_000, timestamp=base_ts, is_fresh=True
+    )
+    broker.place_order.return_value = "SL_DYN_1"
+    broker.get_order_status.return_value = OrderState(
+        order_id="SL_DYN_1",
+        request=OrderRequest(symbol="TRENT", side=Side.SELL, quantity=5, price=990.0, trigger_price=992.5, product=Product.MIS, order_type=OrderType.SL),
+        status=OrderStatus.TRIGGER_PENDING,
+        filled_quantity=0,
+    )
+    sm = StateMachine("APEX3")
+    pos = sm.get_or_create_position("TRENT")
+    pos.symbol = "TRENT"
+    pos.side = Side.BUY
+    pos.quantity = 5
+    pos.average_entry = 1000.0
+    pos.initial_stop_price = 0.0
+    pos.current_stop_price = 0.0
+
+    rec = Reconciler(broker, sm, Journal(db_path=str(tmp_path / "dyn_rec.db")), "APEX3", config=cfg)
+    assert rec.reattach_protective_stop(pos, tick_size=0.05) is True
+    # swing_low=997.0, ATR=5.0 -> 997.0 - 1.5*5.0 = 989.50 ( wait: 1.05% > 0.90%, so falls back to midpoint (0.0055+0.0090)/2 = 0.00725 -> 992.75)
+    assert pos.initial_stop_price == pytest.approx(992.75)
+
+
+def test_aud05_triggered_open_stop_one_tick_past_limit_immediately_triggers_emergency_chase(tmp_path):
+    """When SL triggers to OPEN and price is even 1 tick (0.05) past limit_px, engine immediately chases without 0.1% dead band."""
+    cfg = load_config()
+    journal = Journal(db_path=str(tmp_path / "gap_1tick.db"))
+    broker = MagicMock()
+    now = datetime(2026, 11, 18, 10, 20, tzinfo=IST)
+
+    broker.is_connected.return_value = True
+    broker.get_positions.return_value = [
+        PositionState(symbol="TRENT", side=Side.BUY, quantity=4, average_entry=2800.0, product=Product.MIS)
+    ]
+    sl_req = OrderRequest(
+        symbol="TRENT",
+        side=Side.SELL,
+        quantity=4,
+        price=2773.00,
+        trigger_price=2780.00,
+        product=Product.MIS,
+        order_type=OrderType.SL,
+        tag="APEX3_TRENT_SL",
+    )
+    open_sl = OrderState(order_id="SL_1TICK", request=sl_req, status=OrderStatus.OPEN, filled_quantity=0, pending_quantity=4)
+    canc_sl = OrderState(order_id="SL_1TICK", request=sl_req, status=OrderStatus.CANCELLED, filled_quantity=0, pending_quantity=0)
+    broker.get_orders.return_value = [open_sl]
+    broker.get_order_status.side_effect = [open_sl, canc_sl]
+    # Price is 2772.95 (just 1 tick = 0.05 below 2773.00 limit_px, inside the old 0.999 dead band!)
+    broker.get_quote.return_value = Quote(
+        symbol="TRENT", exchange="NSE", last_price=2772.95, bid=2772.90, ask=2773.00, volume=100_000, timestamp=now, is_fresh=True
+    )
+    broker.get_instrument_info.return_value = InstrumentInfo(
+        symbol="TRENT", exchange="NSE", tick_size=0.05, lot_size=1, lower_circuit=2520.0, upper_circuit=3080.0
+    )
+    broker.place_order.return_value = "EMG_1TICK"
+
+    engine = StrategyEngine(config=cfg, broker=broker, journal=journal)
+    engine._startup_backfill_date = now.date()
+    pos = engine.state_machine.get_or_create_position("TRENT")
+    pos.symbol = "TRENT"
+    pos.side = Side.BUY
+    pos.quantity = 4
+    pos.average_entry = 2800.0
+    pos.initial_stop_price = 2780.0
+    pos.current_stop_price = 2780.0
+    pos.protective_order_id = "SL_1TICK"
+    pos.phase = PositionPhase.OPEN_PROTECTED
+
+    decisions = engine.evaluate_step(now)
+    exit_dec = next((d for d in decisions if d.symbol == "TRENT"), None)
+    assert exit_dec is not None
+    assert "STOP_TRIGGERED_UNFILLED_GAP_EXIT" in exit_dec.reason_codes
+    broker.cancel_order.assert_called_once_with("SL_1TICK")
+

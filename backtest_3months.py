@@ -469,7 +469,13 @@ def run_fast_backtest(
     nifty_candles = data['NSEI']['candles']
     nifty_df = data['NSEI']['df']
     dates = sorted(list(set(nifty_df['Datetime'].dt.date)))
-    test_dates = sorted(set(session_dates)) if session_dates is not None else dates[-57:]
+    raw_test_dates = sorted(set(session_dates)) if session_dates is not None else dates[-57:]
+    test_dates = [
+        d for d in raw_test_dates
+        if d.weekday() < 5
+        and not config.schedule.is_holiday(d)
+        and not config.schedule.is_special_session(d)[0]
+    ]
 
     current_capital = starting_capital
     leverage = 4.0

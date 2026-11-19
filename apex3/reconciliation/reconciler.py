@@ -249,11 +249,40 @@ class Reconciler:
         t = tick_size if (tick_size and tick_size > 0) else 0.05
         stop_px = pos.current_stop_price if pos.current_stop_price > 0 else pos.initial_stop_price
         if stop_px <= 0 and pos.average_entry > 0:
-            # Fallback 0.70% structural stop within Gate 9 sweet spot [0.55%, 0.90%]
-            if pos.side == Side.BUY:
-                stop_px = round_to_tick(pos.average_entry * (1.0 - 0.0070), tick_size=t, round_up=False)
-            else:
-                stop_px = round_to_tick(pos.average_entry * (1.0 + 0.0070), tick_size=t, round_up=True)
+            # Dynamically compute structural stop from live historical candles if available, else configured midpoint
+            sig_cfg = getattr(self.config, "signal", None)
+            min_r = float(getattr(sig_cfg, "min_stop_distance_pct", 0.0055))
+            max_r = float(getattr(sig_cfg, "max_stop_distance_pct", 0.0090))
+            fallback_pct = (min_r + max_r) / 2.0
+            try:
+                from apex3.indicators.atr import compute_atr
+                from apex3.strategy.trail import calculate_initial_stop
+                raw_c = self.broker.get_historical(pos.symbol, "5minute")
+                comp_c = [c for c in (raw_c or []) if getattr(c, "is_complete", True)]
+                if len(comp_c) >= 5:
+                    atr_s = compute_atr([c.high for c in comp_c], [c.low for c in comp_c], [c.close for c in comp_c], period=14)
+                    atr_val = atr_s[-1] if atr_s else pos.average_entry * fallback_pct
+                    sw_l = min(c.low for c in comp_c[-5:])
+                    sw_h = max(c.high for c in comp_c[-5:])
+                    cand_stop = calculate_initial_stop(
+                        side=pos.side,
+                        entry_price=pos.average_entry,
+                        signal_low=sw_l,
+                        signal_high=sw_h,
+                        atr_value=atr_val,
+                        config=getattr(self.config, "stops", None),
+                        tick_size=t,
+                    )
+                    cand_pct = abs(pos.average_entry - cand_stop) / pos.average_entry
+                    if min_r <= cand_pct <= max_r:
+                        stop_px = cand_stop
+            except Exception:
+                pass
+            if stop_px <= 0:
+                if pos.side == Side.BUY:
+                    stop_px = round_to_tick(pos.average_entry * (1.0 - fallback_pct), tick_size=t, round_up=False)
+                else:
+                    stop_px = round_to_tick(pos.average_entry * (1.0 + fallback_pct), tick_size=t, round_up=True)
             pos.initial_stop_price = stop_px
             pos.current_stop_price = stop_px
             pos.r_value = abs(pos.average_entry - stop_px)
@@ -483,11 +512,12 @@ class Reconciler:
                         pos.target_price = orig_target
                     elif pos.r_value > 0 and pos.target_price <= 0:
                         from apex3.strategy.trail import calculate_target_price
+                        cfg_target_r = float(getattr(getattr(self.config, "stops", None), "target_r", 2.0))
                         pos.target_price = calculate_target_price(
                             side=pos.side,
                             entry_price=pos.average_entry,
                             initial_stop=pos.initial_stop_price,
-                            target_r=2.0,
+                            target_r=cfg_target_r,
                             tick_size=tick_sz,
                         )
 
