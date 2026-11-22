@@ -455,14 +455,15 @@ def run_fast_backtest(
     initial_atr_mult: float = 1.5,
     entry_cutoff_time: time = None,
     max_slots: int = 2,
-    starting_capital: float = 15000.0,
+    starting_capital: float = None,
     session_dates: list = None,
     execution_spread_bps: float = 4.0,
     min_stop_distance_pct: float = None,
 ) -> dict:
     """Replay completed-bar signals with conservative next-bar execution."""
     config = load_config()
-    cutoff_time = entry_cutoff_time if entry_cutoff_time is not None else time(12, 30)
+    cap = starting_capital if starting_capital is not None else float(getattr(config, "base_capital_inr", 25000.0))
+    cutoff_time = entry_cutoff_time if entry_cutoff_time is not None else config.schedule.get_time("entry_cutoff")
     min_stop_dist = min_stop_distance_pct if min_stop_distance_pct is not None else float(getattr(config.signal, "min_stop_distance_pct", 0.0055))
     max_stop_dist = float(getattr(config.signal, "max_stop_distance_pct", 0.0090))
 
@@ -477,14 +478,14 @@ def run_fast_backtest(
         and not config.schedule.is_special_session(d)[0]
     ]
 
-    current_capital = starting_capital
+    current_capital = cap
     leverage = 4.0
     safety_reserve_pct = 5.0
-    max_positions = min(max_slots, 2)
-    usable_margin = starting_capital * (1.0 - safety_reserve_pct / 100.0)
+    max_positions = max_slots
+    usable_margin = cap * (1.0 - safety_reserve_pct / 100.0)
     slot_budget = (usable_margin * leverage) / max_positions
-    risk_cap = starting_capital * 0.0080
-    daily_stop = -1.0 * starting_capital * 0.0160
+    risk_cap = cap * 0.0080
+    daily_stop = -1.0 * cap * 0.0160
 
     trades = []
     daily_stats = []
@@ -882,7 +883,8 @@ def run_fast_backtest(
         'total_charges': round(tot_charges, 2),
         'charge_breakdown': charge_breakdown,
         'net_pnl': round(net_pnl, 2),
-        'profit_pct': round((net_pnl / starting_capital) * 100.0, 2),
+        'starting_capital': round(cap, 2),
+        'profit_pct': round((net_pnl / cap) * 100.0, 2),
         'friction_ratio_pct': friction_ratio_win,
         'friction_ratio_winning_profit_pct': friction_ratio_win,
         'friction_ratio_net_gross_pct': friction_ratio_ng,
@@ -916,7 +918,7 @@ if __name__ == '__main__':
     print("\n=================================================================")
     print("   APEX-3 CONSERVATIVE 3-MONTH AUDIT REPORT                      ")
     print("=================================================================")
-    print(f"Starting Capital: Rs. 15,000.00")
+    print(f"Starting Capital: Rs. {res_3m['starting_capital']:,.2f}")
     print(f"Active Radar Universe ({len(watchlist)} stocks): {', '.join(watchlist)}")
     print(f"Total Completed Trades: {res_3m['total_trades']}")
     print(f"Winning Trades: {res_3m['winning_trades']} | Losing Trades: {res_3m['losing_trades']}")
@@ -952,7 +954,7 @@ if __name__ == '__main__':
             'Gross (Rs)': g,
             'Charges (Rs)': c,
             'Net (Rs)': n,
-            'ROI (%)': f"{round((n / 15000.0) * 100, 2)}%"
+            'ROI (%)': f"{round((n / res_3m['starting_capital']) * 100, 2)}%"
         }
 
     monthly_table = []

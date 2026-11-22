@@ -3,20 +3,20 @@
 
 # --- Operating Mode ---
 mode: "paper"  # "paper" or "live" — can also be overridden with CLI: --mode live
-paper_starting_capital: 15000.00
+paper_starting_capital: 25000.00
 
 account:
-  starting_capital: 15000.00          # Base account equity in INR
+  starting_capital: 25000.00          # Base account equity in INR
   max_intraday_leverage: 4.0          # Zerodha MIS 4.0x leverage
-  safety_reserve_buffer_pct: 0.05     # 5.0% (₹750) idle cash buffer for RMS safety
+  safety_reserve_buffer_pct: 0.05     # 5.0% (₹1,250) idle cash buffer for RMS safety
   fetch_live_zerodha_margin: true     # Pulls live available cash from kite.margins("equity")
 
 risk_management:
-  max_concurrent_positions: 2         # 2 slots max -> ₹28,500 leveraged budget per slot
+  max_concurrent_positions: 2         # 2 slots max -> ₹47,500 leveraged budget per slot
   max_new_entries_per_bar: 1          # Only take the #1 ranked stock on any single 5m candle
   second_slot_requires_slot1_profit_r: 0.0   # 0.0 = Slot 2 trades independently whenever margin allows (no profit lock)
-  risk_per_trade_pct: 0.0080          # 0.80% of equity (₹120.00 risk cap per trade)
-  daily_loss_limit_pct: 0.0160        # 1.60% of equity (-₹240.00 hard daily stop = 2 losses)
+  risk_per_trade_pct: 0.0080          # 0.80% of equity (₹200.00 risk cap per trade)
+  daily_loss_limit_pct: 0.0160        # 1.60% of equity (-₹400.00 hard daily stop = 2 losses)
   slippage_allowance_pct: 0.0         # 0.0% slippage deduction (prevents shrinking share quantity)
   bound_loss_with_charges: true       # Hard net loss bound: sizes quantity so stop loss + statutory charges <= risk cap
 
@@ -25,7 +25,7 @@ session_schedule:
   or_start_time: "09:15"              # Opening Range start
   or_end_time: "09:30"                # Opening Range locked at 09:30 IST
   entry_start_time: "09:35"           # Morning Stability Window: requires first post-OR 5m bar to complete
-  entry_cutoff_time: "12:30"          # Hard cutoff for new entries (leaves >= 2h 25m to reach target)
+  entry_cutoff_time: "12:00"          # Hard cutoff for new entries (leaves >= 2h 55m to reach target)
   late_day_protection_time: "14:15"   # Time-based fee-lock evaluation (raised from 13:45 to prevent choking)
   square_off_time: "14:55"            # Orderly MIS liquidation before Zerodha 15:15 RMS
   flat_verification_time: "14:58"     # Verify zero open positions and zero pending SL/Target orders
@@ -121,7 +121,7 @@ schedule:
   market_open: "09:15"
   opening_range_end: "09:30"
   entry_start: "09:35"
-  entry_cutoff: "12:30"
+  entry_cutoff: "12:00"
   flatten_start: "14:55"
   flat_target: "14:58"
   market_close: "15:30"

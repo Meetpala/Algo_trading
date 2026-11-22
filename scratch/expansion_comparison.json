@@ -1,0 +1,44 @@
+{
+  "Current 20 Stocks": {
+    "stocks_count": 20,
+    "total_trades": 26,
+    "winning_trades": 20,
+    "losing_trades": 6,
+    "win_rate": 76.92,
+    "profit_factor": 8.76,
+    "gross_profit": 1905.32,
+    "gross_loss": 217.6,
+    "charges": 354.18,
+    "net_pnl": 1333.54,
+    "net_roi": 8.89,
+    "friction_pct": 18.59
+  },
+  "Expanded 35 Stocks": {
+    "stocks_count": 35,
+    "total_trades": 56,
+    "winning_trades": 27,
+    "losing_trades": 29,
+    "win_rate": 48.21,
+    "profit_factor": 1.23,
+    "gross_profit": 2397.72,
+    "gross_loss": 1943.55,
+    "charges": 783.09,
+    "net_pnl": -328.92,
+    "net_roi": -2.19,
+    "friction_pct": 32.66
+  },
+  "Full 50+ Liquid Universe": {
+    "stocks_count": 53,
+    "total_trades": 74,
+    "winning_trades": 31,
+    "losing_trades": 43,
+    "win_rate": 41.89,
+    "profit_factor": 0.9,
+    "gross_profit": 2683.12,
+    "gross_loss": 2965.45,
+    "charges": 1035.83,
+    "net_pnl": -1318.16,
+    "net_roi": -8.79,
+    "friction_pct": 38.61
+  }
+}

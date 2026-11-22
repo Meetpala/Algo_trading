@@ -197,7 +197,10 @@ def test_conviction_scoring_and_sizing(cfg):
     assert sig.conviction_score > 0
     assert sig.volume_surge_ratio == 2.5
 
-    # Size calculation for 2 slots (slot budget = ~28,500, risk budget = ~120)
+    # Size calculation for 2 slots dynamically based on configured capital
+    expected_capital = float(cfg.get("account", {}).get("starting_capital", 25000.0))
+    expected_budget = (expected_capital * 0.95 * 4.0) / 2
+    expected_risk_cap = expected_capital * 0.0080
     sizing = calculate_position_size(
         entry_price=sig.entry_price,
         risk_per_share=sig.levels.risk_per_share,
@@ -206,10 +209,10 @@ def test_conviction_scoring_and_sizing(cfg):
     )
     assert sizing is not None
     assert sizing.quantity > 0
-    assert sizing.notional_exposure <= 28500.0 + 1200.0
-    assert sizing.planned_risk_inr <= 125.0
-    # Fees should be ~25-35 Rs
-    assert 20.0 <= sizing.estimated_roundtrip_charges_inr <= 45.0
+    assert sizing.notional_exposure <= expected_budget + 1200.0
+    assert sizing.planned_risk_inr <= expected_risk_cap + 5.0
+    # Fees should be ~25-45 Rs
+    assert 20.0 <= sizing.estimated_roundtrip_charges_inr <= 50.0
 
 
 def test_select_best_entries_for_bar_ranks_and_picks_top1(cfg):
